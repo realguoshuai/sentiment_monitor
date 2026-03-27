@@ -1,0 +1,34 @@
+{
+    "monitor_stocks": [
+        {
+            "name": "东阿阿胶",
+            "symbol": "SZ000423",
+            "keywords": ["东阿阿胶", "阿胶", "滋补"]
+        },
+        {
+            "name": "洋河股份",
+            "symbol": "SZ002304",
+            "keywords": ["洋河", "白酒", "蓝色经典"]
+        },
+        {
+            "name": "贵州茅台",
+            "symbol": "SH600519",
+            "keywords": ["茅台", "白酒", "高端消费"]
+        },
+        {
+            "name": "格力电器",
+            "symbol": "SZ000651",
+            "keywords": ["格力", "空调", "家电"]
+        }
+    ],
+    "data_sources": {
+        "research_reports": true,
+        "news": true,
+        "announcements": true,
+        "discussions": true,
+        "social_sentiment": true
+    },
+    "update_interval_minutes": 30,
+    "output_dir": "data/output",
+    "history_dir": "data/history"
+}

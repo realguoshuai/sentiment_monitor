@@ -1,0 +1,27 @@
+import { createRouter, createWebHistory } from 'vue-router'
+import DashboardView from '@/views/DashboardView.vue'
+import StockDetailView from '@/views/StockDetailView.vue'
+
+const router = createRouter({
+  history: createWebHistory(import.meta.env.BASE_URL),
+  routes: [
+    {
+      path: '/',
+      name: 'dashboard',
+      component: DashboardView
+    },
+    {
+      path: '/stock/:symbol',
+      name: 'stock-detail',
+      component: StockDetailView,
+      props: true
+    },
+    {
+      path: '/compare',
+      name: 'compare',
+      component: () => import('@/views/ComparisonView.vue')
+    }
+  ]
+})
+
+export default router
