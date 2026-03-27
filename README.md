@@ -66,7 +66,7 @@ sentiment_monitor/
 ├── start.bat                   # 一键启动脚本
 └── README.md
 ```
-
+![项目截图](img/QQ图片20260327161155.png.png)
 ## 环境要求
 
 - Windows 10+
