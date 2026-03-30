@@ -10,10 +10,10 @@
         </div>
         <div>
           <div class="flex items-center gap-2">
-            <h1 class="text-xl font-black text-white tracking-wide">舆情监控系统</h1>
+            <h1 class="text-xl font-black text-white tracking-wide">价值投资分析终端</h1>
             <svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
           </div>
-          <p class="text-[10px] text-slate-500 tracking-widest mt-0.5">股市舆情智能分析平台</p>
+          <p class="text-[10px] text-slate-500 tracking-widest mt-0.5">深度个股估值与投资回报监测引擎</p>
         </div>
       </div>
 
