@@ -112,7 +112,8 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
         if not symbols or symbols == ['']:
             return Response({'error': '至少需要一个股票代码'}, status=400)
         limit = int(request.GET.get('limit', 30))
-        data = PriceService.get_historical_data(symbols, limit)
+        period = request.GET.get('period', 'day')
+        data = PriceService.get_historical_data(symbols, limit, period)
         return Response(data)
 
 

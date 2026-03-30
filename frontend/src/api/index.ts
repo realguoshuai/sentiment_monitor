@@ -79,8 +79,8 @@ export const stockApi = {
   getRealtimePrices: () => api.get<Record<string, RealtimePrice>>('/sentiment/realtime_prices/'),
   getComparisonRealtime: (symbols: string[], type: 'last' | 'minute' = 'last') => 
     api.get<Record<string, any>>(`/sentiment/comparison_realtime/?symbols=${symbols.join(',')}&type=${type}`),
-  getComparisonHistorical: (symbols: string[], limit: number = 30) => 
-    api.get<Record<string, any[]>>(`/sentiment/comparison_historical/?symbols=${symbols.join(',')}&limit=${limit}`),
+  getComparisonHistorical: (symbols: string[], limit: number = 30, period: string = 'day') => 
+    api.get<Record<string, any[]>>(`/sentiment/comparison_historical/?symbols=${symbols.join(',')}&limit=${limit}&period=${period}`),
 }
 
 export default api

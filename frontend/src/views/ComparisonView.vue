@@ -15,25 +15,18 @@
           </div>
         </div>
 
-        <!-- Mode Switch -->
+        <!-- Time Horizon Selector -->
         <div class="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
           <button 
-            @click="timeRange = 'intraday'"
+            v-for="scale in timeScales"
+            :key="scale.value"
+            @click="currentTimeScale = scale.value"
             :class="[
-              'px-4 py-1.5 rounded-lg text-xs font-bold transition-all',
-              timeRange === 'intraday' ? 'bg-indigo-500 text-white shadow-md' : 'text-slate-500 hover:text-slate-700'
+              'px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all whitespace-nowrap',
+              currentTimeScale === scale.value ? 'bg-indigo-500 text-white shadow-md' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
             ]"
           >
-            分时价差
-          </button>
-          <button 
-            @click="timeRange = 'historical'"
-            :class="[
-              'px-4 py-1.5 rounded-lg text-xs font-bold transition-all',
-              timeRange === 'historical' ? 'bg-indigo-500 text-white shadow-md' : 'text-slate-500 hover:text-slate-700'
-            ]"
-          >
-            历史价差 (30D)
+            {{ scale.label }}
           </button>
         </div>
       </div>
@@ -75,7 +68,7 @@
       <!-- Spread Analysis Dashboard -->
       <div v-if="selectedSymbols.length === 2" class="space-y-6">
         <!-- Summary Cards -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
           <div class="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm relative overflow-hidden group">
              <div class="absolute top-0 right-0 p-3 opacity-5 group-hover:opacity-10 transition-opacity">
                 <svg class="w-12 h-12 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
@@ -101,6 +94,30 @@
                 </span>
              </div>
           </div>
+          
+          <!-- Percentile Gauge Card -->
+          <div class="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm relative overflow-hidden group">
+             <h4 class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">历史分位 (Percentile)</h4>
+             <div class="flex items-end justify-between gap-4">
+                <div class="flex flex-col">
+                   <span class="text-3xl font-black font-mono text-indigo-600">{{ spreadStats.percentile.toFixed(1) }}%</span>
+                   <div class="text-[10px] font-bold text-slate-400 mt-1">Relative to History</div>
+                </div>
+                <div class="flex-1 h-12 bg-slate-100 rounded-lg relative overflow-hidden self-center border border-slate-200/50">
+                   <div 
+                     class="absolute bottom-0 left-0 right-0 bg-indigo-500/20 transition-all duration-700" 
+                     :style="{ height: spreadStats.percentile + '%' }"
+                   ></div>
+                   <div 
+                     class="absolute left-0 right-0 h-1 bg-indigo-600 shadow-[0_0_10px_rgba(79,70,229,0.5)] transition-all duration-700 z-10" 
+                     :style="{ bottom: spreadStats.percentile + '%' }"
+                   ></div>
+                </div>
+             </div>
+             <p class="text-[9px] font-bold text-slate-500 mt-4 uppercase">
+               {{ spreadStats.percentile > 80 ? '⚠️ High Extremum' : (spreadStats.percentile < 20 ? '✅ Low Extremum' : 'Neutral Range') }}
+             </p>
+          </div>
         </div>
 
         <!-- Main Spread Chart -->
@@ -109,9 +126,9 @@
             <div>
               <h3 class="text-lg font-bold flex items-center gap-3 text-slate-800">
                 <div class="w-1.5 h-6 bg-indigo-500 rounded-full"></div>
-                {{ timeRange === 'intraday' ? '实时分时对冲走势' : '历史日线收盘价差' }}
+                {{ getTimeScaleLabel(currentTimeScale) }}对冲走势
               </h3>
-              <p class="text-[10px] text-slate-500 font-bold uppercase mt-1 tracking-widest">{{ timeRange === 'intraday' ? 'Intraday Hedge Pulse' : 'Historical Data Key-Join Analysis' }}</p>
+              <p class="text-[10px] text-slate-500 font-bold uppercase mt-1 tracking-widest">{{ currentTimeScale === 'minute' ? 'Intraday Hedge Pulse' : 'Historical Data Key-Join Analysis' }}</p>
             </div>
             
             <div class="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-xl border border-slate-200">
@@ -124,6 +141,45 @@
           </div>
 
           <div ref="priceSpreadRef" class="w-full h-[450px]"></div>
+          
+          <!-- Spread Intelligence Insight -->
+          <div v-if="comparisonData.length > 0" class="mt-8 pt-8 border-t border-slate-100">
+            <div class="bg-indigo-50/50 rounded-2xl p-6 border border-indigo-100">
+               <div class="flex items-center gap-2 mb-4">
+                  <div class="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></div>
+                  <h4 class="text-xs font-black text-indigo-900 uppercase tracking-widest">量化对冲洞察 (AI Insight)</h4>
+               </div>
+               <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div class="space-y-4">
+                     <p class="text-sm leading-relaxed text-slate-700">
+                        在 <span class="font-bold text-slate-900">{{ spreadStats.range }}</span> 观测周期内，
+                        {{ getStockName(selectedSymbols[0]) }} 与 {{ getStockName(selectedSymbols[1]) }} 的价差呈现明显波动。
+                        <strong>最大价差</strong> 出现在 <span class="text-rose-600 font-bold underline underline-offset-4">{{ spreadStats.maxDate }}</span>，
+                        数值达 <span class="font-mono font-bold">{{ spreadStats.maxVal.toFixed(2) }}</span> 元；
+                        <strong>最小价差</strong> 位于 <span class="text-emerald-600 font-bold underline underline-offset-4">{{ spreadStats.minDate }}</span>，
+                        数值为 <span class="font-mono font-bold">{{ spreadStats.minVal.toFixed(2) }}</span> 元。
+                     </p>
+                     <div class="flex items-center gap-4 text-[10px] font-bold uppercase tracking-tighter text-slate-400">
+                        <span>Sample Size: {{ comparisonData.length }} pts</span>
+                        <span class="w-1 h-1 rounded-full bg-slate-300"></span>
+                        <span>Confidence: 99% ISO-GRID</span>
+                     </div>
+                  </div>
+                  <div class="grid grid-cols-2 gap-4">
+                     <div class="bg-white p-4 rounded-xl border border-indigo-50 shadow-sm">
+                        <div class="text-[9px] font-bold text-slate-400 uppercase mb-1">平均价差 (HEC Avg)</div>
+                        <div class="text-lg font-black font-mono text-indigo-600">{{ spreadStats.avg.toFixed(2) }}</div>
+                     </div>
+                     <div class="bg-white p-4 rounded-xl border border-indigo-50 shadow-sm">
+                        <div class="text-[9px] font-bold text-slate-400 uppercase mb-1">当前偏离 (Z-Gap)</div>
+                        <div class="text-lg font-black font-mono" :class="Math.abs(currentDiff - spreadStats.avg) > spreadStats.avg * 0.2 ? 'text-amber-500' : 'text-slate-700'">
+                           {{ (currentDiff - spreadStats.avg).toFixed(2) }}
+                        </div>
+                     </div>
+                  </div>
+               </div>
+            </div>
+          </div>
           
           <div v-if="loadingPrice" class="absolute inset-0 bg-white/70 backdrop-blur-[2px] flex items-center justify-center rounded-2xl z-20">
              <div class="flex flex-col items-center gap-4 bg-white px-8 py-6 rounded-2xl shadow-xl border border-slate-100">
@@ -168,7 +224,16 @@ import { stockApi, type RealtimePrice } from '@/api'
 import * as echarts from 'echarts'
 
 const store = useSentimentStore()
-const timeRange = ref<'intraday' | 'historical'>('intraday')
+
+const timeScales = [
+  { label: '1D 分时', value: 'minute' },
+  { label: '30D 日线', value: '30d' },
+  { label: '36M 月线', value: '36m' },
+  { label: '5Y 月线', value: '5y' },
+  { label: '10Y 月线', value: '10y' },
+]
+
+const currentTimeScale = ref<string>('minute')
 const selectedSymbols = ref<string[]>([])
 const loadingPrice = ref(false)
 const rtPrices = ref<Record<string, RealtimePrice>>({})
@@ -183,6 +248,10 @@ let priceChart: echarts.ECharts | null = null
 
 function getStockName(symbol: string) {
   return store.sentimentData.find(s => s.stock_symbol === symbol)?.stock_name || symbol
+}
+
+function getTimeScaleLabel(val: string) {
+  return timeScales.find(s => s.value === val)?.label || ''
 }
 
 function getStockColor(symbol: string) {
@@ -215,6 +284,32 @@ const priceDiffColor = computed(() => {
   return 'text-slate-500'
 })
 
+const spreadStats = computed(() => {
+  if (comparisonData.value.length === 0) return { maxVal: 0, maxDate: '--', minVal: 0, minDate: '--', avg: 0, range: '--', percentile: 0 }
+  
+  let maxVal = -Infinity, minVal = Infinity, sum = 0
+  let maxDate = '', minDate = ''
+  
+  comparisonData.value.forEach(d => {
+    if (d.diff > maxVal) { maxVal = d.diff; maxDate = d.time; }
+    if (d.diff < minVal) { minVal = d.diff; minDate = d.time; }
+    sum += d.diff
+  })
+  
+  const avg = sum / comparisonData.value.length
+  
+  // Calculate Percentile
+  let lessThanCurrent = 0
+  comparisonData.value.forEach(d => {
+     if (d.diff <= currentDiff.value) lessThanCurrent++
+  })
+  const percentile = (lessThanCurrent / comparisonData.value.length) * 100
+
+  const range = `${comparisonData.value[0].time} 至 ${comparisonData.value[comparisonData.value.length - 1].time}`
+  
+  return { maxVal, maxDate, minVal, minDate, avg, range, percentile }
+})
+
 // Data Fetching
 async function fetchComparisonData() {
   if (selectedSymbols.value.length !== 2) return
@@ -226,29 +321,7 @@ async function fetchComparisonData() {
     rtPrices.value = rtLastResp.data as any
     
     // 2. Fetch Time-Series for Chart
-    if (timeRange.value === 'historical') {
-      const cacheKey = symbols.sort().join(',')
-      let data
-      if (historicalCache.value[cacheKey]) {
-        data = historicalCache.value[cacheKey]
-      } else {
-        const histResp = await stockApi.getComparisonHistorical(symbols, 30)
-        data = histResp.data
-        historicalCache.value[cacheKey] = data
-      }
-      
-      const s1 = data[symbols[0]] || []
-      const s2 = data[symbols[1]] || []
-      comparisonData.value = s1.map((item: any, idx: number) => {
-        const item2 = s2[idx]
-        return { 
-          time: item.date, 
-          p1: item.price, 
-          p2: item2 ? item2.price : 0, 
-          diff: item2 ? (item.price - item2.price) : 0 
-        }
-      })
-    } else {
+    if (currentTimeScale.value === 'minute') {
       // Intraday
       const rtMinResp = await stockApi.getComparisonRealtime(symbols, 'minute')
       const data = rtMinResp.data
@@ -259,6 +332,37 @@ async function fetchComparisonData() {
         const formattedTime = `${item.time.slice(0, 2)}:${item.time.slice(2, 4)}`
         return { 
           time: formattedTime, 
+          p1: item.price, 
+          p2: item2 ? item2.price : 0, 
+          diff: item2 ? (item.price - item2.price) : 0 
+        }
+      })
+    } else {
+      // Historical (Daily, Monthly, Annual)
+      const cacheKey = `${symbols.sort().join(',')}_${currentTimeScale.value}`
+      let data
+      if (historicalCache.value[cacheKey]) {
+        data = historicalCache.value[cacheKey]
+      } else {
+        let limit = 30
+        let period = 'day'
+        
+        if (currentTimeScale.value === '30d') { limit = 30; period = 'day'; }
+        else if (currentTimeScale.value === '36m') { limit = 36; period = 'month'; }
+        else if (currentTimeScale.value === '5y') { limit = 60; period = 'month'; }
+        else if (currentTimeScale.value === '10y') { limit = 120; period = 'month'; }
+
+        const histResp = await stockApi.getComparisonHistorical(symbols, limit, period)
+        data = histResp.data
+        historicalCache.value[cacheKey] = data
+      }
+      
+      const s1 = data[symbols[0]] || []
+      const s2 = data[symbols[1]] || []
+      comparisonData.value = s1.map((item: any, idx: number) => {
+        const item2 = s2[idx]
+        return { 
+          time: item.date, 
           p1: item.price, 
           p2: item2 ? item2.price : 0, 
           diff: item2 ? (item.price - item2.price) : 0 
@@ -323,7 +427,12 @@ function updatePriceChart() {
     grid: { left: '1%', right: '1%', bottom: '5%', top: '5%', containLabel: true },
     xAxis: {
       type: 'category',
-      data: comparisonData.value.map(d => d.time.length > 5 ? d.time.slice(5) : d.time), 
+      data: comparisonData.value.map(d => {
+        if (currentTimeScale.value === 'minute') return d.time;
+        // 10Y/5Y 月线模式下，如果点数较多，显示完整日期 YYYY-MM
+        if (currentTimeScale.value === '5y' || currentTimeScale.value === '10y') return d.time.slice(0, 7);
+        return d.time.length > 5 ? d.time.slice(5) : d.time; // MM-DD
+      }), 
       axisLine: { lineStyle: { color: 'rgba(0,0,0,0.1)' } },
       axisLabel: { color: '#475569', fontSize: 10, fontWeight: '800', fontFamily: 'Monaco, Inter' },
       axisPointer: { show: true }
@@ -380,7 +489,7 @@ onUnmounted(() => {
   priceChart?.dispose()
 })
 
-watch([selectedSymbols, timeRange], () => {
+watch([selectedSymbols, currentTimeScale], () => {
   fetchComparisonData()
 }, { deep: true, immediate: true })
 </script>

@@ -64,21 +64,31 @@ class PriceService:
         return results
 
     @classmethod
-    def get_historical_data(cls, symbols, limit=30):
+    def get_historical_data(cls, symbols, limit=30, period='day'):
         """获取历史 K 线 (腾讯 fqkline)"""
         results = {}
+        
+        # 处理特殊周期
+        fetch_period = period
+        fetch_limit = limit
+        if period == 'annual':
+            fetch_period = 'month'
+            fetch_limit = limit * 12 + 12 # 确保覆盖多年，增加冗余
+
         for idx, symbol in enumerate(symbols):
             if idx > 0: time.sleep(0.3)
             # fqkline API 要求前缀小写
             s = symbol.lower()
-            url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={s},day,,,{limit},qfq"
+            url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={s},{fetch_period},,,{fetch_limit},qfq"
             try:
                 resp = cls._session.get(url, timeout=8)
                 data = resp.json()
                 if data.get('code') != 0: continue
                 
                 stock_data = data['data'].get(s, {})
-                days = stock_data.get('qfqday') or stock_data.get('day') or []
+                # 腾讯返回的键名通常包含 qfq+period
+                key = f"qfq{fetch_period}"
+                days = stock_data.get(key) or stock_data.get(fetch_period) or []
                 
                 history = []
                 for d in days:
@@ -87,6 +97,20 @@ class PriceService:
                             'date': d[0],
                             'price': float(d[2])
                         })
+                
+                # 如果是年线，进行重采样（取每年最后一月）
+                if period == 'annual' and history:
+                    annual_history = []
+                    last_year = ""
+                    for h in history:
+                        year = h['date'][:4]
+                        # 简单的年度聚合：记录每一年的最后一个点
+                        if annual_history and annual_history[-1]['date'][:4] == year:
+                            annual_history[-1] = h
+                        else:
+                            annual_history.append(h)
+                    history = annual_history[-limit:] # 只取最近 limit 年
+
                 results[symbol.upper()] = history
             except Exception as e:
                 logger.error(f"PriceService History Error for {symbol}: {e}")
