@@ -89,8 +89,25 @@ class FundamentalService:
             df['ann_date'] = pd.to_datetime(df['ann_date'])
             df['cash_div'] = pd.to_numeric(df['cash_div_10'], errors='coerce').fillna(0) / 10.0
             
-            # 过滤无效数据
+            # 过滤无效数据并按日期排序
             df = df[df['cash_div'] > 0].sort_values('ann_date')
+            
+            # 清洗重复的分红条目 (比如 EastMoney 经常把“预案”和“实施”算作两条不同记录)
+            # 逻辑：如果相邻两此分红金额完全相等，且日期相差不足 90 天，则剔除较早的一条 (通常是预案)
+            cleaned_indices = []
+            prev_row = None
+            for idx, row in df.iterrows():
+                if prev_row is not None:
+                    # 判断是否为同一个分红事件的重复公告
+                    same_amount = abs(row['cash_div'] - prev_row['cash_div']) < 1e-5
+                    close_date = (row['ann_date'] - prev_row['ann_date']).days <= 90
+                    if same_amount and close_date:
+                        # 发现重复，移除前面的预案，将其替换为新的实施记录
+                        cleaned_indices.pop()
+                cleaned_indices.append(idx)
+                prev_row = row
+                
+            df = df.loc[cleaned_indices]
             
             cache.set(cache_key, df, 24 * 3600)
             return df
