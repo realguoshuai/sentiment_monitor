@@ -65,7 +65,7 @@
           <span class="text-[11px] font-bold font-mono" :class="roeColor">{{ roeText }}</span>
         </div>
         <div class="flex flex-col p-1 rounded bg-[#1e293b]/50 border border-slate-700/50 text-center">
-          <span class="text-[8px] text-slate-500 mb-0.5" title="ROI = ROE / PB">回报</span>
+          <span class="text-[8px] text-slate-500 mb-0.5" title="投资回报率 = ROE / PB">ROI</span>
           <span class="text-[11px] font-bold font-mono" :class="roiColor">{{ roiText }}</span>
         </div>
       </div>
@@ -171,14 +171,19 @@ const priceColorClass = computed(() => {
 })
 
 // Valuation Computations
+const roiValue = computed(() => {
+  if (!rtPrice.value || rtPrice.value.pe <= 0 || rtPrice.value.pb <= 0) return null
+  const store = useSentimentStore()
+  return store.calculateROI(props.data.stock_symbol, rtPrice.value.pe, rtPrice.value.pb)
+})
+
 const roeValue = computed(() => {
   if (!rtPrice.value || rtPrice.value.pe <= 0 || rtPrice.value.pb <= 0) return null
-  let roe = rtPrice.value.pb / rtPrice.value.pe
-  // 洋河股份(SZ002304) ROE 不足 20% 时按 20% 计算
-  if (props.data.stock_symbol === 'SZ002304' && roe < 0.20) {
-    roe = 0.20
+  let roe = (rtPrice.value.pb / rtPrice.value.pe) * 100
+  if (props.data.stock_symbol.includes('002304') && roe < 20) {
+    roe = 20
   }
-  return roe
+  return roe / 100 // Convert back to ratio for text formatting if needed, or keep as %
 })
 
 const roeText = computed(() => {
@@ -186,14 +191,9 @@ const roeText = computed(() => {
   return (roeValue.value * 100).toFixed(1) + '%'
 })
 
-const roiValue = computed(() => {
-  if (roeValue.value === null || !rtPrice.value || rtPrice.value.pb <= 0) return null
-  return roeValue.value / rtPrice.value.pb
-})
-
 const roiText = computed(() => {
   if (roiValue.value === null) return '--'
-  return (roiValue.value * 100).toFixed(1) + '%'
+  return roiValue.value.toFixed(2) + '%'
 })
 
 // Dividend Yield Color
@@ -228,8 +228,8 @@ const roeColor = computed(() => {
 
 const roiColor = computed(() => {
   if (roiValue.value === null) return 'text-slate-500'
-  if (roiValue.value > 0.08) return 'text-[#00df9a]'
-  if (roiValue.value > 0.04) return 'text-amber-400'
+  if (roiValue.value > 10) return 'text-[#00df9a]'
+  if (roiValue.value > 5) return 'text-amber-400'
   return 'text-rose-400'
 })
 </script>

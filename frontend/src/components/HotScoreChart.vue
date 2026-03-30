@@ -6,6 +6,7 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import * as echarts from 'echarts'
 import type { SentimentData } from '@/api'
+import { useSentimentStore } from '@/stores/sentiment'
 
 const props = withDefaults(defineProps<{
   data: SentimentData[]
@@ -29,19 +30,63 @@ const initChart = () => {
 const updateChart = () => {
   if (!chart) return
   
-  // Sort by hot_score descending
-  const sortedData = [...props.data].sort((a, b) => b.hot_score - a.hot_score)
+  const store = useSentimentStore()
+  
+  // Sort by ROI descending
+  const sortedData = [...props.data].sort((a, b) => {
+    const pA = store.realtimePrices[a.stock_symbol]
+    const pB = store.realtimePrices[b.stock_symbol]
+    const roiA = pA ? store.calculateROI(a.stock_symbol, pA.pe, pA.pb) : 0
+    const roiB = pB ? store.calculateROI(b.stock_symbol, pB.pe, pB.pb) : 0
+    return roiB - roiA
+  })
+
   const stockNames = sortedData.map(d => d.stock_name)
-  const hotScores = sortedData.map(d => d.hot_score)
+  const roiValues = sortedData.map(d => {
+    const p = store.realtimePrices[d.stock_symbol]
+    return p ? parseFloat(store.calculateROI(d.stock_symbol, p.pe, p.pb).toFixed(2)) : 0
+  })
   
   const option: echarts.EChartsOption = {
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
-      backgroundColor: 'rgba(0,0,0,0.8)',
-      borderColor: '#374151',
+      backgroundColor: 'rgba(15, 23, 42, 0.9)',
+      borderColor: '#334155',
+      borderWidth: 1,
       textStyle: { color: '#fff' },
-      formatter: '{b}: {c}'
+      formatter: (params: any) => {
+        const name = params[0].name
+        const item = props.data.find(d => d.stock_name === name)
+        if (!item) return name
+        
+        const rt = store.realtimePrices[item.stock_symbol]
+        const roi = params[0].value
+        
+        if (!rt) return `${name}: ${roi}%`
+        
+        // Calculate ROE for display (consistent with ROI logic)
+        let roe = (rt.pb / rt.pe) * 100
+        if (item.stock_symbol.includes('002304') && roe < 20) roe = 20
+        
+        return `
+          <div style="padding: 4px;">
+            <div style="font-weight: bold; margin-bottom: 8px; border-bottom: 1px solid #334155; padding-bottom: 4px;">${name}</div>
+            <div style="display: flex; justify-content: space-between; gap: 20px; font-size: 12px; margin-bottom: 4px;">
+              <span style="color: #94a3b8;">ROE</span>
+              <span style="font-weight: bold; color: #38bdf8;">${roe.toFixed(2)}%</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; gap: 20px; font-size: 12px; margin-bottom: 4px;">
+              <span style="color: #94a3b8;">PB</span>
+              <span style="font-weight: bold; color: #fbbf24;">${rt.pb.toFixed(2)}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; gap: 20px; font-size: 12px; margin-top: 8px; border-top: 1px solid #334155; pt-4;">
+              <span style="color: #94a3b8;">ROI (回报率)</span>
+              <span style="font-weight: bold; color: #22c55e;">${roi}%</span>
+            </div>
+          </div>
+        `
+      }
     },
     grid: {
       left: '3%',
@@ -63,9 +108,9 @@ const updateChart = () => {
       axisLabel: { color: '#fff' }
     },
     series: [{
-      name: '热度分值',
+      name: '投资回报率 (%)',
       type: 'bar',
-      data: hotScores.reverse(),
+      data: roiValues.reverse(),
       barWidth: '50%',
       itemStyle: {
         color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
@@ -77,7 +122,7 @@ const updateChart = () => {
       label: {
         show: true,
         position: 'right',
-        formatter: '{c}',
+        formatter: '{c}%',
         color: '#fff'
       }
     }]

@@ -14,6 +14,27 @@ export const useSentimentStore = defineStore('sentiment', () => {
   const realtimePrices = ref<Record<string, RealtimePrice>>({})
 
   // Getters
+  const calculateROI = (symbol: string, pe: number, pb: number) => {
+    if (pe <= 0 || pb <= 0) return 0
+    let roe = (pb / pe) * 100
+    // 洋河股份(002304) ROE 不足 20% 时按 20% 计算
+    const isYanghe = symbol.includes('002304')
+    if (isYanghe && roe < 20) {
+      roe = 20
+    }
+    return roe / pb
+  }
+
+  const roiSortedStocks = computed(() => {
+    return [...sentimentData.value].sort((a, b) => {
+      const pA = realtimePrices.value[a.stock_symbol]
+      const pB = realtimePrices.value[b.stock_symbol]
+      const roiA = pA ? calculateROI(a.stock_symbol, pA.pe, pA.pb) : 0
+      const roiB = pB ? calculateROI(b.stock_symbol, pB.pe, pB.pb) : 0
+      return roiB - roiA
+    })
+  })
+
   const sortedStocks = computed(() => {
     return [...sentimentData.value].sort((a, b) => b.sentiment_score - a.sentiment_score)
   })
@@ -121,6 +142,8 @@ export const useSentimentStore = defineStore('sentiment', () => {
     error,
     lastUpdated,
     realtimePrices,
+    calculateROI,
+    roiSortedStocks,
     sortedStocks,
     totalNews,
     totalReports,

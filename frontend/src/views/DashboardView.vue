@@ -93,12 +93,12 @@
             <div class="flex justify-between items-center mb-2 shrink-0">
                <div class="flex items-center gap-2">
                  <span class="w-1 h-3.5 bg-indigo-500 rounded-full"></span>
-                 <h3 class="text-xs font-bold text-white tracking-wide">热度排行</h3>
+                 <h3 class="text-xs font-bold text-white tracking-wide">投资回报率</h3>
                </div>
                <svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
             </div>
             <div class="flex-1 min-h-0 relative">
-               <HotScoreChart :data="store.sortedStocks" class="absolute inset-0" />
+               <HotScoreChart :data="store.roiSortedStocks" class="absolute inset-0" />
             </div>
           </div>
         </div>

@@ -16,18 +16,34 @@
         </div>
 
         <!-- Time Horizon Selector -->
-        <div class="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
-          <button 
-            v-for="scale in timeScales"
-            :key="scale.value"
-            @click="currentTimeScale = scale.value"
-            :class="[
-              'px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all whitespace-nowrap',
-              currentTimeScale === scale.value ? 'bg-indigo-500 text-white shadow-md' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
-            ]"
-          >
-            {{ scale.label }}
-          </button>
+        <div class="flex flex-col md:flex-row items-center gap-4">
+          <div class="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
+            <button 
+              v-for="scale in timeScales"
+              :key="scale.value"
+              @click="currentTimeScale = scale.value"
+              :class="[
+                'px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all whitespace-nowrap',
+                currentTimeScale === scale.value ? 'bg-indigo-500 text-white shadow-md' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'
+              ]"
+            >
+              {{ scale.label }}
+            </button>
+          </div>
+          
+          <div class="flex bg-emerald-50 p-1 rounded-xl border border-emerald-100">
+            <button 
+              v-for="mode in metricModes"
+              :key="mode.value"
+              @click="currentMetricMode = mode.value"
+              :class="[
+                'px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all whitespace-nowrap',
+                currentMetricMode === mode.value ? 'bg-emerald-600 text-white shadow-md' : 'text-emerald-700/60 hover:text-emerald-700 hover:bg-emerald-100/50'
+              ]"
+            >
+              {{ mode.label }}
+            </button>
+          </div>
         </div>
       </div>
     </header>
@@ -42,9 +58,7 @@
             </svg>
             对比标的录入 (选择2只)
           </h2>
-          <div class="text-[10px] text-indigo-500 font-bold uppercase tracking-tighter">
-            Hedge Correlation Mode
-          </div>
+          <div class="text-[10px] text-zinc-400 mt-1 uppercase tracking-tighter">Investment Return (ROI)</div>
         </div>
         <div class="flex flex-wrap gap-3">
           <button
@@ -81,9 +95,11 @@
                 <span class="text-xs text-slate-500 font-bold uppercase">CNY</span>
              </div>
           </div>
-          <div v-for="sym in selectedSymbols" :key="sym" class="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
+          <div v-for="(sym, idx) in selectedSymbols" :key="sym" class="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
              <div class="flex justify-between items-center mb-3">
-                <h4 class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{{ getStockName(sym) }}</h4>
+                <h4 class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                  {{ getStockName(sym) }} (Stock {{ idx + 1 }})
+                </h4>
                 <span class="text-[10px] font-mono text-slate-400">{{ sym }}</span>
              </div>
              <div class="flex items-baseline gap-2">
@@ -95,6 +111,36 @@
              </div>
           </div>
           
+          <!-- ROE-PB Quality Score Card -->
+          <div v-for="(sym, idx) in selectedSymbols" :key="'roe-'+sym" class="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm relative overflow-hidden group">
+             <div class="flex justify-between items-center mb-4">
+                <div class="bg-indigo-500/10 text-indigo-600 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest">
+                  Stock {{ idx + 1 }}
+                </div>
+                <div class="flex items-center gap-1 text-[10px] font-bold text-slate-400">
+                  <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                  ROI: {{ getRoiValue(sym).toFixed(2) }}%
+                </div>
+             </div>
+             
+             <h4 class="text-sm font-bold text-slate-800 mb-2">{{ getStockName(sym) }}</h4>
+             
+             <div class="grid grid-cols-2 gap-4 mt-4">
+               <div class="p-3 bg-indigo-50/50 rounded-xl border border-indigo-100/50">
+                 <div class="text-[9px] font-bold text-indigo-400 uppercase tracking-tighter mb-1">ROE (推定)</div>
+                 <div class="text-xs font-bold text-indigo-700">
+                   {{ rtPrices[sym] ? ((rtPrices[sym].pb / rtPrices[sym].pe) * 100).toFixed(1) + '%' : '--' }}
+                 </div>
+               </div>
+               <div class="p-3 bg-emerald-50/50 rounded-xl border border-emerald-100/50">
+                 <div class="text-[9px] font-bold text-emerald-400 uppercase tracking-tighter mb-1">回报 (ROI)</div>
+                 <div class="text-xs font-bold text-emerald-700">
+                   {{ getRoiValue(sym).toFixed(2) }}%
+                 </div>
+               </div>
+             </div>
+          </div>
+
           <!-- Percentile Gauge Card -->
           <div class="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm relative overflow-hidden group">
              <h4 class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">历史分位 (Percentile)</h4>
@@ -126,9 +172,9 @@
             <div>
               <h3 class="text-lg font-bold flex items-center gap-3 text-slate-800">
                 <div class="w-1.5 h-6 bg-indigo-500 rounded-full"></div>
-                {{ getTimeScaleLabel(currentTimeScale) }}对冲走势
+                {{ getTimeScaleLabel(currentTimeScale) }} {{ getMetricLabel(currentMetricMode) }} 对冲走势
               </h3>
-              <p class="text-[10px] text-slate-500 font-bold uppercase mt-1 tracking-widest">{{ currentTimeScale === 'minute' ? 'Intraday Hedge Pulse' : 'Historical Data Key-Join Analysis' }}</p>
+              <p class="text-[10px] text-slate-500 font-bold uppercase mt-1 tracking-widest">{{ currentTimeScale === 'minute' ? 'Intraday Hedge Pulse' : 'Historical Valuation Dynamics' }}</p>
             </div>
             
             <div class="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-xl border border-slate-200">
@@ -153,11 +199,11 @@
                   <div class="space-y-4">
                      <p class="text-sm leading-relaxed text-slate-700">
                         在 <span class="font-bold text-slate-900">{{ spreadStats.range }}</span> 观测周期内，
-                        {{ getStockName(selectedSymbols[0]) }} 与 {{ getStockName(selectedSymbols[1]) }} 的价差呈现明显波动。
-                        <strong>最大价差</strong> 出现在 <span class="text-rose-600 font-bold underline underline-offset-4">{{ spreadStats.maxDate }}</span>，
-                        数值达 <span class="font-mono font-bold">{{ spreadStats.maxVal.toFixed(2) }}</span> 元；
-                        <strong>最小价差</strong> 位于 <span class="text-emerald-600 font-bold underline underline-offset-4">{{ spreadStats.minDate }}</span>，
-                        数值为 <span class="font-mono font-bold">{{ spreadStats.minVal.toFixed(2) }}</span> 元。
+                        {{ getStockName(selectedSymbols[0]) }} 与 {{ getStockName(selectedSymbols[1]) }} 的 <strong>{{ getMetricLabel(currentMetricMode) }} 差值</strong> 呈现明显波动。
+                        <strong>最大偏离</strong> 出现在 <span class="text-rose-600 font-bold underline underline-offset-4">{{ spreadStats.maxDate }}</span>，
+                        数值达 <span class="font-mono font-bold">{{ spreadStats.maxVal.toFixed(2) }}</span>；
+                        <strong>最小偏离</strong> 位于 <span class="text-emerald-600 font-bold underline underline-offset-4">{{ spreadStats.minDate }}</span>，
+                        数值为 <span class="font-mono font-bold">{{ spreadStats.minVal.toFixed(2) }}</span>。
                      </p>
                      <div class="flex items-center gap-4 text-[10px] font-bold uppercase tracking-tighter text-slate-400">
                         <span>Sample Size: {{ comparisonData.length }} pts</span>
@@ -188,7 +234,7 @@
                    <p class="text-sm font-bold text-slate-800 uppercase tracking-widest">Loading Analytics</p>
                    <p class="text-[10px] text-slate-500 mt-1 font-mono uppercase">Synchronizing Time-Series Data...</p>
                 </div>
-             </div>
+            </div>
           </div>
         </div>
       </div>
@@ -233,7 +279,16 @@ const timeScales = [
   { label: '10Y 月线', value: '10y' },
 ]
 
+const metricModes = [
+  { label: '价格 (Price)', value: 'price' },
+  { label: '市盈率 (PE)', value: 'pe' },
+  { label: '市净率 (PB)', value: 'pb' },
+  { label: '股息率 (DY)', value: 'dividend_yield' },
+  { label: '回报率 (ROI)', value: 'roi' },
+]
+
 const currentTimeScale = ref<string>('minute')
+const currentMetricMode = ref<string>('price')
 const selectedSymbols = ref<string[]>([])
 const loadingPrice = ref(false)
 const rtPrices = ref<Record<string, RealtimePrice>>({})
@@ -250,8 +305,18 @@ function getStockName(symbol: string) {
   return store.sentimentData.find(s => s.stock_symbol === symbol)?.stock_name || symbol
 }
 
+function getRoiValue(symbol: string) {
+  const p = rtPrices.value[symbol]
+  if (!p || p.pe <= 0 || p.pb <= 0) return 0
+  return store.calculateROI(symbol, p.pe, p.pb)
+}
+
 function getTimeScaleLabel(val: string) {
   return timeScales.find(s => s.value === val)?.label || ''
+}
+
+function getMetricLabel(val: string) {
+  return metricModes.find(m => m.value === val)?.label || ''
 }
 
 function getStockColor(symbol: string) {
@@ -296,85 +361,119 @@ const spreadStats = computed(() => {
     sum += d.diff
   })
   
-  const avg = sum / comparisonData.value.length
+  const avg = sum / (comparisonData.value.length || 1)
   
-  // Calculate Percentile
   let lessThanCurrent = 0
   comparisonData.value.forEach(d => {
      if (d.diff <= currentDiff.value) lessThanCurrent++
   })
-  const percentile = (lessThanCurrent / comparisonData.value.length) * 100
-
+  const percentile = (lessThanCurrent / (comparisonData.value.length || 1)) * 100
   const range = `${comparisonData.value[0].time} 至 ${comparisonData.value[comparisonData.value.length - 1].time}`
   
   return { maxVal, maxDate, minVal, minDate, avg, range, percentile }
 })
 
-// Data Fetching
 async function fetchComparisonData() {
   if (selectedSymbols.value.length !== 2) return
   loadingPrice.value = true
   try {
     const symbols = selectedSymbols.value
-    // 1. Fetch Realtime for Summary (Use 'last' for summary metrics)
     const rtLastResp = await stockApi.getComparisonRealtime(symbols, 'last')
     rtPrices.value = rtLastResp.data as any
     
-    // 2. Fetch Time-Series for Chart
     if (currentTimeScale.value === 'minute') {
-      // Intraday
       const rtMinResp = await stockApi.getComparisonRealtime(symbols, 'minute')
-      const data = rtMinResp.data
-      const s1 = data[symbols[0]] || []
-      const s2 = data[symbols[1]] || []
-      comparisonData.value = s1.map((item: any, idx: number) => {
-        const item2 = s2[idx]
-        const formattedTime = `${item.time.slice(0, 2)}:${item.time.slice(2, 4)}`
-        return { 
-          time: formattedTime, 
-          p1: item.price, 
-          p2: item2 ? item2.price : 0, 
-          diff: item2 ? (item.price - item2.price) : 0 
-        }
-      })
+      historicalCache.value[`${[...symbols].sort().join(',')}_minute`] = rtMinResp.data
     } else {
-      // Historical (Daily, Monthly, Annual)
-      const cacheKey = `${symbols.sort().join(',')}_${currentTimeScale.value}`
-      let data
-      if (historicalCache.value[cacheKey]) {
-        data = historicalCache.value[cacheKey]
-      } else {
-        let limit = 30
-        let period = 'day'
-        
-        if (currentTimeScale.value === '30d') { limit = 30; period = 'day'; }
-        else if (currentTimeScale.value === '36m') { limit = 36; period = 'month'; }
-        else if (currentTimeScale.value === '5y') { limit = 60; period = 'month'; }
-        else if (currentTimeScale.value === '10y') { limit = 120; period = 'month'; }
-
-        const histResp = await stockApi.getComparisonHistorical(symbols, limit, period)
-        data = histResp.data
-        historicalCache.value[cacheKey] = data
+      const scale = currentTimeScale.value
+      const cacheKey = `${[...symbols].sort().join(',')}_${scale}`
+      if (!historicalCache.value[cacheKey]) {
+        let limit = 30, period = 'day'
+        if (scale === '30d') { limit = 30; period = 'day' }
+        else if (scale === '36m') { limit = 36; period = 'month' }
+        else if (scale === '5y') { limit = 60; period = 'month' }
+        else if (scale === '10y') { limit = 120; period = 'month' }
+        const histResp = await stockApi.getComparisonHistorical([ ...symbols ], limit, period)
+        historicalCache.value[cacheKey] = histResp.data
       }
-      
-      const s1 = data[symbols[0]] || []
-      const s2 = data[symbols[1]] || []
-      comparisonData.value = s1.map((item: any, idx: number) => {
-        const item2 = s2[idx]
-        return { 
-          time: item.date, 
-          p1: item.price, 
-          p2: item2 ? item2.price : 0, 
-          diff: item2 ? (item.price - item2.price) : 0 
-        }
-      })
     }
-    updatePriceChart()
+    remapComparisonData()
   } catch (e) {
     console.error('Fetch Comparison Error', e)
     comparisonData.value = []
   } finally {
     loadingPrice.value = false
+  }
+}
+
+function remapComparisonData() {
+  const symbols = selectedSymbols.value
+  const scale = currentTimeScale.value
+  const m = currentMetricMode.value
+  const cacheKey = `${[...symbols].sort().join(',')}_${scale}`
+  const data = historicalCache.value[cacheKey]
+  if (!data) {
+    comparisonData.value = []
+    return
+  }
+
+  const s1 = data[symbols[0]] || []
+  const s2 = data[symbols[1]] || []
+
+  comparisonData.value = s1.map((item: any, idx: number) => {
+    const item2 = s2[idx]
+    
+    if (scale === 'minute') {
+       const rt = rtPrices.value[symbols[0]], rt2 = rtPrices.value[symbols[1]]
+       const metrics1 = calculateIntradayMetrics(item, rt, symbols[0])
+       const metrics2 = calculateIntradayMetrics(item2, rt2, symbols[1])
+       const val1 = (metrics1 as any)[m] || 0
+       const val2 = (metrics2 as any)[m] || 0
+
+       return { 
+         time: `${item.time.slice(0, 2)}:${item.time.slice(2, 4)}`,
+         p1: val1,
+         p2: val2,
+         diff: val1 - val2,
+         m1: metrics1,
+         m2: metrics2
+       }
+    } else {
+        const p1 = (item as any)[m] || 0
+        const p2 = (item2 ? (item2 as any)[m] : 0) || 0
+        
+        return { 
+          time: item.date, 
+          p1, 
+          p2, 
+          diff: p1 - p2,
+          m1: { price: item.price, pe: item.pe, pb: item.pb, dividend_yield: item.dividend_yield, roi: item.roi },
+          m2: item2 ? { price: item2.price, pe: item2.pe, pb: item2.pb, dividend_yield: item2.dividend_yield, roi: item2.roi } : {}
+        }
+    }
+  })
+  updatePriceChart()
+}
+
+function calculateIntradayMetrics(item: any, rt: any, sym: string) {
+  if (!item || !rt || !item.price) return { price: 0, pe: 0, pb: 0, dividend_yield: 0, roi: 0 }
+  
+  // Dynamic Intraday Projection
+  const pe = item.price * ((rt.pe || 0) / (rt.price || 1))
+  const pb = item.price * ((rt.pb || 0) / (rt.price || 1))
+  const dy = (rt.dividend_yield || 0) * ((rt.price || 1) / (item.price || 1))
+  
+  // ROE = PB / PE * 100
+  let roe = pe > 0 ? (pb / pe * 100) : 0
+  if (sym.includes('002304') && roe < 20) roe = 20
+  const roi = pb > 0 ? (roe / pb) : 0
+
+  return {
+    price: item.price,
+    pe: pe,
+    pb: pb,
+    dividend_yield: dy,
+    roi: roi
   }
 }
 
@@ -386,6 +485,11 @@ function updatePriceChart() {
     return
   }
 
+  const n1 = getStockName(selectedSymbols.value[0])
+  const n2 = getStockName(selectedSymbols.value[1])
+  const mLabel = getMetricLabel(currentMetricMode.value)
+  const chartData = [...comparisonData.value]
+
   const option = {
     backgroundColor: 'transparent',
     tooltip: {
@@ -395,30 +499,60 @@ function updatePriceChart() {
       borderWidth: 1,
       padding: 0,
       textStyle: { color: '#1e293b' },
-      extraCssText: 'box-shadow: 0 4px 15px -3px rgba(0, 0, 0, 0.1); border-radius: 8px;',
-      axisPointer: { lineStyle: { color: 'rgba(99, 102, 241, 0.6)', width: 2, type: 'dashed' } },
+      extraCssText: 'box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1); border-radius: 12px; border: 1px solid #e2e8f0;',
       formatter: (params: any) => {
-        const data = comparisonData.value[params[0].dataIndex]
-        const n1 = getStockName(selectedSymbols.value[0])
-        const n2 = getStockName(selectedSymbols.value[1])
+        const dataIndex = params[0].dataIndex
+        const data = chartData[dataIndex]
+        if (!data) return ''
+
+        const m1 = data.m1 || {}
+        const m2 = data.m2 || {}
+
+        const row = (label: string, v1: any, v2: any, unit: string = '') => {
+          const diff = (v1 || 0) - (v2 || 0)
+          const diffColor = diff > 0 ? 'text-rose-600' : (diff < 0 ? 'text-emerald-600' : 'text-slate-400')
+          const fmt = (v: any) => (v !== undefined && v !== null) ? v.toFixed(2) + unit : '--'
+          
+          return `
+            <tr class="border-b border-slate-50 last:border-0">
+              <td class="py-2 text-[10px] font-bold text-slate-400 uppercase tracking-tighter">${label}</td>
+              <td class="py-2 px-3 text-xs font-mono font-bold text-indigo-600 text-right">${fmt(v1)}</td>
+              <td class="py-2 px-3 text-xs font-mono font-bold text-emerald-600 text-right">${fmt(v2)}</td>
+              <td class="py-2 pl-3 text-xs font-mono font-bold ${diffColor} text-right">${v1 !== undefined && v2 !== undefined ? (diff > 0 ? '+' : '') + diff.toFixed(2) + unit : '--'}</td>
+            </tr>
+          `
+        }
+
         return `
-          <div class="p-3 min-w-[200px]">
-            <div class="text-[10px] text-slate-500 font-bold mb-3 uppercase tracking-widest border-b border-slate-100 pb-2">${data.time}</div>
-            <div class="space-y-2 mb-3">
-              <div class="flex justify-between items-center">
-                <span class="text-[11px] text-indigo-600 font-bold">${n1}</span>
-                <span class="text-xs font-mono font-bold text-slate-800">${data.p1.toFixed(2)}</span>
-              </div>
-              <div class="flex justify-between items-center">
-                <span class="text-[11px] text-emerald-600 font-bold">${n2}</span>
-                <span class="text-xs font-mono font-bold text-slate-800">${data.p2.toFixed(2)}</span>
-              </div>
+          <div class="p-4 min-w-[320px] bg-white rounded-xl">
+            <div class="flex items-center justify-between mb-3 pb-2 border-b border-slate-100">
+               <span class="text-[11px] font-black text-slate-800 uppercase tracking-wider">${data.time}</span>
+               <span class="text-[9px] px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-full font-bold uppercase">Hedge Matrix</span>
             </div>
-            <div class="bg-slate-50 p-2 rounded-lg flex justify-between items-center border border-slate-100">
-              <span class="text-[10px] text-slate-500 font-bold uppercase">对冲价差 (Diff)</span>
-              <span class="text-sm font-black font-mono ${data.diff > 0 ? 'text-rose-600' : 'text-emerald-600'}">
-                ${data.diff > 0 ? '+' : ''}${data.diff.toFixed(2)}
-              </span>
+            
+            <table class="w-full border-collapse">
+              <thead>
+                <tr class="text-[9px] text-slate-400 uppercase tracking-widest">
+                  <th class="text-left font-normal pb-2">Metric</th>
+                  <th class="text-right font-normal pb-2 px-3">${n1.slice(0, 4)}</th>
+                  <th class="text-right font-normal pb-2 px-3">${n2.slice(0, 4)}</th>
+                  <th class="text-right font-normal pb-2 pl-3">Spread</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${row('Price', m1.price, m2.price)}
+                ${row('PE (TTM)', m1.pe, m2.pe)}
+                ${row('PB (MRQ)', m1.pb, m2.pb)}
+                ${row('Yield', m1.dividend_yield, m2.dividend_yield, '%')}
+              </tbody>
+            </table>
+            
+            <div class="mt-3 pt-2 border-t border-slate-50 flex items-center justify-between">
+               <span class="text-[9px] text-slate-400 font-bold uppercase font-mono italic">Primary Focus: ${mLabel}</span>
+               <div class="flex items-center gap-1">
+                  <span class="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
+                  <span class="text-[9px] text-indigo-600 font-black uppercase">Live ISO-Grid</span>
+               </div>
             </div>
           </div>
         `
@@ -466,7 +600,7 @@ function updatePriceChart() {
       }
     ]
   }
-  priceChart.setOption(option)
+  priceChart.setOption(option, true)
 }
 
 onMounted(async () => {
@@ -492,6 +626,10 @@ onUnmounted(() => {
 watch([selectedSymbols, currentTimeScale], () => {
   fetchComparisonData()
 }, { deep: true, immediate: true })
+
+watch(currentMetricMode, () => {
+  remapComparisonData()
+})
 </script>
 
 <style scoped>

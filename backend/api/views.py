@@ -94,8 +94,8 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'])
     def comparison_realtime(self, request):
         """对比分析：实时价格数据 (支持最新价或当日分时)"""
-        symbols = request.GET.get('symbols', '').split(',')
-        if not symbols or symbols == ['']:
+        symbols = [s.strip() for s in request.GET.get('symbols', '').split(',') if s.strip()]
+        if not symbols:
             return Response({'error': '至少需要一个股票代码'}, status=400)
         
         mode = request.GET.get('type', 'last')
@@ -108,7 +108,9 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'])
     def comparison_historical(self, request):
         """对比分析：历史对冲 K 线数据"""
-        symbols = request.GET.get('symbols', '').split(',')
+        # 鲁棒性处理：去除空格并转换
+        symbols_raw = request.GET.get('symbols', '')
+        symbols = [s.strip() for s in symbols_raw.split(',') if s.strip()]
         if not symbols or symbols == ['']:
             return Response({'error': '至少需要一个股票代码'}, status=400)
         limit = int(request.GET.get('limit', 30))
