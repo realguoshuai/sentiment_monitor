@@ -94,9 +94,27 @@ class PriceService:
         from .fundamental_service import FundamentalService
         from django.core.cache import cache
         
+        # 映射周期标识 (支持 1d, 30d, 36m, 5y, 10y)
+        period_map = {
+            '1d': ('minute', 241),
+            '30d': ('day', 30),
+            '36m': ('month', 36),
+            '5y': ('month', 60),
+            '10y': ('month', 120),
+            'annual': ('year', limit)
+        }
+        
+        if period in period_map:
+            p_type, p_limit = period_map[period]
+            # 如果是 1d 请求，直接走分流
+            if p_type == 'minute':
+                return cls.get_intraday_data(symbols)
+            period = p_type
+            limit = p_limit
+
         # 使用标准化后的符号作为缓存键的一部分，但保留原始输入用于返回
         norm_symbols = [cls._fix_symbol(s) for s in symbols]
-        cache_key = f"hist_v4_{'_'.join(sorted(norm_symbols))}_{period}_{limit}"
+        cache_key = f"hist_v5_{'_'.join(sorted(norm_symbols))}_{period}_{limit}"
         
         cached_data = cache.get(cache_key)
         if cached_data:
@@ -106,9 +124,11 @@ class PriceService:
         results = {}
         fetch_period = period
         fetch_limit = limit
-        if period == 'annual':
+        
+        # 修复腾讯 API 周期识别 (day -> day, month -> month, week -> week)
+        if period == 'year':
             fetch_period = 'month'
-            fetch_limit = limit * 12 + 12 
+            fetch_limit = limit * 12
 
         for idx, orig_symbol in enumerate(symbols):
             if idx > 0: time.sleep(0.3)
@@ -146,9 +166,20 @@ class PriceService:
                 total_shares = rt.get('total_shares', 0)
                 curr_pe = rt.get('pe', 0)
                 curr_pb = rt.get('pb', 0)
-                
                 curr_price = rt.get('price', price_list[-1]['price'] if price_list else 1)
-                
+
+                # 关键修复 (V3.7)：如果实时 PE/PB 为 0，则基于最新财报手动反推
+                if not df_fund.empty:
+                    latest_f = df_fund.iloc[-1]
+                    if (curr_pb <= 0 or total_shares <= 0) and latest_f['TOTAL_PARENT_EQUITY'] > 0:
+                        # 重新校正 total_shares (如果从腾讯获取失败)
+                        if total_shares <= 0: total_shares = rt.get('market_cap', 1) / curr_price if curr_price > 0 else 0
+                        
+                        # 手动计算
+                        if total_shares > 0:
+                            curr_pb = (curr_price * total_shares) / latest_f['TOTAL_PARENT_EQUITY']
+                            curr_pe = (curr_price * total_shares) / latest_f['ttm_profit'] if latest_f['ttm_profit'] > 0 else 0
+
                 history = []
                 for _, row in df_aligned.iterrows():
                     price = row['price']
@@ -248,28 +279,68 @@ class PriceService:
             
     @classmethod
     def get_intraday_data(cls, symbols):
-        """获取分时数据 (腾讯 minute API)"""
+        """获取分时数据 (含动态估值投影)"""
+        import pandas as pd
+        from .fundamental_service import FundamentalService
+        
         results = {}
+        rt_data = cls.get_realtime_price(symbols)
+        
         for idx, symbol in enumerate(symbols):
             if idx > 0: time.sleep(0.2)
+            symbol = cls._fix_symbol(symbol)
             s = symbol.lower()
             url = f"http://ifzq.gtimg.cn/appstock/app/minute/query?code={s}"
+            
             try:
+                # 获取基础数据用于估值
+                df_fund = FundamentalService.get_ttm_fundamentals(symbol)
+                df_divs = FundamentalService.get_historical_dividends(symbol)
+                rt = rt_data.get(symbol.upper(), {})
+                total_shares = rt.get('total_shares', 0)
+                
                 resp = cls._session.get(url, timeout=5)
                 data = resp.json()
                 if data.get('code') != 0: continue
                 
                 stock_data = data['data'].get(s, {})
-                # minute: { "data": ["0930 58.50 123", ...] }
                 minutes = stock_data.get('data', {}).get('data', [])
                 
+                # 获取最新财报
+                latest_f = df_fund.iloc[-1] if not df_fund.empty else None
+                
                 history = []
+                today_dt = pd.Timestamp.now().normalize()
+                
                 for m in minutes:
                     fields = m.split(' ')
                     if len(fields) >= 2:
+                        price = float(fields[1])
+                        time_str = fields[0] # HHMM
+                        
+                        # 动态投影估值
+                        pe = 0; pb = 0; dy = 0; roi = 0
+                        if latest_f is not None and total_shares > 0:
+                            pe = (price * total_shares) / latest_f['ttm_profit'] if latest_f['ttm_profit'] > 0 else 0
+                            pb = (price * total_shares) / latest_f['TOTAL_PARENT_EQUITY'] if latest_f['TOTAL_PARENT_EQUITY'] > 0 else 0
+                            
+                            # 估值计算逻辑 (ROE / PB)
+                            roe = (latest_f['ttm_profit'] / latest_f['TOTAL_PARENT_EQUITY'] * 100) if latest_f['TOTAL_PARENT_EQUITY'] > 0 else 0
+                            # 洋河保底
+                            if '002304' in symbol and roe < 20: roe = 20
+                            roi = roe / pb if pb > 0 else 0
+                            
+                            # 股息率建议直接用 LTM
+                            div_sum = FundamentalService.calculate_dividend_at_date(df_divs, today_dt)
+                            dy = (div_sum / price * 100) if price > 0 else 0
+
                         history.append({
-                            'time': fields[0], # HHMM
-                            'price': float(fields[1])
+                            'time': time_str,
+                            'price': round(price, 2),
+                            'pe': round(pe, 2),
+                            'pb': round(pb, 2),
+                            'dy': round(dy, 2),
+                            'roi': round(roi, 2)
                         })
                 results[symbol.upper()] = history
             except Exception as e:

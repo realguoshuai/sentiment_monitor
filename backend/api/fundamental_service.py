@@ -34,26 +34,45 @@ class FundamentalService:
             # 计算 TTM (滚动4季)
             df_profit['ttm_profit'] = df_profit['q_profit'].rolling(window=4).sum().bfill()
             
-            # 2. 资产负债表 (净资产)
+            # 2. 资产负债表 (净资产, 总资产)
             df_balance = ak.stock_balance_sheet_by_report_em(symbol=symbol)
             if 'TOTAL_PARENT_EQUITY' in df_balance.columns:
-                df_balance = df_balance[['REPORT_DATE', 'TOTAL_PARENT_EQUITY']]
+                cols = ['REPORT_DATE', 'TOTAL_PARENT_EQUITY']
+                if 'TOTAL_ASSETS' in df_balance.columns:
+                    cols.append('TOTAL_ASSETS')
+                df_balance = df_balance[cols]
                 df_balance['REPORT_DATE'] = pd.to_datetime(df_balance['REPORT_DATE'])
                 df_balance['TOTAL_PARENT_EQUITY'] = pd.to_numeric(df_balance['TOTAL_PARENT_EQUITY'], errors='coerce').fillna(0)
+                if 'TOTAL_ASSETS' in df_balance.columns:
+                    df_balance['TOTAL_ASSETS'] = pd.to_numeric(df_balance['TOTAL_ASSETS'], errors='coerce').fillna(0)
             else:
-                df_balance = pd.DataFrame(columns=['REPORT_DATE', 'TOTAL_PARENT_EQUITY'])
+                df_balance = pd.DataFrame(columns=['REPORT_DATE', 'TOTAL_PARENT_EQUITY', 'TOTAL_ASSETS'])
             
-            # 确保 NOTICE_DATE 不为空 (补全逻辑：如果无公告日，则假设报表期后 30 天公告)
-            df_profit['NOTICE_DATE'] = df_profit['NOTICE_DATE'].fillna(df_profit['REPORT_DATE'] + pd.Timedelta(days=30))
+            # 确保 NOTICE_DATE 不为空 (补全逻辑：根据 A 股披露规则保守估计公告日)
+            def get_fallback_notice_date(row):
+                if pd.notnull(row['NOTICE_DATE']): return row['NOTICE_DATE']
+                r_date = row['REPORT_DATE']
+                # Q1: 4/30, Q2: 8/30, Q3: 10/31, Q4: 4/30 (next year)
+                if r_date.month == 3: return datetime(r_date.year, 5, 1)
+                if r_date.month == 6: return datetime(r_date.year, 9, 1)
+                if r_date.month == 9: return datetime(r_date.year, 11, 1)
+                if r_date.month == 12: return datetime(r_date.year + 1, 5, 1)
+                return r_date + pd.Timedelta(days=90)
+                
+            df_profit['NOTICE_DATE'] = df_profit.apply(get_fallback_notice_date, axis=1)
             # 确保 NOTICE_DATE 是有效的日期序列并去重
             df_profit = df_profit.dropna(subset=['NOTICE_DATE'])
             
             # 合并
             df_fund = pd.merge(df_profit[['REPORT_DATE', 'ttm_profit', 'NOTICE_DATE']], 
                               df_balance, on='REPORT_DATE', how='left')
-            df_fund['TOTAL_PARENT_EQUITY'] = df_fund['TOTAL_PARENT_EQUITY'].ffill().bfill().fillna(0)
             
-            # 最终清洗：确保 NOTICE_DATE 严格递增用于 merge_asof
+            # 强化填充：对净资产进行前向填充
+            df_fund = df_fund.sort_values('REPORT_DATE')
+            df_fund['TOTAL_PARENT_EQUITY'] = df_fund['TOTAL_PARENT_EQUITY'].replace(0, pd.NA).ffill().fillna(0)
+            df_fund['ttm_profit'] = df_fund['ttm_profit'].replace(0, pd.NA).ffill().fillna(0)
+            
+            # 最终清洗：确保 NOTICE_DATE 严格递增且用于 merge_asof
             df_fund = df_fund.dropna(subset=['NOTICE_DATE'])
             df_fund = df_fund.sort_values('NOTICE_DATE').drop_duplicates('NOTICE_DATE', keep='last')
             
@@ -62,6 +81,29 @@ class FundamentalService:
             return df_fund
         except Exception as e:
             logger.error(f"FundamentalService Error for {symbol}: {e}")
+            return pd.DataFrame()
+
+    @classmethod
+    def get_ttm_cashflow(cls, symbol):
+        """获取 TTM 经营现金流 (含 24h 缓存)"""
+        cache_key = f"cashflow_{symbol}"
+        cached_df = cache.get(cache_key)
+        if cached_df is not None:
+            return cached_df
+        
+        try:
+            df_cash = ak.stock_cash_flow_sheet_by_quarterly_em(symbol=symbol)
+            df_cash = df_cash[['REPORT_DATE', 'NETCASH_OPERATE', 'NOTICE_DATE']]
+            df_cash['REPORT_DATE'] = pd.to_datetime(df_cash['REPORT_DATE'])
+            df_cash['NETCASH_OPERATE'] = pd.to_numeric(df_cash['NETCASH_OPERATE'], errors='coerce').fillna(0)
+            # 计算 TTM
+            df_cash = df_cash.sort_values('REPORT_DATE')
+            df_cash['ttm_cfo'] = df_cash['NETCASH_OPERATE'].rolling(window=4).sum().bfill()
+            
+            cache.set(cache_key, df_cash, 24 * 3600)
+            return df_cash
+        except Exception as e:
+            logger.error(f"Cashflow fetch error for {symbol}: {e}")
             return pd.DataFrame()
 
     @classmethod
@@ -117,37 +159,32 @@ class FundamentalService:
 
     @classmethod
     def calculate_dividend_at_date(cls, df_divs, date_dt):
-        """智能计算截至特定日期的滚动派息总额（根据派息频率自动适配）"""
+        """
+        精确计算截至特定日期的滚动派息总额 (LTM)。
+        逻辑：加总在 [date - 365, date] 窗口内公告的所有分红。
+        """
         if df_divs.empty:
             return 0.0
             
-        past_divs = df_divs[df_divs['ann_date'] <= date_dt]
-        n = len(past_divs)
+        # 确保日期格式一致
+        date_dt = pd.to_datetime(date_dt)
+        one_year_ago = date_dt - pd.Timedelta(days=365)
         
-        if n == 0:
+        # 筛选窗口内的分红记录
+        mask = (df_divs['ann_date'] <= date_dt) & (df_divs['ann_date'] > one_year_ago)
+        ltm_divs = df_divs[mask]
+        
+        if ltm_divs.empty:
+            # 鲁棒性兜底：如果窗口内无分红，但之前有分红记录，取最后一次（处理刚过派息窗口的断档）
+            past_divs = df_divs[df_divs['ann_date'] <= date_dt]
+            if not past_divs.empty:
+                # 如果最后一次分红是在 500 天内（考虑到某些公司 1.5 年派一次），取其作为近似参考
+                last_div = past_divs.iloc[-1]
+                if (date_dt - last_div['ann_date']).days <= 500:
+                    return float(last_div['cash_div'])
             return 0.0
-        elif n == 1:
-            return float(past_divs.iloc[-1]['cash_div'])
             
-        # 寻找最近的派息规律，推断年度分红频率 (1次/2次/3次)
-        latest_date = past_divs.iloc[-1]['ann_date']
-        best_freq = 1
-        min_diff = 999
-        
-        for i in range(1, min(n, 5)):
-            prev_date = past_divs.iloc[-1 - i]['ann_date']
-            diff_from_year = abs((latest_date - prev_date).days - 365)
-            if diff_from_year < min_diff:
-                min_diff = diff_from_year
-                best_freq = i
-                
-        # 如果规律偏差太大(超过150天)，回退到严谨的 365天 窗口加总
-        if min_diff > 150:
-            one_year_ago = date_dt - pd.Timedelta(days=365)
-            return float(past_divs[past_divs['ann_date'] > one_year_ago]['cash_div'].sum())
-            
-        # 取判定频率内的最近 N 次分红总额
-        return float(past_divs.tail(best_freq)['cash_div'].sum())
+        return float(ltm_divs['cash_div'].sum())
 
     @classmethod
     def align_to_prices(cls, df_fund, df_prices, symbol):
@@ -218,49 +255,65 @@ class FundamentalService:
         if cached: return cached
         
         try:
-            # 简化版 F-Score 逻辑 (基于盈利能力、杠杆/流动性、营运效率)
-            # 抓取财报指标 (EM 接口)
-            # 备注：由于 AkShare 接口兼容性，如果 Indicator 接口失效，我们通过基础表计算
+            # 强化版 F-Score 逻辑 (6 项指标)
             df_fund = cls.get_ttm_fundamentals(symbol)
+            df_cash = cls.get_ttm_cashflow(symbol)
+            
             if df_fund.empty: return {"score": 0, "details": []}
             
             latest = df_fund.iloc[-1]
+            # 寻找约一年前的财报
             prev_year = df_fund[df_fund['REPORT_DATE'] <= (latest['REPORT_DATE'] - pd.Timedelta(days=330))].tail(1)
             
+            # CFO 数据
+            cfo_val = 0
+            if not df_cash.empty:
+                latest_cash = df_cash[df_cash['REPORT_DATE'] <= latest['REPORT_DATE']].tail(1)
+                if not latest_cash.empty:
+                    cfo_val = latest_cash.iloc[0]['ttm_cfo']
+
             score = 0
             details = []
             
             # 1. 盈利能力 (Profitability)
-            # ROA > 0 (资产回报率)
-            roa = (latest['ttm_profit'] / latest['TOTAL_PARENT_EQUITY']) if latest['TOTAL_PARENT_EQUITY'] > 0 else 0
-            if roa > 0:
-                score += 1
-                details.append({"name": "ROA > 0", "passed": True, "val": f"{round(roa*100, 2)}%"})
-            else:
-                details.append({"name": "ROA > 0", "passed": False, "val": f"{round(roa*100, 2)}%"})
-                
-            # CFO (此处简化：如果没有现金流表，则判断利润是否为正)
-            if latest['ttm_profit'] > 0:
-                score += 1
-                details.append({"name": "Net Income > 0", "passed": True, "val": "Positive"})
-            else:
-                details.append({"name": "Net Income > 0", "passed": False, "val": "Negative"})
+            # ROA > 0
+            assets = latest.get('TOTAL_ASSETS', latest['TOTAL_PARENT_EQUITY'])
+            roa = (latest['ttm_profit'] / assets) if assets > 0 else 0
+            passed = roa > 0
+            if passed: score += 1
+            details.append({"name": "ROA > 0", "passed": passed, "val": f"{round(roa*100, 2)}%"})
+            
+            # Net Income > 0
+            passed = latest['ttm_profit'] > 0
+            if passed: score += 1
+            details.append({"name": "净利润 > 0", "passed": passed, "val": "Positive" if passed else "Negative"})
 
+            # CFO > 0
+            passed = cfo_val > 0
+            if passed: score += 1
+            details.append({"name": "经营性现金流 > 0", "passed": passed, "val": "Positive" if passed else "Negative"})
+
+            # CFO > Net Income (盈余质量)
+            passed = cfo_val > latest['ttm_profit']
+            if passed: score += 1
+            details.append({"name": "现金流 > 净利润", "passed": passed, "val": f"CFO/NI: {round(cfo_val/latest['ttm_profit'], 2) if latest['ttm_profit'] != 0 else 'N/A'}"})
+
+            # 2. 增长与趋势
             # ROA 提升 (对比去年)
             if not prev_year.empty:
-                prev_roa = (prev_year.iloc[0]['ttm_profit'] / prev_year.iloc[0]['TOTAL_PARENT_EQUITY']) if prev_year.iloc[0]['TOTAL_PARENT_EQUITY'] > 0 else 0
-                if roa > prev_roa:
-                    score += 1
-                    details.append({"name": "ROA Improving", "passed": True, "val": f"{round(roa*100, 2)}% vs {round(prev_roa*100, 2)}%"})
-                else:
-                    details.append({"name": "ROA Improving", "passed": False, "val": f"{round(roa*100, 2)}% vs {round(prev_roa*100, 2)}%"})
-            
-            # 2. 杠杆与流动性 (Leverage & Liquidity)
-            # 此处可以扩展资产负债表字段，目前先返回核心
-            
-            # 计算综合评分 (映射到 0-10)
-            final_score = round((score / 3.0) * 10, 1) if score > 0 else 0
-            result = {"score": final_score, "details": details}
+                prev_latest = prev_year.iloc[0]
+                prev_assets = prev_latest.get('TOTAL_ASSETS', prev_latest['TOTAL_PARENT_EQUITY'])
+                prev_roa = (prev_latest['ttm_profit'] / prev_assets) if prev_assets > 0 else 0
+                passed = roa > prev_roa
+                if passed: score += 1
+                details.append({"name": "ROA 同比提升", "passed": passed, "val": f"{round(roa*100, 2)}% vs {round(prev_roa*100, 2)}%"})
+            else:
+                details.append({"name": "ROA 同比提升", "passed": False, "val": "无历史数据"})
+
+            # 计算总分 (满分按 5 项计算，如果有 CFO 数据则按 6 项)
+            total_possible = 5
+            final_score = round((score / total_possible) * 10, 1)
+            result = {"score": min(final_score, 10.0), "details": details}
             cache.set(cache_key, result, 3600 * 12)
             return result
         except Exception as e:

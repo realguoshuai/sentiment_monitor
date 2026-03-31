@@ -1,9 +1,12 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
+from django.core.cache import cache
 from datetime import datetime, timedelta
 import akshare as ak
 import pandas as pd
+import logging
+import time
 
 from .models import Stock, SentimentData, News, Report, Announcement
 from .serializers import (
@@ -15,12 +18,43 @@ import threading
 from .price_service import PriceService
 from .fundamental_service import FundamentalService
 
+logger = logging.getLogger(__name__)
+
 
 class StockViewSet(viewsets.ModelViewSet):
     """股票视图集"""
     queryset = Stock.objects.all()
     serializer_class = StockSerializer
     lookup_field = 'symbol'
+
+    def create(self, request, *args, **kwargs):
+        """添加股票时自动修复代码格式"""
+        data = request.data.copy()
+        symbol = data.get('symbol', '').strip().upper()
+        if not symbol:
+            return Response({'error': '股票代码不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # 自动补全前缀
+        fixed_symbol = PriceService._fix_symbol(symbol)
+        data['symbol'] = fixed_symbol
+        
+        # 如果名称为空，尝试从实时接口获取
+        if not data.get('name'):
+            rt = PriceService.get_realtime_price([fixed_symbol])
+            if fixed_symbol in rt:
+                data['name'] = rt[fixed_symbol]['name']
+        
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def destroy(self, request, *args, **kwargs):
+        """删除股票"""
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 
 class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
@@ -155,6 +189,49 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
             'forward': forward,
             'history': stock_hist # 返回完整历史用于多点绘图
         })
+
+
+@api_view(['GET'])
+def search_stocks(request):
+    """搜索 A 股标的 (模糊匹配，带 24h 高速缓存)"""
+    query = request.GET.get('q', '').strip().upper()
+    if not query:
+        return Response([])
+        
+    # 尝试从缓存获取全量快照，减少 AkShare 的慢采样
+    SNAPSHOT_KEY = "stock_zh_a_snapshot"
+    df = cache.get(SNAPSHOT_KEY)
+    
+    if df is None:
+        try:
+            # 首次加载或缓存过期
+            df = ak.stock_zh_a_spot_em()
+            # 只保留核心搜索字段，减小缓存体积
+            df = df[['代码', '名称', '最新价']]
+            cache.set(SNAPSHOT_KEY, df, 3600 * 24)
+        except Exception as e:
+            logger.error(f"Failed to fetch stock snapshot: {e}")
+            return Response([])
+
+    try:
+        # 在内存快照中进行模糊匹配
+        mask = df['名称'].str.contains(query) | df['代码'].str.contains(query)
+        matches = df[mask].head(10)
+        
+        results = []
+        for _, row in matches.iterrows():
+            code = str(row['代码']) # 确保为字符串
+            symbol = f"SH{code}" if code.startswith('6') else f"SZ{code}"
+            results.append({
+                'name': str(row['名称']), # 确保为字符串
+                'symbol': symbol,
+                'price': float(row['最新价']) if pd.notnull(row['最新价']) else 0.0 # 确保为 float，解决 NumPy 问题
+            })
+        return Response(results)
+    except Exception as e:
+        logger.error(f"Search filtering error: {e}")
+        return Response([])
+
 
 
 @api_view(['POST'])

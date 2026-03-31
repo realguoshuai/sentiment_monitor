@@ -41,7 +41,19 @@
     </header>
 
     <div class="main-content" v-if="loading && !analysisData">
-      <div class="loading-spinner">矩阵计算引擎启动中...</div>
+      <div class="loading-overlay">
+        <div class="loading-box">
+          <div class="loader-circle"></div>
+          <div class="loading-steps">
+            <div v-for="(step, index) in steps" :key="index" 
+                 class="step-item" :class="{ active: currentStep === index, done: currentStep > index }">
+              <span class="step-icon">{{ currentStep > index ? '✓' : (currentStep === index ? '●' : '○') }}</span>
+              <span class="step-text">{{ step }}</span>
+            </div>
+          </div>
+          <div class="engine-tag">QUANT ENGINE V4.0</div>
+        </div>
+      </div>
     </div>
 
     <div class="main-content" v-else>
@@ -140,6 +152,15 @@ const calcParams = ref({
   requiredReturn: 10
 });
 
+const currentStep = ref(0);
+const steps = [
+  '正在启动金融矩阵引擎...',
+  '同步 10 年期历史分位数据...',
+  '执行 F-Score 安全性排雷...',
+  '计算公允价值锚点...',
+  '渲染深度分析矩阵...'
+];
+
 // 计算属性
 const availableStocks = computed(() => {
   return sentimentStore.sentimentData.filter(s => s.stock_symbol !== symbol);
@@ -159,14 +180,24 @@ onMounted(async () => {
 
 const fetchData = async () => {
   loading.value = true;
+  currentStep.value = 0;
   try {
-    // 1. 获取主视角数据
+    // Step 0: Start
+    await new Promise(r => setTimeout(r, 600));
+    
+    // Step 1: Fetch main data
+    currentStep.value = 1;
     const res = await axios.get(`http://localhost:8000/api/sentiment/analysis/?symbol=${symbol}`);
     analysisData.value = res.data;
     calcParams.value.expectedRoe = res.data.forward.expected_roe;
     stockData.value = { symbol: res.data.symbol };
 
-    // 2. 如果有对比标的，并行获取
+    // Step 2: F-Score & Details
+    currentStep.value = 2;
+    await new Promise(r => setTimeout(r, 400));
+
+    // Step 3: Fair Value
+    currentStep.value = 3;
     if (compareSymbols.value.length > 0) {
       const requests = compareSymbols.value.map(s => 
         axios.get(`http://localhost:8000/api/sentiment/analysis/?symbol=${s}`)
@@ -180,6 +211,10 @@ const fetchData = async () => {
     } else {
       compareDataMap.value = {};
     }
+
+    // Step 4: Finalizing
+    currentStep.value = 4;
+    await new Promise(r => setTimeout(r, 500));
   } catch (e) {
     console.error(e);
   } finally {
@@ -621,6 +656,85 @@ watch(compareSymbols, () => {
   color: #94a3b8;
   margin-top: 16px;
   font-style: italic;
+}
+
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.loading-box {
+  background: white;
+  padding: 40px;
+  border-radius: 24px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.1);
+  border: 1px solid #f1f5f9;
+  width: 100%;
+  max-width: 400px;
+  text-align: center;
+}
+
+.loader-circle {
+  width: 48px;
+  height: 48px;
+  border: 4px solid #f1f5f9;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  margin: 0 auto 24px;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-steps {
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.step-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #94a3b8;
+  font-size: 0.9rem;
+  transition: all 0.3s;
+}
+
+.step-item.active {
+  color: #3b82f6;
+  font-weight: 700;
+  transform: translateX(4px);
+}
+
+.step-item.done {
+  color: #10b981;
+}
+
+.step-icon {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: monospace;
+}
+
+.engine-tag {
+  margin-top: 32px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: #cbd5e1;
+  letter-spacing: 0.2em;
 }
 
 @media (max-width: 1024px) {

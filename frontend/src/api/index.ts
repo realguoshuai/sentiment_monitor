@@ -81,6 +81,7 @@ export const stockApi = {
     api.get<Record<string, any>>(`/sentiment/comparison_realtime/?symbols=${symbols.join(',')}&type=${type}`),
   getComparisonHistorical: (symbols: string[], limit: number = 30, period: string = 'day') => 
     api.get<Record<string, any[]>>(`/sentiment/comparison_historical/?symbols=${symbols.join(',')}&limit=${limit}&period=${period}`),
+  searchStocks: (q: string) => api.get<any[]>(`/sentiment/search/?q=${q}`),
 }
 
 export default api
