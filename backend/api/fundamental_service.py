@@ -79,31 +79,31 @@ class FundamentalService:
             # 如果报错，尝试 alternative
             df = ak.stock_history_dividend_detail(symbol=symbol[2:], indicator="分红")
             
-            # 字段映射 (常见列名: '公告日期', '派现') 
-            # 这里的派现通常是 "每10股派X元"
+            # 字段映射 (修正 AkShare 编码问题)
+            # 通过索引获取：0: 公告日期, 3: 每10股派现
             df = df.rename(columns={
                 df.columns[0]: 'ann_date',
                 df.columns[3]: 'cash_div_10'
             })
             
-            df['ann_date'] = pd.to_datetime(df['ann_date'])
+            # 对列名可能出现的乱码进行二次清洗
+            df['ann_date'] = pd.to_datetime(df['ann_date'], errors='coerce')
             df['cash_div'] = pd.to_numeric(df['cash_div_10'], errors='coerce').fillna(0) / 10.0
             
             # 过滤无效数据并按日期排序
-            df = df[df['cash_div'] > 0].sort_values('ann_date')
+            df = df.dropna(subset=['ann_date']).sort_values('ann_date')
+            df = df[df['cash_div'] > 0]
             
-            # 清洗重复的分红条目 (比如 EastMoney 经常把“预案”和“实施”算作两条不同记录)
-            # 逻辑：如果相邻两此分红金额完全相等，且日期相差不足 90 天，则剔除较早的一条 (通常是预案)
+            # 清洗重复的分红条目 (Logic: Same amount within 90 days = Duplicate)
             cleaned_indices = []
             prev_row = None
             for idx, row in df.iterrows():
                 if prev_row is not None:
-                    # 判断是否为同一个分红事件的重复公告
                     same_amount = abs(row['cash_div'] - prev_row['cash_div']) < 1e-5
                     close_date = (row['ann_date'] - prev_row['ann_date']).days <= 90
                     if same_amount and close_date:
-                        # 发现重复，移除前面的预案，将其替换为新的实施记录
-                        cleaned_indices.pop()
+                        # 发现重复，移除前面的记录
+                        if cleaned_indices: cleaned_indices.pop()
                 cleaned_indices.append(idx)
                 prev_row = row
                 
@@ -182,6 +182,113 @@ class FundamentalService:
         df_merged['TOTAL_PARENT_EQUITY'] = df_merged['TOTAL_PARENT_EQUITY'].fillna(0)
         
         return df_merged
+
+    @classmethod
+    def calculate_percentiles(cls, history, column='pe', period_years=10):
+        """计算历史分位数值 (10/50/90)"""
+        if not history:
+            return {'p10': 0, 'p50': 0, 'p90': 0}
+            
+        df = pd.DataFrame(history)
+        if column not in df.columns:
+            return {'p10': 0, 'p50': 0, 'p90': 0}
+            
+        # 转换日期并过滤周期
+        df['date_dt'] = pd.to_datetime(df['date'])
+        start_date = datetime.now() - pd.Timedelta(days=period_years * 365)
+        df = df[df['date_dt'] >= start_date]
+        
+        # 过滤无效值 (<=0)
+        vals = df[df[column] > 0][column]
+        if vals.empty:
+            return {'p10': 0, 'p50': 0, 'p90': 0}
+            
+        return {
+            'p10': round(vals.quantile(0.1), 2),
+            'p50': round(vals.quantile(0.5), 2),
+            'p90': round(vals.quantile(0.9), 2),
+            'current': round(vals.iloc[-1] if not vals.empty else 0, 2)
+        }
+
+    @classmethod
+    def get_f_score(cls, symbol):
+        """计算 Piotroski F-Score (安全性评分)"""
+        cache_key = f"f_score_{symbol}"
+        cached = cache.get(cache_key)
+        if cached: return cached
+        
+        try:
+            # 简化版 F-Score 逻辑 (基于盈利能力、杠杆/流动性、营运效率)
+            # 抓取财报指标 (EM 接口)
+            # 备注：由于 AkShare 接口兼容性，如果 Indicator 接口失效，我们通过基础表计算
+            df_fund = cls.get_ttm_fundamentals(symbol)
+            if df_fund.empty: return {"score": 0, "details": []}
+            
+            latest = df_fund.iloc[-1]
+            prev_year = df_fund[df_fund['REPORT_DATE'] <= (latest['REPORT_DATE'] - pd.Timedelta(days=330))].tail(1)
+            
+            score = 0
+            details = []
+            
+            # 1. 盈利能力 (Profitability)
+            # ROA > 0 (资产回报率)
+            roa = (latest['ttm_profit'] / latest['TOTAL_PARENT_EQUITY']) if latest['TOTAL_PARENT_EQUITY'] > 0 else 0
+            if roa > 0:
+                score += 1
+                details.append({"name": "ROA > 0", "passed": True, "val": f"{round(roa*100, 2)}%"})
+            else:
+                details.append({"name": "ROA > 0", "passed": False, "val": f"{round(roa*100, 2)}%"})
+                
+            # CFO (此处简化：如果没有现金流表，则判断利润是否为正)
+            if latest['ttm_profit'] > 0:
+                score += 1
+                details.append({"name": "Net Income > 0", "passed": True, "val": "Positive"})
+            else:
+                details.append({"name": "Net Income > 0", "passed": False, "val": "Negative"})
+
+            # ROA 提升 (对比去年)
+            if not prev_year.empty:
+                prev_roa = (prev_year.iloc[0]['ttm_profit'] / prev_year.iloc[0]['TOTAL_PARENT_EQUITY']) if prev_year.iloc[0]['TOTAL_PARENT_EQUITY'] > 0 else 0
+                if roa > prev_roa:
+                    score += 1
+                    details.append({"name": "ROA Improving", "passed": True, "val": f"{round(roa*100, 2)}% vs {round(prev_roa*100, 2)}%"})
+                else:
+                    details.append({"name": "ROA Improving", "passed": False, "val": f"{round(roa*100, 2)}% vs {round(prev_roa*100, 2)}%"})
+            
+            # 2. 杠杆与流动性 (Leverage & Liquidity)
+            # 此处可以扩展资产负债表字段，目前先返回核心
+            
+            # 计算综合评分 (映射到 0-10)
+            final_score = round((score / 3.0) * 10, 1) if score > 0 else 0
+            result = {"score": final_score, "details": details}
+            cache.set(cache_key, result, 3600 * 12)
+            return result
+        except Exception as e:
+            logger.error(f"F-Score calculation error for {symbol}: {e}")
+            return {"score": 0, "details": []}
+
+    @classmethod
+    def get_forward_metrics(cls, symbol, history_df=None):
+        """计算公允价值锚点与预测指标"""
+        # 1. 获取过去 5 年的平均 ROE
+        df_fund = cls.get_ttm_fundamentals(symbol)
+        if df_fund.empty: return {"fair_price": 0, "expected_roe": 15}
+        
+        # 计算每期的 ROE (ttm_profit / equity)
+        df_fund['roe'] = (df_fund['ttm_profit'] / df_fund['TOTAL_PARENT_EQUITY']) * 100
+        avg_roe = df_fund.tail(20)['roe'].mean() # 过去 5 年 (20个季度)
+        
+        # 洋河保底逻辑同步到这里
+        if '002304' in symbol and avg_roe < 20:
+            avg_roe = 20
+        
+        # 2. 内在价值计算 (ROE / 目标回报率 * 每股净资产)
+        # 获取最新每股净资产 (暂以 Equity / TotalShares 模拟)
+        # 此处需要 PriceService 中的数据，建议在 API 层整合
+        return {
+            "expected_roe": round(avg_roe, 2),
+            "avg_roe_5y": round(avg_roe, 2)
+        }
 
     @staticmethod
     def _fix_symbol(symbol):

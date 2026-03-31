@@ -139,6 +139,15 @@
                  </div>
                </div>
              </div>
+             
+             <div class="mt-4 pt-4 border-t border-slate-50 flex justify-end">
+               <router-link 
+                 :to="`/analysis/${sym}`"
+                 class="text-[10px] font-black text-indigo-600 hover:text-indigo-800 transition-colors flex items-center gap-1"
+               >
+                 深度矩阵分析 →
+               </router-link>
+             </div>
           </div>
 
           <!-- Percentile Gauge Card -->

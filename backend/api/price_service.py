@@ -120,7 +120,12 @@ class PriceService:
                 data_json = resp.json()
                 if data_json.get('code') != 0: continue
                 
-                stock_data = data_json['data'].get(s, {})
+                data_res = data_json.get('data')
+                if not isinstance(data_res, dict):
+                    logger.warning(f"Unexpected response format for {symbol}: {data_res}")
+                    continue
+                    
+                stock_data = data_res.get(s, {})
                 key = f"qfq{fetch_period}"
                 days = stock_data.get(key) or stock_data.get(fetch_period) or []
                 
@@ -167,6 +172,13 @@ class PriceService:
                     # 真实历史股息率计算 - 采用智能滚动频次推算
                     ltm_div_sum = FundamentalService.calculate_dividend_at_date(df_divs, date_dt)
                     dy = (ltm_div_sum / price) * 100 if price > 0 else 0
+                    
+                    # 鲁棒性补充：如果计算出的历史 DY 为 0，但当前实时 DY 存在且日期较近，则使用当前值作为基准
+                    # 这适用于刚上市或分红记录抓取异常的情况
+                    rt_dy = rt.get('dividend_yield', 0)
+                    if dy <= 0 and rt_dy > 0:
+                        is_recent = (datetime.now() - date_dt).days <= 365
+                        if is_recent: dy = rt_dy
 
                     # ROI = ROE / PB (Yanghe floor 20%)
                     calc_roe = (pb / pe * 100) if pe > 0 else 0

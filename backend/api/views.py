@@ -13,6 +13,7 @@ from .serializers import (
 from collector.collector import run_collection
 import threading
 from .price_service import PriceService
+from .fundamental_service import FundamentalService
 
 
 class StockViewSet(viewsets.ModelViewSet):
@@ -117,6 +118,43 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
         period = request.GET.get('period', 'day')
         data = PriceService.get_historical_data(symbols, limit, period)
         return Response(data)
+
+    @action(detail=False, methods=['get'])
+    def analysis(self, request):
+        """获取个股深度分析数据 (分位、F-Score、预测)"""
+        symbol = request.GET.get('symbol')
+        if not symbol:
+            return Response({'error': '需要股票代码'}, status=400)
+            
+        period = request.GET.get('period', '10y')
+        # 对 10 年期分位采用月线计算，确保 100% 成功率且提升计算性能
+        hist_data = PriceService.get_historical_data([symbol], limit=120, period='month')
+        stock_hist = hist_data.get(symbol, [])
+        
+        # 2. 计算分位
+        pe_p = FundamentalService.calculate_percentiles(stock_hist, 'pe')
+        pb_p = FundamentalService.calculate_percentiles(stock_hist, 'pb')
+        roi_p = FundamentalService.calculate_percentiles(stock_hist, 'roi')
+        dy_p = FundamentalService.calculate_percentiles(stock_hist, 'dividend_yield')
+        
+        # 3. 计算安全性评分 (F-Score)
+        f_score = FundamentalService.get_f_score(symbol)
+        
+        # 4. 获取预测指标
+        forward = FundamentalService.get_forward_metrics(symbol)
+        
+        return Response({
+            'symbol': symbol,
+            'percentiles': {
+                'pe': pe_p,
+                'pb': pb_p,
+                'roi': roi_p,
+                'dy': dy_p
+            },
+            'f_score': f_score,
+            'forward': forward,
+            'history': stock_hist # 返回完整历史用于多点绘图
+        })
 
 
 @api_view(['POST'])

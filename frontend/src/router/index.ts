@@ -20,6 +20,12 @@ const router = createRouter({
       path: '/compare',
       name: 'compare',
       component: () => import('@/views/ComparisonView.vue')
+    },
+    {
+      path: '/analysis/:symbol',
+      name: 'analysis',
+      component: () => import('@/views/AnalysisDetailView.vue'),
+      props: true
     }
   ]
 })

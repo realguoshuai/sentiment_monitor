@@ -88,6 +88,12 @@
 
       <!-- Row 5: Links -->
       <div class="mt-auto flex flex-wrap gap-1.5" @click.stop>
+        <router-link 
+          :to="`/analysis/${data.stock_symbol}`"
+          class="px-3 py-1 bg-indigo-500/20 border border-indigo-500/50 hover:bg-indigo-500/40 text-[10px] text-indigo-300 rounded-full transition-all text-center min-w-[50px] font-bold"
+        >
+          深度分析
+        </router-link>
         <a 
           v-for="link in allLinks"
           :key="link.name"
