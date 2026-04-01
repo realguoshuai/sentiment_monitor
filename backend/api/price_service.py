@@ -17,8 +17,96 @@ class PriceService:
     _session.trust_env = False  # Bypass system proxy
     _session.headers.update(HEADERS)
 
+    @staticmethod
+    def _cache_get(key):
+        from django.core.cache import cache
+        import pandas as pd
+        try:
+            val = cache.get(key)
+            if isinstance(val, list):
+                # Safe-Cache 探测：自动恢复为 DataFrame
+                df = pd.DataFrame(val)
+                for col in ['date', 'time', 'date_dt', 'REPORT_DATE', 'NOTICE_DATE']:
+                    if col in df.columns: df[col] = pd.to_datetime(df[col])
+                return df
+            return val
+        except Exception as e:
+            logger.warning(f"Cache get failed for {key}: {e}")
+            return None
+
+    @staticmethod
+    def _cache_set(key, value, ttl):
+        from django.core.cache import cache
+        import pandas as pd
+        try:
+            if isinstance(value, pd.DataFrame):
+                # Safe-Cache: 转换为字典列表，避免 pickle 二进制冲突
+                temp_df = value.copy()
+                for col in temp_df.select_dtypes(include=['datetime']).columns:
+                    temp_df[col] = temp_df[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+                value = temp_df.to_dict(orient='records')
+            cache.set(key, value, ttl)
+        except Exception as e:
+            logger.warning(f"Cache set failed for {key}: {e}")
+
     @classmethod
-    def get_realtime_price(cls, symbols):
+    def refresh_snapshot_cache(cls):
+        """后台异步抓取全量快照，不阻塞前台请求"""
+        import akshare as ak
+        cache_key = "a_share_spot_snapshot_for_valuation"
+        try:
+            df = ak.stock_zh_a_spot_em()
+            df = df[['代码', '最新价', '总市值', '市盈率-动态', '市净率']].copy()
+            df['代码'] = df['代码'].astype(str).str.zfill(6)
+            snapshot = df.set_index('代码').to_dict('index')
+            cls._cache_set(cache_key, snapshot, 3600)
+            logger.info("Spot snapshot cache warmed up.")
+        except Exception as e:
+            logger.warning(f"Background warming failed: {e}")
+
+    @classmethod
+    def _get_spot_snapshot_map(cls, symbols):
+        from django.core.cache import cache
+        import akshare as ak
+        import pandas as pd
+
+        cache_key = "a_share_spot_snapshot_for_valuation"
+        snapshot = cls._cache_get(cache_key)
+        if snapshot is None:
+            # 强化非阻塞逻辑：跳过同步爬取全量 A 股快照，由 scheduler 或 warm_valuation_cache 异步填充
+            logger.debug("Spot snapshot cache miss, skipping synchronous fetch to maintain low latency.")
+            return {}
+
+        result = {}
+        for symbol in symbols:
+            fixed = cls._fix_symbol(symbol)
+            code = fixed[2:]
+            row = snapshot.get(code)
+            if not row:
+                continue
+
+            price = pd.to_numeric(row.get('最新价'), errors='coerce')
+            market_cap = pd.to_numeric(row.get('总市值'), errors='coerce')
+            pe = pd.to_numeric(row.get('市盈率-动态'), errors='coerce')
+            pb = pd.to_numeric(row.get('市净率'), errors='coerce')
+
+            price = float(price) if pd.notnull(price) else 0.0
+            market_cap = float(market_cap) if pd.notnull(market_cap) else 0.0
+            pe = float(pe) if pd.notnull(pe) else 0.0
+            pb = float(pb) if pd.notnull(pb) else 0.0
+
+            result[fixed] = {
+                'price': price,
+                'market_cap': market_cap,
+                'pe': pe,
+                'pb': pb,
+                'total_shares': (market_cap / price) if price > 0 and market_cap > 0 else 0.0,
+            }
+
+        return result
+
+    @classmethod
+    def get_realtime_price(cls, symbols, fetch_fundamentals=True):
         """获取腾讯实时行情 (批量)"""
         if not symbols:
             return {}
@@ -31,16 +119,32 @@ class PriceService:
             response = cls._session.get(url, timeout=5)
             response.encoding = 'gbk'
             rt_data = cls._parse_tencent_rt(response.text)
+            spot_fallback = cls._get_spot_snapshot_map(symbols)
             
             # 强化实时行情：使用 FundamentalService 替换腾讯接口中常常滞后的股息率
             from .fundamental_service import FundamentalService
             import pandas as pd
             for sym, data in rt_data.items():
-                df_divs = FundamentalService.get_historical_dividends(sym)
-                ltm_div_sum = FundamentalService.calculate_dividend_at_date(df_divs, pd.Timestamp.now())
-                
-                if data['price'] > 0 and ltm_div_sum > 0:
-                    data['dividend_yield'] = round((ltm_div_sum / data['price']) * 100, 2)
+                fallback = spot_fallback.get(sym, {})
+                if data.get('price', 0) <= 0 and fallback.get('price', 0) > 0:
+                    data['price'] = fallback['price']
+                if data.get('market_cap', 0) <= 0 and fallback.get('market_cap', 0) > 0:
+                    data['market_cap'] = fallback['market_cap']
+                if data.get('total_shares', 0) <= 0 and fallback.get('total_shares', 0) > 0:
+                    data['total_shares'] = fallback['total_shares']
+                if data.get('pe', 0) <= 0 and fallback.get('pe', 0) > 0:
+                    data['pe'] = fallback['pe']
+                if data.get('pb', 0) <= 0 and fallback.get('pb', 0) > 0:
+                    data['pb'] = fallback['pb']
+                # 核心改进：解耦高耗时的 AkShare 股息计算
+                if fetch_fundamentals and data.get('price', 0) > 0:
+                    try:
+                        df_divs = FundamentalService.get_historical_dividends(sym)
+                        ltm_div_sum = FundamentalService.calculate_dividend_at_date(df_divs, pd.Timestamp.now())
+                        if ltm_div_sum > 0:
+                            data['dividend_yield'] = round((ltm_div_sum / data['price']) * 100, 2)
+                    except Exception as div_e:
+                        logger.warning(f"Secondary calculation failed for {sym}: {div_e}")
                     
             return rt_data
         except Exception as e:
@@ -93,12 +197,13 @@ class PriceService:
         import pandas as pd
         from .fundamental_service import FundamentalService
         from django.core.cache import cache
+        requested_period = period
         
-        # 映射周期标识 (支持 1d, 30d, 36m, 5y, 10y)
+        # 映射周期标识 (支持 1d, 30d, 1y_week, 5y, 10y)
         period_map = {
             '1d': ('minute', 241),
             '30d': ('day', 30),
-            '36m': ('month', 36),
+            '1y_week': ('week', 52),
             '5y': ('month', 60),
             '10y': ('month', 120),
             'annual': ('year', limit)
@@ -114,13 +219,14 @@ class PriceService:
 
         # 使用标准化后的符号作为缓存键的一部分，但保留原始输入用于返回
         norm_symbols = [cls._fix_symbol(s) for s in symbols]
-        cache_key = f"hist_v5_{'_'.join(sorted(norm_symbols))}_{period}_{limit}"
+        cache_key = f"hist_v8_{'_'.join(sorted(norm_symbols))}_{requested_period}_{period}_{limit}"
         
-        cached_data = cache.get(cache_key)
+        cached_data = cls._cache_get(cache_key)
         if cached_data:
             return cached_data
 
         rt_data = cls.get_realtime_price(norm_symbols)
+        spot_fallback = cls._get_spot_snapshot_map(norm_symbols)
         results = {}
         fetch_period = period
         fetch_limit = limit
@@ -131,7 +237,7 @@ class PriceService:
             fetch_limit = limit * 12
 
         for idx, orig_symbol in enumerate(symbols):
-            if idx > 0: time.sleep(0.3)
+            # no sleep
             symbol = cls._fix_symbol(orig_symbol)
             s = symbol.lower()
             url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={s},{fetch_period},,,{fetch_limit},qfq"
@@ -163,17 +269,20 @@ class PriceService:
                 df_divs = FundamentalService.get_historical_dividends(symbol)
                 
                 rt = rt_data.get(symbol.upper(), {})
-                total_shares = rt.get('total_shares', 0)
-                curr_pe = rt.get('pe', 0)
-                curr_pb = rt.get('pb', 0)
-                curr_price = rt.get('price', price_list[-1]['price'] if price_list else 1)
+                fallback = spot_fallback.get(symbol.upper(), {})
+                total_shares = rt.get('total_shares', 0) or fallback.get('total_shares', 0)
+                curr_pe = rt.get('pe', 0) or fallback.get('pe', 0)
+                curr_pb = rt.get('pb', 0) or fallback.get('pb', 0)
+                curr_price = rt.get('price', 0) or fallback.get('price', 0) or (price_list[-1]['price'] if price_list else 1)
 
                 # 关键修复 (V3.7)：如果实时 PE/PB 为 0，则基于最新财报手动反推
                 if not df_fund.empty:
                     latest_f = df_fund.iloc[-1]
                     if (curr_pb <= 0 or total_shares <= 0) and latest_f['TOTAL_PARENT_EQUITY'] > 0:
                         # 重新校正 total_shares (如果从腾讯获取失败)
-                        if total_shares <= 0: total_shares = rt.get('market_cap', 1) / curr_price if curr_price > 0 else 0
+                        if total_shares <= 0:
+                            market_cap = rt.get('market_cap', 0) or fallback.get('market_cap', 0)
+                            total_shares = market_cap / curr_price if curr_price > 0 and market_cap > 0 else 0
                         
                         # 手动计算
                         if total_shares > 0:
@@ -226,7 +335,7 @@ class PriceService:
                         'roi': round(roi, 2)
                     })
                 
-                if period == 'annual' and history:
+                if requested_period == 'annual' and history:
                     annual_history = []
                     for h in history:
                         year = h['date'][:4]
@@ -242,7 +351,7 @@ class PriceService:
                 logger.error(f"PriceService Valuation Error for {symbol}: {e}")
         
         if results and len(results) == len(symbols):
-            cache.set(cache_key, results, 3600)
+            cls._cache_set(cache_key, results, 3600)
         return results
         
         # 5. 对齐并缓存
@@ -253,8 +362,7 @@ class PriceService:
             if period == 'day': ttl = 3600
             if period == 'minute': ttl = 300
             
-            from django.core.cache import cache
-            cache.set(cache_key, aligned_data, ttl)
+            cls._cache_set(cache_key, aligned_data, ttl)
             
         return aligned_data
 
@@ -284,10 +392,10 @@ class PriceService:
         from .fundamental_service import FundamentalService
         
         results = {}
-        rt_data = cls.get_realtime_price(symbols)
+        rt_data = cls.get_realtime_price(symbols, fetch_fundamentals=False)
         
         for idx, symbol in enumerate(symbols):
-            if idx > 0: time.sleep(0.2)
+            # no sleep
             symbol = cls._fix_symbol(symbol)
             s = symbol.lower()
             url = f"http://ifzq.gtimg.cn/appstock/app/minute/query?code={s}"
@@ -307,7 +415,7 @@ class PriceService:
                 minutes = stock_data.get('data', {}).get('data', [])
                 
                 # 获取最新财报
-                latest_f = df_fund.iloc[-1] if not df_fund.empty else None
+                latest_f = df_fund.iloc[-1] if (df_fund is not None and not df_fund.empty) else None
                 
                 history = []
                 today_dt = pd.Timestamp.now().normalize()
@@ -350,14 +458,35 @@ class PriceService:
 
     @classmethod
     def _align_intraday(cls, data_map):
+        """ISO-GRID 2.0 (Union + Forward Fill): 鲁棒的时间轴同步算法"""
         if len(data_map) < 2: return data_map
-        # 使用时间字符串对齐 (HHMM)
-        time_sets = []
+        
+        # 1. 获取所有标的中出现过的活跃分钟点并去重排序
+        all_times = set()
         for sym in data_map:
-            time_sets.append(set(d['time'] for d in data_map[sym]))
-        common_times = sorted(list(set.intersection(*time_sets)))
+            for item in data_map[sym]:
+                all_times.add(item['time'])
+        common_times = sorted(list(all_times))
         
         aligned = {}
         for sym in data_map:
-            aligned[sym] = [d for d in data_map[sym] if d['time'] in common_times]
+            # 使用 dict 以时间字符串为 key 重新索引原始数据
+            orig_data_map = { d['time']: d for d in data_map[sym] }
+            
+            new_list = []
+            last_valid = None
+            
+            for t in common_times:
+                current = orig_data_map.get(t)
+                if current:
+                    new_list.append(current)
+                    last_valid = current
+                elif last_valid:
+                    # 前向填充 (Forward Fill): 如果缺失点，使用上一分钟的有效价格，但时间戳保持同步
+                    filled_item = last_valid.copy()
+                    filled_item['time'] = t
+                    new_list.append(filled_item)
+                # 如果开头就缺失且无 last_valid，则暂时留空或跳过 (由另一方处理)
+            
+            aligned[sym] = new_list
         return aligned

@@ -79,6 +79,10 @@
         </div>
         <div class="chart-summary multi-summary" v-else>
           正在进行 <strong>{{ compareSymbols.length }}</strong> 家标的叠加对比
+          <span v-if="loadingCompare" class="compare-loading-inline">
+             <div class="inline-loader"></div>
+             正在拉取新矩阵数据...
+          </span>
         </div>
       </section>
 
@@ -139,7 +143,9 @@ const sentimentStore = useSentimentStore();
 const symbol = route.params.symbol as string;
 
 const loading = ref(true);
+const loadingCompare = ref(false); // 专用对比加载状态
 const analysisData = ref<any>(null);
+const historicalCache = ref<Record<string, any>>({}); // 内存缓存：存储已抓取过的 10 年历史
 const compareDataMap = ref<Record<string, any>>({});
 const stockData = ref<any>(null);
 const activeMetric = ref('pe');
@@ -174,53 +180,75 @@ onMounted(async () => {
   if (sentimentStore.sentimentData.length === 0) {
     await sentimentStore.fetchLatestSentiment();
   }
-  await fetchData();
+  await fetchMainData();
   initChart();
 });
 
-const fetchData = async () => {
+const fetchMainData = async () => {
   loading.value = true;
   currentStep.value = 0;
   try {
-    // Step 0: Start
-    await new Promise(r => setTimeout(r, 600));
-    
-    // Step 1: Fetch main data
     currentStep.value = 1;
     const res = await axios.get(`http://localhost:8000/api/sentiment/analysis/?symbol=${symbol}`);
     analysisData.value = res.data;
     calcParams.value.expectedRoe = res.data.forward.expected_roe;
     stockData.value = { symbol: res.data.symbol };
+    
+    // 将主标的数据也放入缓存，方便后续对比
+    historicalCache.value[symbol] = res.data;
 
-    // Step 2: F-Score & Details
     currentStep.value = 2;
-    await new Promise(r => setTimeout(r, 400));
-
-    // Step 3: Fair Value
     currentStep.value = 3;
-    if (compareSymbols.value.length > 0) {
-      const requests = compareSymbols.value.map(s => 
-        axios.get(`http://localhost:8000/api/sentiment/analysis/?symbol=${s}`)
-      );
-      const results = await Promise.all(requests);
-      const newMap: Record<string, any> = {};
-      results.forEach((r, idx) => {
-        newMap[compareSymbols.value[idx]] = r.data;
-      });
-      compareDataMap.value = newMap;
-    } else {
-      compareDataMap.value = {};
-    }
-
-    // Step 4: Finalizing
     currentStep.value = 4;
-    await new Promise(r => setTimeout(r, 500));
   } catch (e) {
     console.error(e);
   } finally {
     loading.value = false;
   }
 };
+
+const fetchComparisonData = async () => {
+  const symbols = compareSymbols.value;
+  if (symbols.length === 0) {
+    compareDataMap.value = {};
+    initChart();
+    return;
+  }
+
+  // 找出缓存中没有的标的
+  const missingSymbols = symbols.filter(s => !historicalCache.value[s]);
+  
+  if (missingSymbols.length > 0) {
+    loadingCompare.value = true;
+    try {
+      const requests = missingSymbols.map(s => 
+        axios.get(`http://localhost:8000/api/sentiment/analysis/?symbol=${s}`)
+      );
+      const results = await Promise.all(requests);
+      results.forEach((r, idx) => {
+        historicalCache.value[missingSymbols[idx]] = r.data;
+      });
+    } catch (e) {
+      console.error("Fetch Comp Error:", e);
+    } finally {
+      loadingCompare.value = false;
+    }
+  }
+
+  // 从缓存中同步当前勾选的对比数据
+  const newMap: Record<string, any> = {};
+  symbols.forEach(s => {
+    if (historicalCache.value[s]) {
+      newMap[s] = historicalCache.value[s];
+    }
+  });
+  compareDataMap.value = newMap;
+  initChart();
+};
+
+watch(compareSymbols, () => {
+  fetchComparisonData();
+}, { deep: true });
 
 const fairPb = computed(() => {
   return (calcParams.value.expectedRoe / calcParams.value.requiredReturn).toFixed(2);
@@ -352,10 +380,6 @@ const initChart = () => {
 watch([activeMetric, compareDataMap], () => {
   initChart();
 });
-
-watch(compareSymbols, () => {
-  fetchData();
-}, { deep: true });
 </script>
 
 <style scoped>
@@ -752,5 +776,34 @@ watch(compareSymbols, () => {
   .compare-selector {
     max-width: none;
   }
+}
+
+.compare-loading-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 16px;
+  font-size: 0.75rem;
+  color: #6366f1;
+  font-weight: 700;
+  animation: fadeIn 0.3s ease;
+}
+
+.inline-loader {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #e0e7ff;
+  border-top-color: #6366f1;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateX(-4px); }
+  to { opacity: 1; transform: translateX(0); }
 }
 </style>

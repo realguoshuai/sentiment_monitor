@@ -10,11 +10,42 @@ from django.core.cache import cache
 logger = logging.getLogger(__name__)
 
 class FundamentalService:
+    @staticmethod
+    def _cache_get(key):
+        try:
+            val = cache.get(key)
+            if isinstance(val, list):
+                # 如果是列表，说明是 Safe-Cache 存入的字典序列，恢复为 DataFrame
+                df = pd.DataFrame(val)
+                # 恢复关键日期列
+                for col in ['REPORT_DATE', 'NOTICE_DATE', 'ann_date', 'date_dt']:
+                    if col in df.columns:
+                        df[col] = pd.to_datetime(df[col])
+                return df
+            return val
+        except Exception as e:
+            logger.warning(f"Cache get failed for {key}: {e}")
+            return None
+
+    @staticmethod
+    def _cache_set(key, value, ttl):
+        try:
+            if isinstance(value, pd.DataFrame):
+                # Safe-Cache: 将 DataFrame 转换为字典列表存储，彻底免疫 pickle/numpy 版本问题
+                # 先转换日期为 iso 字符串
+                temp_df = value.copy()
+                for col in temp_df.select_dtypes(include=['datetime', 'datetimetz']).columns:
+                    temp_df[col] = temp_df[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+                value = temp_df.to_dict(orient='records')
+            cache.set(key, value, ttl)
+        except Exception as e:
+            logger.warning(f"Cache set failed for {key}: {e}")
+
     @classmethod
     def get_ttm_fundamentals(cls, symbol):
         """获取 TTM 净利润和净资产序列 (含 24h 缓存)"""
-        cache_key = f"fundamentals_{symbol}"
-        cached_df = cache.get(cache_key)
+        cache_key = f"fundamentals_v5_{symbol}"
+        cached_df = cls._cache_get(cache_key)
         if cached_df is not None:
             return cached_df
         
@@ -77,7 +108,7 @@ class FundamentalService:
             df_fund = df_fund.sort_values('NOTICE_DATE').drop_duplicates('NOTICE_DATE', keep='last')
             
             # 缓存 24 小时
-            cache.set(cache_key, df_fund, 24 * 3600)
+            cls._cache_set(cache_key, df_fund, 24 * 3600)
             return df_fund
         except Exception as e:
             logger.error(f"FundamentalService Error for {symbol}: {e}")
@@ -86,8 +117,8 @@ class FundamentalService:
     @classmethod
     def get_ttm_cashflow(cls, symbol):
         """获取 TTM 经营现金流 (含 24h 缓存)"""
-        cache_key = f"cashflow_{symbol}"
-        cached_df = cache.get(cache_key)
+        cache_key = f"cashflow_v5_{symbol}"
+        cached_df = cls._cache_get(cache_key)
         if cached_df is not None:
             return cached_df
         
@@ -100,7 +131,7 @@ class FundamentalService:
             df_cash = df_cash.sort_values('REPORT_DATE')
             df_cash['ttm_cfo'] = df_cash['NETCASH_OPERATE'].rolling(window=4).sum().bfill()
             
-            cache.set(cache_key, df_cash, 24 * 3600)
+            cls._cache_set(cache_key, df_cash, 24 * 3600)
             return df_cash
         except Exception as e:
             logger.error(f"Cashflow fetch error for {symbol}: {e}")
@@ -110,8 +141,8 @@ class FundamentalService:
     def get_historical_dividends(cls, symbol):
         """获取历史分红记录 (含 24h 缓存)"""
         symbol = cls._fix_symbol(symbol)
-        cache_key = f"dividends_{symbol}"
-        cached_df = cache.get(cache_key)
+        cache_key = f"dividends_v5_{symbol}"
+        cached_df = cls._cache_get(cache_key)
         if cached_df is not None:
             return cached_df
             
@@ -151,7 +182,7 @@ class FundamentalService:
                 
             df = df.loc[cleaned_indices]
             
-            cache.set(cache_key, df, 24 * 3600)
+            cls._cache_set(cache_key, df, 24 * 3600)
             return df
         except Exception as e:
             logger.error(f"Failed to fetch dividends for {symbol}: {e}")
@@ -250,8 +281,8 @@ class FundamentalService:
     @classmethod
     def get_f_score(cls, symbol):
         """计算 Piotroski F-Score (安全性评分)"""
-        cache_key = f"f_score_{symbol}"
-        cached = cache.get(cache_key)
+        cache_key = f"f_score_v5_{symbol}"
+        cached = cls._cache_get(cache_key)
         if cached: return cached
         
         try:
@@ -267,26 +298,34 @@ class FundamentalService:
             
             # CFO 数据
             cfo_val = 0
+            cfo_available = False
             if not df_cash.empty:
                 latest_cash = df_cash[df_cash['REPORT_DATE'] <= latest['REPORT_DATE']].tail(1)
                 if not latest_cash.empty:
                     cfo_val = latest_cash.iloc[0]['ttm_cfo']
+                    cfo_available = True
 
             score = 0
+            total_possible = 0
             details = []
             
             # 1. 盈利能力 (Profitability)
             # ROA > 0
-            assets = latest.get('TOTAL_ASSETS', latest['TOTAL_PARENT_EQUITY'])
-            roa = (latest['ttm_profit'] / assets) if assets > 0 else 0
+            assets = latest.get('TOTAL_ASSETS', latest.get('TOTAL_PARENT_EQUITY', 0))
+            roa = (latest['ttm_profit'] / assets) if pd.notnull(assets) and assets > 0 else 0
             passed = roa > 0
+            total_possible += 1
             if passed: score += 1
             details.append({"name": "ROA > 0", "passed": passed, "val": f"{round(roa*100, 2)}%"})
             
             # Net Income > 0
             passed = latest['ttm_profit'] > 0
+            total_possible += 1
             if passed: score += 1
             details.append({"name": "净利润 > 0", "passed": passed, "val": "Positive" if passed else "Negative"})
+
+            if cfo_available:
+                total_possible += 2
 
             # CFO > 0
             passed = cfo_val > 0
@@ -305,16 +344,16 @@ class FundamentalService:
                 prev_assets = prev_latest.get('TOTAL_ASSETS', prev_latest['TOTAL_PARENT_EQUITY'])
                 prev_roa = (prev_latest['ttm_profit'] / prev_assets) if prev_assets > 0 else 0
                 passed = roa > prev_roa
+                total_possible += 1
                 if passed: score += 1
                 details.append({"name": "ROA 同比提升", "passed": passed, "val": f"{round(roa*100, 2)}% vs {round(prev_roa*100, 2)}%"})
             else:
                 details.append({"name": "ROA 同比提升", "passed": False, "val": "无历史数据"})
 
             # 计算总分 (满分按 5 项计算，如果有 CFO 数据则按 6 项)
-            total_possible = 5
-            final_score = round((score / total_possible) * 10, 1)
+            final_score = round((score / total_possible) * 10, 1) if total_possible else 0
             result = {"score": min(final_score, 10.0), "details": details}
-            cache.set(cache_key, result, 3600 * 12)
+            cls._cache_set(cache_key, result, 3600 * 12)
             return result
         except Exception as e:
             logger.error(f"F-Score calculation error for {symbol}: {e}")

@@ -7,6 +7,7 @@ import akshare as ak
 import pandas as pd
 import logging
 import time
+import json
 
 from .models import Stock, SentimentData, News, Report, Announcement
 from .serializers import (
@@ -37,12 +38,19 @@ class StockViewSet(viewsets.ModelViewSet):
         # 自动补全前缀
         fixed_symbol = PriceService._fix_symbol(symbol)
         data['symbol'] = fixed_symbol
+        keywords = data.get('keywords', [])
+        if isinstance(keywords, list):
+            data['keywords'] = json.dumps(keywords, ensure_ascii=False)
+        elif keywords in (None, ''):
+            data['keywords'] = json.dumps([fixed_symbol[2:]], ensure_ascii=False)
         
         # 如果名称为空，尝试从实时接口获取
         if not data.get('name'):
             rt = PriceService.get_realtime_price([fixed_symbol])
             if fixed_symbol in rt:
                 data['name'] = rt[fixed_symbol]['name']
+            else:
+                data['name'] = fixed_symbol
         
         serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)
@@ -121,7 +129,7 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
             if not symbols:
                 return Response({})
             
-            data = PriceService.get_realtime_price(symbols)
+            data = PriceService.get_realtime_price(symbols, fetch_fundamentals=False)
             return Response(data)
         except Exception as e:
             return Response({'error': str(e)}, status=500)
@@ -137,7 +145,7 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
         if mode == 'minute':
             data = PriceService.get_intraday_data(symbols)
         else:
-            data = PriceService.get_realtime_price(symbols)
+            data = PriceService.get_realtime_price(symbols, fetch_fundamentals=False)
         return Response(data)
 
     @action(detail=False, methods=['get'])
@@ -215,7 +223,10 @@ def search_stocks(request):
 
     try:
         # 在内存快照中进行模糊匹配
-        mask = df['名称'].str.contains(query) | df['代码'].str.contains(query)
+        mask = (
+            df['名称'].str.contains(query, regex=False, na=False)
+            | df['代码'].str.contains(query, regex=False, na=False)
+        )
         matches = df[mask].head(10)
         
         results = []

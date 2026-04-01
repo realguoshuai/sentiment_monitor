@@ -6,7 +6,11 @@ class ApiConfig(AppConfig):
     name = 'api'
 
     def ready(self):
-        # 确保只在主进程中启动（避免 runserver 启动两次）
+        # 涉及领域: 东方财富(.eastmoney.com), 腾讯行情(.gtimg.cn)
+        no_proxy_list = ['.eastmoney.com', '.gtimg.cn', '127.0.0.1', 'localhost']
+        os.environ['NO_PROXY'] = ','.join(no_proxy_list)
+
+        # 确保只在主进程中启动定时任务
         if os.environ.get('RUN_MAIN') == 'true':
             from . import scheduler
             scheduler.start()

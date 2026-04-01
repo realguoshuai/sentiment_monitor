@@ -210,9 +210,9 @@
                         在 <span class="font-bold text-slate-900">{{ spreadStats.range }}</span> 观测周期内，
                         {{ getStockName(selectedSymbols[0]) }} 与 {{ getStockName(selectedSymbols[1]) }} 的 <strong>{{ getMetricLabel(currentMetricMode) }} 差值</strong> 呈现明显波动。
                         <strong>最大偏离</strong> 出现在 <span class="text-rose-600 font-bold underline underline-offset-4">{{ spreadStats.maxDate }}</span>，
-                        数值达 <span class="font-mono font-bold">{{ spreadStats.maxVal.toFixed(2) }}</span>；
+                        数值达 <span class="font-mono font-bold text-rose-600">{{ spreadStats.maxVal.toFixed(2) }}</span>；
                         <strong>最小偏离</strong> 位于 <span class="text-emerald-600 font-bold underline underline-offset-4">{{ spreadStats.minDate }}</span>，
-                        数值为 <span class="font-mono font-bold">{{ spreadStats.minVal.toFixed(2) }}</span>。
+                        数值为 <span class="font-mono font-bold text-emerald-600">{{ spreadStats.minVal.toFixed(2) }}</span>。
                      </p>
                      <div class="flex items-center gap-4 text-[10px] font-bold uppercase tracking-tighter text-slate-400">
                         <span>Sample Size: {{ comparisonData.length }} pts</span>
@@ -283,7 +283,7 @@ const store = useSentimentStore()
 const timeScales = [
   { label: '1D 分时', value: 'minute' },
   { label: '30D 日线', value: '30d' },
-  { label: '36M 月线', value: '36m' },
+  { label: '1Y 周线', value: '1y_week' },
   { label: '5Y 月线', value: '5y' },
   { label: '10Y 月线', value: '10y' },
 ]
@@ -399,7 +399,7 @@ async function fetchComparisonData() {
       if (!historicalCache.value[cacheKey]) {
         let limit = 30, period = 'day'
         if (scale === '30d') { limit = 30; period = 'day' }
-        else if (scale === '36m') { limit = 36; period = 'month' }
+        else if (scale === '1y_week') { limit = 52; period = '1y_week' }
         else if (scale === '5y') { limit = 60; period = 'month' }
         else if (scale === '10y') { limit = 120; period = 'month' }
         const histResp = await stockApi.getComparisonHistorical([ ...symbols ], limit, period)
@@ -501,6 +501,25 @@ function updatePriceChart() {
 
   const option = {
     backgroundColor: 'transparent',
+    title: {
+      text: `${n1} ⇌ ${n2}`,
+      left: 'center',
+      top: '20',
+      textStyle: {
+        color: '#1e293b',
+        fontSize: 14,
+        fontWeight: '900',
+        fontFamily: 'Inter, system-ui',
+        letterSpacing: 1
+      },
+      subtext: `Quantitative Spread Analysis | ${mLabel}`,
+      subtextStyle: {
+        color: '#94a3b8',
+        fontSize: 10,
+        fontWeight: 'bold',
+        textTransform: 'uppercase'
+      }
+    },
     tooltip: {
       trigger: 'axis',
       backgroundColor: 'rgba(255, 255, 255, 0.98)',
@@ -567,7 +586,7 @@ function updatePriceChart() {
         `
       }
     },
-    grid: { left: '1%', right: '1%', bottom: '5%', top: '5%', containLabel: true },
+    grid: { left: '1%', right: '1%', bottom: '5%', top: '15%', containLabel: true },
     xAxis: {
       type: 'category',
       data: comparisonData.value.map(d => {
@@ -600,6 +619,56 @@ function updatePriceChart() {
             { offset: 0, color: 'rgba(99, 102, 241, 0.15)' },
             { offset: 1, color: 'rgba(99, 102, 241, 0)' }
           ])
+        },
+        markPoint: {
+          symbol: 'circle',
+          symbolSize: 5,
+          data: [
+            { 
+              type: 'max', 
+              name: 'Max', 
+              itemStyle: { color: '#f43f5e' }, 
+              label: { 
+                show: true, 
+                position: 'top', 
+                fontWeight: '900', 
+                fontSize: 10,
+                color: '#f43f5e',
+                formatter: (p: any) => parseFloat(p.value).toFixed(2)
+              } 
+            },
+            { 
+              type: 'min', 
+              name: 'Min', 
+              itemStyle: { color: '#10b981' }, 
+              label: { 
+                show: true, 
+                position: 'bottom', 
+                fontWeight: '900', 
+                fontSize: 10,
+                color: '#10b981',
+                formatter: (p: any) => parseFloat(p.value).toFixed(2)
+              } 
+            },
+            {
+              name: 'Latest',
+              coord: [comparisonData.value.length - 1, comparisonData.value[comparisonData.value.length - 1].diff],
+              value: (comparisonData.value[comparisonData.value.length - 1].diff).toFixed(2),
+              itemStyle: { color: '#6366f1' },
+              label: { 
+                show: true, 
+                position: 'right', 
+                fontWeight: '900', 
+                fontSize: 11,
+                backgroundColor: '#6366f1',
+                color: '#fff',
+                padding: [3, 6],
+                borderRadius: 4,
+                formatter: '{c}'
+              },
+              symbolSize: 8
+            }
+          ]
         },
         markLine: {
           symbol: 'none',

@@ -8,7 +8,7 @@ router.register(r'stocks', views.StockViewSet)
 router.register(r'sentiment', views.SentimentDataViewSet, basename='sentiment')
 
 urlpatterns = [
-    path('', include(router.urls)),
-    path('collect/', trigger_collection, name='trigger-collection'),
     path('sentiment/search/', search_stocks, name='search-stocks'),
+    path('collect/', trigger_collection, name='trigger-collection'),
+    path('', include(router.urls)),
 ]
