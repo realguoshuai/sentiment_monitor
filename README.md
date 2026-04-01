@@ -66,10 +66,11 @@ sentiment_monitor/
 ├── start.bat                   # 一键启动脚本
 └── README.md
 ```
-## 页面展示 (V3.0 New)
+## 页面展示
 
-![价差对冲终端 1Y周线](terminal_v3_spread.png)
-![深度分析矩阵 增量叠加](terminal_v3_matrix.png)
+![价差对冲终端 1Y周线](QQ图片20260327161155.png)
+![深度分析矩阵 10年期](QQ图片20260327161212.png)
+![ROI 价值仪表盘](QQ图片20260327161107.png)
 ## 环境要求
 
 - Windows 10+
