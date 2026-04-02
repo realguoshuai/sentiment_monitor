@@ -129,7 +129,7 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
             if not symbols:
                 return Response({})
             
-            data = PriceService.get_realtime_price(symbols, fetch_fundamentals=False)
+            data = PriceService.get_realtime_price(symbols, fetch_fundamentals=True)
             return Response(data)
         except Exception as e:
             return Response({'error': str(e)}, status=500)
@@ -145,7 +145,7 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
         if mode == 'minute':
             data = PriceService.get_intraday_data(symbols)
         else:
-            data = PriceService.get_realtime_price(symbols, fetch_fundamentals=False)
+            data = PriceService.get_realtime_price(symbols, fetch_fundamentals=True)
         return Response(data)
 
     @action(detail=False, methods=['get'])

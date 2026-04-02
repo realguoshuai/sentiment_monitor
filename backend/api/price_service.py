@@ -309,16 +309,14 @@ class PriceService:
                         # 回退 logic: 历史 PB = 当前 PB * (历史价格 / 当前价格)
                         pb = curr_pb * (price / curr_price) if curr_price > 0 else 0
                     
-                    # 真实历史股息率计算 - 采用智能滚动频次推算
+                    # 恢复自建的高精度推算引擎，因为第三方(腾讯)真实数据为严重滞后的 1%
                     ltm_div_sum = FundamentalService.calculate_dividend_at_date(df_divs, date_dt)
                     dy = (ltm_div_sum / price) * 100 if price > 0 else 0
                     
-                    # 鲁棒性补充：如果计算出的历史 DY 为 0，但当前实时 DY 存在且日期较近，则使用当前值作为基准
-                    # 这适用于刚上市或分红记录抓取异常的情况
+                    # 鲁棒性补充：如果计算出的历史 DY 为 0，尝试回退到 Tencent 接口
                     rt_dy = rt.get('dividend_yield', 0)
                     if dy <= 0 and rt_dy > 0:
-                        is_recent = (datetime.now() - date_dt).days <= 365
-                        if is_recent: dy = rt_dy
+                        if (datetime.now() - date_dt).days <= 365: dy = rt_dy
 
                     # ROI = ROE / PB (Yanghe floor 20%)
                     calc_roe = (pb / pe * 100) if pe > 0 else 0

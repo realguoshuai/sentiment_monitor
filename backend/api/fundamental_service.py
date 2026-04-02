@@ -191,31 +191,41 @@ class FundamentalService:
     @classmethod
     def calculate_dividend_at_date(cls, df_divs, date_dt):
         """
-        精确计算截至特定日期的滚动派息总额 (LTM)。
-        逻辑：加总在 [date - 365, date] 窗口内公告的所有分红。
+        智能推算截至特定日期的自然年派息总额 (Smart Natural Year)。
+        逻辑：按自然年聚合分红，平滑派息周期的轻微漂移与一年多频次的派发。
         """
         if df_divs.empty:
             return 0.0
             
-        # 确保日期格式一致
         date_dt = pd.to_datetime(date_dt)
-        one_year_ago = date_dt - pd.Timedelta(days=365)
         
-        # 筛选窗口内的分红记录
-        mask = (df_divs['ann_date'] <= date_dt) & (df_divs['ann_date'] > one_year_ago)
-        ltm_divs = df_divs[mask]
-        
-        if ltm_divs.empty:
-            # 鲁棒性兜底：如果窗口内无分红，但之前有分红记录，取最后一次（处理刚过派息窗口的断档）
-            past_divs = df_divs[df_divs['ann_date'] <= date_dt]
-            if not past_divs.empty:
-                # 如果最后一次分红是在 500 天内（考虑到某些公司 1.5 年派一次），取其作为近似参考
-                last_div = past_divs.iloc[-1]
-                if (date_dt - last_div['ann_date']).days <= 500:
-                    return float(last_div['cash_div'])
+        # 寻找该日期之前的所有分红
+        past_divs = df_divs[df_divs['ann_date'] <= date_dt].copy()
+        if past_divs.empty:
             return 0.0
             
-        return float(ltm_divs['cash_div'].sum())
+        # 按自然年份聚合分红总额
+        past_divs['year'] = past_divs['ann_date'].dt.year
+        yearly_sum = past_divs.groupby('year')['cash_div'].sum().to_dict()
+        
+        current_year = date_dt.year
+        last_year = current_year - 1
+        
+        current_sum = yearly_sum.get(current_year, 0.0)
+        last_sum = yearly_sum.get(last_year, 0.0)
+        
+        # 自然年平滑策略 (应对 A 股财报季的规律)
+        # 1. 如果当前的派息总额已经达到去年的 80%（说明大头已经派发），直接使用当年的分红总额
+        if current_sum >= last_sum * 0.8:
+            return float(current_sum)
+            
+        # 2. 如果仍在 9 月份之前（半年报与中期年报派发旺季未结束），大概率今年还没发完，沿用去年全年度的指引
+        if date_dt.month < 9:
+            return float(last_sum)
+            
+        # 3. 到了年底（>= 9月），当年发多少就是多少。如果完全停发，检查最近分红决定是否兜底 0
+        last_div_date = past_divs.iloc[-1]['ann_date']
+        return float(current_sum) if current_sum > 0 else (float(last_sum) if (date_dt - last_div_date).days <= 450 else 0.0)
 
     @classmethod
     def align_to_prices(cls, df_fund, df_prices, symbol):
