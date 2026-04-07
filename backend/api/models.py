@@ -106,3 +106,26 @@ class Announcement(models.Model):
     
     def __str__(self):
         return self.title[:50]
+
+
+class FundamentalSnapshot(models.Model):
+    """基本面数据快照 (本地持久化兜底)"""
+    symbol = models.CharField(max_length=20, verbose_name='股票代码', db_index=True)
+    date = models.DateField(verbose_name='报告日期')
+    pe = models.FloatField(default=0, verbose_name='TTM市盈率')
+    pb = models.FloatField(default=0, verbose_name='市净率')
+    roi = models.FloatField(default=0, verbose_name='ROI')
+    dividend_yield = models.FloatField(default=0, verbose_name='股息率')
+    ttm_profit = models.FloatField(default=0, verbose_name='TTM净利润')
+    total_equity = models.FloatField(default=0, verbose_name='归母净资产')
+    price = models.FloatField(default=0, verbose_name='价格')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = '基本面快照'
+        verbose_name_plural = '基本面快照'
+        unique_together = ['symbol', 'date']
+        ordering = ['-date']
+
+    def __str__(self):
+        return f"{self.symbol} - {self.date}"

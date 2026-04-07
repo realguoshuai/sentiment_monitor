@@ -349,20 +349,11 @@ class PriceService:
                 logger.error(f"PriceService Valuation Error for {symbol}: {e}")
         
         if results and len(results) == len(symbols):
-            cls._cache_set(cache_key, results, 3600)
+            # 历史数据变化极慢，缓存 12 小时；日线缓存 2 小时
+            ttl = 3600 * 12
+            if period == 'day': ttl = 3600 * 2
+            cls._cache_set(cache_key, results, ttl)
         return results
-        
-        # 5. 对齐并缓存
-        aligned_data = cls._align_data(results)
-        if aligned_data:
-            # 根据周期设置不同的缓存时间
-            ttl = 3600 * 12 # 默认 12 小时 (10y/5y/36m)
-            if period == 'day': ttl = 3600
-            if period == 'minute': ttl = 300
-            
-            cls._cache_set(cache_key, aligned_data, ttl)
-            
-        return aligned_data
 
     @classmethod
     def _align_data(cls, data_map):

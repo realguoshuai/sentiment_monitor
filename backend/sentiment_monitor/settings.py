@@ -106,9 +106,9 @@ CACHES = {
     'default': {
         'BACKEND': 'django.core.cache.backends.filebased.FileBasedCache',
         'LOCATION': BASE_DIR / 'cache_data',
-        'TIMEOUT': 3600,  # 默认 1 小时
+        'TIMEOUT': 43200,  # 默认 12 小时 (历史数据变化极慢)
         'OPTIONS': {
-            'MAX_ENTRIES': 1000
+            'MAX_ENTRIES': 5000
         }
     }
 }

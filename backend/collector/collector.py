@@ -162,7 +162,46 @@ def run_collection():
     print("\n" + "=" * 60)
     print(f"  Done! Success: {success_count}/{stocks.count()}")
     print("=" * 60)
+    
+    # 预热：同步所有标的的基本面数据到缓存 + 数据库
+    sync_fundamentals_for_all(stocks)
+
+
+def sync_fundamentals_for_all(stocks):
+    """预热所有监控标的的基本面数据 (缓存 + 数据库快照)"""
+    import time
+    from api.fundamental_service import FundamentalService
+    
+    print("\n" + "-" * 60)
+    print("  [PREHEAT] Syncing fundamental data...")
+    print("-" * 60)
+    
+    ok = 0
+    fail = 0
+    for stock in stocks:
+        symbol = stock.symbol
+        try:
+            # 拉取 TTM 财务数据 (会自动写入缓存 + 数据库快照)
+            df = FundamentalService.get_ttm_fundamentals(symbol)
+            if not df.empty:
+                print(f"  [OK] {stock.name} ({symbol}): {len(df)} quarterly records")
+                ok += 1
+            else:
+                print(f"  [WARN] {stock.name} ({symbol}): empty result")
+                fail += 1
+            
+            # 分红数据预热
+            FundamentalService.get_historical_dividends(symbol)
+            
+            # 避免请求过快被封
+            time.sleep(1)
+        except Exception as e:
+            print(f"  [ERR] {stock.name} ({symbol}): {str(e)[:80]}")
+            fail += 1
+    
+    print(f"\n  [PREHEAT] Complete: {ok} success, {fail} failed")
 
 
 if __name__ == "__main__":
     run_collection()
+

@@ -109,9 +109,18 @@ class FundamentalService:
             
             # 缓存 24 小时
             cls._cache_set(cache_key, df_fund, 24 * 3600)
+            
+            # 持久化最新快照到数据库 (异步兜底)
+            cls._save_snapshot(symbol, df_fund)
+            
             return df_fund
         except Exception as e:
             logger.error(f"FundamentalService Error for {symbol}: {e}")
+            # 降级：从本地数据库快照恢复
+            fallback = cls._load_snapshot_as_df(symbol)
+            if fallback is not None and not fallback.empty:
+                logger.info(f"FundamentalService Fallback: loaded {len(fallback)} rows from DB for {symbol}")
+                return fallback
             return pd.DataFrame()
 
     @classmethod
@@ -402,3 +411,49 @@ class FundamentalService:
                 return f"SH{symbol}"
             return f"SZ{symbol}"
         return symbol
+
+    @classmethod
+    def _save_snapshot(cls, symbol, df_fund):
+        """将最新财报数据持久化到数据库快照表"""
+        try:
+            from .models import FundamentalSnapshot
+            if df_fund.empty:
+                return
+            latest = df_fund.iloc[-1]
+            report_date = pd.to_datetime(latest['REPORT_DATE']).date()
+            FundamentalSnapshot.objects.update_or_create(
+                symbol=symbol.upper(),
+                date=report_date,
+                defaults={
+                    'ttm_profit': float(latest.get('ttm_profit', 0) or 0),
+                    'total_equity': float(latest.get('TOTAL_PARENT_EQUITY', 0) or 0),
+                }
+            )
+        except Exception as e:
+            logger.warning(f"Failed to save snapshot for {symbol}: {e}")
+
+    @classmethod
+    def _load_snapshot_as_df(cls, symbol):
+        """从数据库快照恢复为 DataFrame (降级兜底)"""
+        try:
+            from .models import FundamentalSnapshot
+            snapshots = FundamentalSnapshot.objects.filter(
+                symbol=symbol.upper()
+            ).order_by('date')[:40]  # 最近 40 条 ≈ 10 年季报
+            
+            if not snapshots.exists():
+                return None
+            
+            rows = []
+            for s in snapshots:
+                rows.append({
+                    'REPORT_DATE': pd.Timestamp(s.date),
+                    'NOTICE_DATE': pd.Timestamp(s.date) + pd.Timedelta(days=60),
+                    'ttm_profit': s.ttm_profit,
+                    'TOTAL_PARENT_EQUITY': s.total_equity,
+                })
+            return pd.DataFrame(rows)
+        except Exception as e:
+            logger.warning(f"Failed to load snapshot for {symbol}: {e}")
+            return None
+

@@ -1,8 +1,19 @@
 import axios from 'axios'
 
+// 动态获取 API 基础路径
+// 1. 优先使用环境变量 (生产环境建议)
+// 2. 如果是本地开发 (localhost)，指向 127.0.0.1:8000
+// 3. 如果是部署到服务器，自动指向当前服务器 IP 的 8000 端口
+const getBaseURL = () => {
+  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL
+  const { hostname, protocol } = window.location
+  const isLocal = hostname === 'localhost' || hostname === '127.0.0.1'
+  return isLocal ? 'http://127.0.0.1:8000/api' : `${protocol}//${hostname}:8000/api`
+}
+
 const api = axios.create({
-  baseURL: 'http://127.0.0.1:8000/api',
-  timeout: 10000,
+  baseURL: getBaseURL(),
+  timeout: 15000, // 深度分析耗时较长，增加超时时间到 15s
   headers: {
     'Content-Type': 'application/json',
   },
@@ -82,6 +93,7 @@ export const stockApi = {
   getComparisonHistorical: (symbols: string[], limit: number = 30, period: string = 'day') => 
     api.get<Record<string, any[]>>(`/sentiment/comparison_historical/?symbols=${symbols.join(',')}&limit=${limit}&period=${period}`),
   searchStocks: (q: string) => api.get<any[]>('/sentiment/search/', { params: { q } }),
+  getAnalysis: (symbol: string) => api.get<any>(`/stocks/analysis/?symbol=${symbol}`),
 }
 
 export default api
