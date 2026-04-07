@@ -4,12 +4,8 @@ import axios from 'axios'
 // 1. 优先使用环境变量 (生产环境建议)
 // 2. 如果是本地开发 (localhost)，指向 127.0.0.1:8000
 // 3. 如果是部署到服务器，自动指向当前服务器 IP 的 8000 端口
-const getBaseURL = () => {
-  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL
-  const { hostname, protocol } = window.location
-  const isLocal = hostname === 'localhost' || hostname === '127.0.0.1'
-  return isLocal ? 'http://127.0.0.1:8000/api' : `${protocol}//${hostname}:8000/api`
-}
+
+const getBaseURL = () => '/api'
 
 const api = axios.create({
   baseURL: getBaseURL(),
@@ -86,11 +82,11 @@ export const stockApi = {
   getTodaySentiment: () => api.get<SentimentData[]>('/sentiment/today/'),
   getLatestSentiment: () => api.get<SentimentData[]>('/sentiment/latest/'),
   getSentimentBySymbol: (symbol: string) => api.get<SentimentData>(`/sentiment/${symbol}/`),
-  triggerCollection: () => api.post<{status: string, message: string}>('/collect/'),
+  triggerCollection: () => api.post<{ status: string, message: string }>('/collect/'),
   getRealtimePrices: () => api.get<Record<string, RealtimePrice>>('/sentiment/realtime_prices/'),
-  getComparisonRealtime: (symbols: string[], type: 'last' | 'minute' = 'last') => 
+  getComparisonRealtime: (symbols: string[], type: 'last' | 'minute' = 'last') =>
     api.get<Record<string, any>>(`/sentiment/comparison_realtime/?symbols=${symbols.join(',')}&type=${type}`),
-  getComparisonHistorical: (symbols: string[], limit: number = 30, period: string = 'day') => 
+  getComparisonHistorical: (symbols: string[], limit: number = 30, period: string = 'day') =>
     api.get<Record<string, any[]>>(`/sentiment/comparison_historical/?symbols=${symbols.join(',')}&limit=${limit}&period=${period}`),
   searchStocks: (q: string) => api.get<any[]>('/sentiment/search/', { params: { q } }),
   getAnalysis: (symbol: string) => api.get<any>(`/stocks/analysis/?symbol=${symbol}`),
