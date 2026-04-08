@@ -26,6 +26,12 @@ const router = createRouter({
       name: 'analysis',
       component: () => import('@/views/AnalysisDetailView.vue'),
       props: true
+    },
+    {
+      path: '/quality/:symbol',
+      name: 'quality-analysis',
+      component: () => import('@/views/QualityView.vue'),
+      props: true
     }
   ]
 })

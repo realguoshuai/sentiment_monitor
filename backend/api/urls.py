@@ -9,6 +9,7 @@ router.register(r'sentiment', views.SentimentDataViewSet, basename='sentiment')
 
 urlpatterns = [
     path('sentiment/search/', search_stocks, name='search-stocks'),
+    path('sentiment/quality/', views.get_quality_analysis, name='quality-analysis'),
     path('collect/', trigger_collection, name='trigger-collection'),
     path('', include(router.urls)),
 ]

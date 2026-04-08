@@ -11,6 +11,15 @@
         </svg>
         <span class="text-sm font-bold">返回看板</span>
       </button>
+      <button 
+        @click="$router.push(`/quality/${symbol}`)"
+        class="flex items-center gap-2 px-4 py-2 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-600 hover:bg-emerald-100 hover:border-emerald-300 transition shadow-sm mr-4"
+      >
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+        </svg>
+        <span class="text-sm font-bold">财务溯源</span>
+      </button>
       <h1 v-if="stockData" class="text-2xl font-black text-slate-800">
         {{ stockData.stock_name }} <span class="text-lg font-mono text-slate-400 ml-2">({{ stockData.stock_symbol }})</span>
       </h1>

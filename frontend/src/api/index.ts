@@ -90,6 +90,7 @@ export const stockApi = {
     api.get<Record<string, any[]>>(`/sentiment/comparison_historical/?symbols=${symbols.join(',')}&limit=${limit}&period=${period}`),
   searchStocks: (q: string) => api.get<any[]>('/sentiment/search/', { params: { q } }),
   getAnalysis: (symbol: string) => api.get<any>(`/stocks/analysis/?symbol=${symbol}`),
+  getQualityAnalysis: (symbol: string) => api.get<any>(`/sentiment/quality/?symbol=${symbol}`),
 }
 
 export default api

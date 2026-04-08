@@ -3,6 +3,7 @@ import pandas as pd
 import re
 import logging
 import time
+import json
 from datetime import datetime
 
 from django.core.cache import cache
@@ -24,19 +25,23 @@ class FundamentalService:
                 return df
             return val
         except Exception as e:
-            logger.warning(f"Cache get failed for {key}: {e}")
+            logger.warning(f"Cache unpickle failed for {key}, deleting: {e}")
+            cache.delete(key) # 发现有毒缓存，直接物理删除
             return None
 
     @staticmethod
     def _cache_set(key, value, ttl):
+        """
+        真・安全缓存机制：
+        通过 JSON 序列化对 DataFrame 进行“脱水”，彻底移除 NaT, Timestamp 等
+        会导致分布式/跨版本 Pickle 崩溃的 Pandas 特有对象。
+        """
         try:
             if isinstance(value, pd.DataFrame):
-                # Safe-Cache: 将 DataFrame 转换为字典列表存储，彻底免疫 pickle/numpy 版本问题
-                # 先转换日期为 iso 字符串
-                temp_df = value.copy()
-                for col in temp_df.select_dtypes(include=['datetime', 'datetimetz']).columns:
-                    temp_df[col] = temp_df[col].dt.strftime('%Y-%m-%d %H:%M:%S')
-                value = temp_df.to_dict(orient='records')
+                # 使用 JSON 往返消除所有 Numpy/Pandas 特有二进制结构
+                # date_format='iso' 会自动将 NaT 转换为 null (None)
+                json_str = value.to_json(orient='records', date_format='iso')
+                value = json.loads(json_str)
             cache.set(key, value, ttl)
         except Exception as e:
             logger.warning(f"Cache set failed for {key}: {e}")
@@ -44,7 +49,7 @@ class FundamentalService:
     @classmethod
     def get_ttm_fundamentals(cls, symbol):
         """获取 TTM 净利润和净资产序列 (含 24h 缓存)"""
-        cache_key = f"fundamentals_v5_{symbol}"
+        cache_key = f"fundamentals_v7_{symbol}"
         cached_df = cls._cache_get(cache_key)
         if cached_df is not None:
             return cached_df
@@ -126,7 +131,7 @@ class FundamentalService:
     @classmethod
     def get_ttm_cashflow(cls, symbol):
         """获取 TTM 经营现金流 (含 24h 缓存)"""
-        cache_key = f"cashflow_v5_{symbol}"
+        cache_key = f"cashflow_v7_{symbol}"
         cached_df = cls._cache_get(cache_key)
         if cached_df is not None:
             return cached_df
@@ -150,7 +155,7 @@ class FundamentalService:
     def get_historical_dividends(cls, symbol):
         """获取历史分红记录 (含 24h 缓存)"""
         symbol = cls._fix_symbol(symbol)
-        cache_key = f"dividends_v5_{symbol}"
+        cache_key = f"dividends_v7_{symbol}"
         cached_df = cls._cache_get(cache_key)
         if cached_df is not None:
             return cached_df
@@ -163,9 +168,11 @@ class FundamentalService:
             
             # 字段映射 (修正 AkShare 编码问题)
             # 通过索引获取：0: 公告日期, 3: 每10股派现
+            # 使用 iloc 强制按位置索引，增加鲁棒性
+            df.columns = [f'col_{i}' for i in range(len(df.columns))]
             df = df.rename(columns={
-                df.columns[0]: 'ann_date',
-                df.columns[3]: 'cash_div_10'
+                'col_0': 'ann_date',
+                'col_3': 'cash_div_10'
             })
             
             # 对列名可能出现的乱码进行二次清洗
@@ -196,6 +203,77 @@ class FundamentalService:
         except Exception as e:
             logger.error(f"Failed to fetch dividends for {symbol}: {e}")
             return pd.DataFrame()
+
+    @classmethod
+    def get_quality_data(cls, symbol):
+        """获取近10年高质量基本面数据 (杜邦因子+护城河+派息)"""
+        symbol = cls._fix_symbol(symbol)
+        cache_key = f"quality_v7_{symbol}"
+        # 直接使用 cache.get 避免 _cache_get 的自动 DataFrame 转换
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return cached_data
+
+        try:
+            # 1. 获取利润表数据
+            df_profit = ak.stock_profit_sheet_by_quarterly_em(symbol=symbol)
+            df_profit['REPORT_DATE'] = pd.to_datetime(df_profit['REPORT_DATE'])
+            # 仅提取年报数据
+            df_profit = df_profit[df_profit['REPORT_DATE'].dt.month == 12]
+
+            # 2. 获取资产负债表数据
+            df_balance = ak.stock_balance_sheet_by_report_em(symbol=symbol)
+            df_balance['REPORT_DATE'] = pd.to_datetime(df_balance['REPORT_DATE'])
+            df_balance = df_balance[df_balance['REPORT_DATE'].dt.month == 12]
+
+            # 3. 合并表
+            df = pd.merge(
+                df_profit[['REPORT_DATE', 'TOTAL_OPERATE_INCOME', 'PARENT_NETPROFIT', 'OPERATE_COST', 'BASIC_EPS']],
+                df_balance[['REPORT_DATE', 'TOTAL_ASSETS', 'TOTAL_PARENT_EQUITY']],
+                on='REPORT_DATE', how='inner'
+            )
+
+            for col in ['TOTAL_OPERATE_INCOME', 'PARENT_NETPROFIT', 'OPERATE_COST', 'TOTAL_ASSETS', 'TOTAL_PARENT_EQUITY', 'BASIC_EPS']:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+            # 4. 计算杜邦与利润指标
+            df['net_margin'] = df.apply(lambda r: (r['PARENT_NETPROFIT'] / r['TOTAL_OPERATE_INCOME']) * 100 if r['TOTAL_OPERATE_INCOME'] > 0 else 0, axis=1)
+            df['asset_turnover'] = df.apply(lambda r: r['TOTAL_OPERATE_INCOME'] / r['TOTAL_ASSETS'] if r['TOTAL_ASSETS'] > 0 else 0, axis=1)
+            df['equity_multiplier'] = df.apply(lambda r: r['TOTAL_ASSETS'] / r['TOTAL_PARENT_EQUITY'] if r['TOTAL_PARENT_EQUITY'] > 0 else 0, axis=1)
+            df['gross_margin'] = df.apply(lambda r: ((r['TOTAL_OPERATE_INCOME'] - r['OPERATE_COST']) / r['TOTAL_OPERATE_INCOME']) * 100 if r['TOTAL_OPERATE_INCOME'] > 0 else 0, axis=1)
+            df['roe'] = df['net_margin'] * df['asset_turnover'] * df['equity_multiplier']
+
+            # 5. 计算分红与派息率
+            df_div = cls.get_historical_dividends(symbol)
+            div_by_year = {}
+            if not df_div.empty:
+                df_div['year'] = df_div['ann_date'].dt.year
+                div_by_year = df_div.groupby('year')['cash_div'].sum().to_dict()
+
+            def get_payout_ratio(row):
+                year = row['REPORT_DATE'].year
+                eps = row['BASIC_EPS']
+                dps = div_by_year.get(year + 1, div_by_year.get(year, 0)) # 近似用下一年的派发配对当年的业绩
+                if eps > 0:
+                    return min(dps / eps * 100, 200.0) # 封顶200%
+                return 0.0
+
+            df['dps'] = df.apply(lambda r: div_by_year.get(r['REPORT_DATE'].year + 1, div_by_year.get(r['REPORT_DATE'].year, 0)), axis=1)
+            df['payout_ratio'] = df.apply(get_payout_ratio, axis=1)
+            df['year'] = df['REPORT_DATE'].dt.year
+            df['date'] = df['REPORT_DATE'].dt.strftime('%Y-%m-%d')
+
+            # 选取最近10年
+            df = df.sort_values('REPORT_DATE').tail(10)
+
+            # 整理返回格式
+            records = df[['date', 'year', 'TOTAL_OPERATE_INCOME', 'PARENT_NETPROFIT', 'net_margin', 'asset_turnover', 'equity_multiplier', 'roe', 'gross_margin', 'BASIC_EPS', 'dps', 'payout_ratio']].to_dict(orient='records')
+            
+            cls._cache_set(cache_key, records, 12 * 3600)
+            return records
+        except Exception as e:
+            logger.error(f"Failed to fetch quality data for {symbol}: {e}")
+            return []
 
     @classmethod
     def calculate_dividend_at_date(cls, df_divs, date_dt):
@@ -300,7 +378,7 @@ class FundamentalService:
     @classmethod
     def get_f_score(cls, symbol):
         """计算 Piotroski F-Score (安全性评分)"""
-        cache_key = f"f_score_v5_{symbol}"
+        cache_key = f"f_score_v7_{symbol}"
         cached = cls._cache_get(cache_key)
         if cached: return cached
         

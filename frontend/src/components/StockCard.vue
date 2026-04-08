@@ -94,6 +94,12 @@
         >
           深度分析
         </router-link>
+        <router-link 
+          :to="`/quality/${data.stock_symbol}`"
+          class="px-3 py-1 bg-emerald-500/20 border border-emerald-500/50 hover:bg-emerald-500/40 text-[10px] text-emerald-300 rounded-full transition-all text-center min-w-[50px] font-bold"
+        >
+          财务溯源
+        </router-link>
         <a 
           v-for="link in allLinks"
           :key="link.name"

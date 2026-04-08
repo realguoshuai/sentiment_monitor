@@ -244,6 +244,25 @@ def search_stocks(request):
         return Response([])
 
 
+@api_view(['GET'])
+def get_quality_analysis(request):
+    """基本面质量与杜邦分析接口"""
+    symbol = request.GET.get('symbol', '').strip().upper()
+    if not symbol:
+        return Response({'error': 'No symbol provided'}, status=400)
+    
+    try:
+        from .fundamental_service import FundamentalService
+        quality_data = FundamentalService.get_quality_data(symbol)
+        
+        return Response({
+            'symbol': symbol,
+            'quality_history': quality_data
+        })
+    except Exception as e:
+        logger.error(f"Quality Analysis Error for {symbol}: {e}")
+        return Response({'error': str(e)}, status=500)
+
 
 @api_view(['POST'])
 def trigger_collection(request):
