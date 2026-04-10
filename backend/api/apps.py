@@ -20,19 +20,23 @@ class ApiConfig(AppConfig):
             threading.Thread(target=self.warm_valuation_cache, daemon=True).start()
 
     def warm_valuation_cache(self):
-        """预热常用标的的 10Y 估值缓存"""
+        """预热监控标的的历史估值和深度分析缓存"""
         import time
+        from .analysis_service import AnalysisService
+        from .models import Stock
         from .price_service import PriceService
         
         # 延迟 5 秒等 Django 服务器完全就位
         time.sleep(5)
         
-        # 默认对比组合：阿胶与洋河
-        core_symbols = ['SZ000423', 'SZ002304']
+        monitored_symbols = list(Stock.objects.order_by('symbol').values_list('symbol', flat=True))
+        core_symbols = monitored_symbols or ['SZ000423', 'SZ002304']
         try:
-            print("[Cache Warming] Initiating 10Y Valuation Cache Warming...")
-            # 预热 10Y 月线 (120 pts)
-            PriceService.get_historical_data(core_symbols, limit=120, period='month')
-            print("[Cache Warming] Core valuation data cached successfully.")
+            print(f"[Cache Warming] Warming valuation cache for {len(core_symbols)} symbols...")
+            PriceService.refresh_snapshot_cache()
+            for symbol in core_symbols:
+                PriceService.get_historical_data([symbol], limit=120, period='month')
+            AnalysisService.warm_cache(core_symbols, period='10y')
+            print("[Cache Warming] Valuation and analysis cache warmed successfully.")
         except Exception as e:
             print(f"[Cache Warming] Skip warming: {e}")

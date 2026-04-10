@@ -100,6 +100,12 @@
         >
           财务溯源
         </router-link>
+        <router-link 
+          :to="`/analysis/${data.stock_symbol}/history`"
+          class="px-3 py-1 bg-amber-500/20 border border-amber-500/50 hover:bg-amber-500/40 text-[10px] text-amber-300 rounded-full transition-all text-center min-w-[50px] font-bold"
+        >
+          历史回测
+        </router-link>
         <a 
           v-for="link in allLinks"
           :key="link.name"

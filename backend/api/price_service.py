@@ -49,6 +49,14 @@ class PriceService:
         except Exception as e:
             logger.warning(f"Cache set failed for {key}: {e}")
 
+    @staticmethod
+    def _normalize_historical_cache_value(value):
+        import pandas as pd
+
+        if isinstance(value, pd.DataFrame):
+            return value.to_dict(orient='records')
+        return value
+
     @classmethod
     def refresh_snapshot_cache(cls):
         """后台异步抓取全量快照，不阻塞前台请求"""
@@ -192,14 +200,111 @@ class PriceService:
         return f"SZ{s}"
 
     @classmethod
-    def get_historical_data(cls, symbols, limit=30, period='day'):
-        """获取历史 K 线并对齐真实财报指标 (TTM) - 带缓存"""
+    def _historical_single_cache_key(cls, symbol, requested_period, period, limit):
+        fixed_symbol = cls._fix_symbol(symbol)
+        return f"hist_single_v1_{fixed_symbol}_{requested_period}_{period}_{limit}"
+
+    @classmethod
+    def _build_single_historical_data(cls, symbol, requested_period, period, limit, rt_data, spot_fallback):
         import pandas as pd
         from .fundamental_service import FundamentalService
-        from django.core.cache import cache
+
+        fixed_symbol = cls._fix_symbol(symbol)
+        fetch_period = 'month' if period == 'year' else period
+        fetch_limit = limit * 12 if period == 'year' else limit
+        lower_symbol = fixed_symbol.lower()
+        url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={lower_symbol},{fetch_period},,,{fetch_limit},qfq"
+
+        resp = cls._session.get(url, timeout=8)
+        data_json = resp.json()
+        if data_json.get('code') != 0:
+            return []
+
+        data_res = data_json.get('data')
+        if not isinstance(data_res, dict):
+            logger.warning(f"Unexpected response format for {fixed_symbol}: {data_res}")
+            return []
+
+        stock_data = data_res.get(lower_symbol, {})
+        key = f"qfq{fetch_period}"
+        days = stock_data.get(key) or stock_data.get(fetch_period) or []
+
+        price_list = []
+        for day in days:
+            if len(day) >= 3:
+                price_list.append({'date': day[0], 'price': float(day[2])})
+        df_prices = pd.DataFrame(price_list)
+
+        df_fund = FundamentalService.get_ttm_fundamentals(fixed_symbol)
+        df_aligned = FundamentalService.align_to_prices(df_fund, df_prices, fixed_symbol)
+        df_divs = FundamentalService.get_historical_dividends(fixed_symbol)
+
+        rt = rt_data.get(fixed_symbol, {})
+        fallback = spot_fallback.get(fixed_symbol, {})
+        total_shares = rt.get('total_shares', 0) or fallback.get('total_shares', 0)
+        curr_pe = rt.get('pe', 0) or fallback.get('pe', 0)
+        curr_pb = rt.get('pb', 0) or fallback.get('pb', 0)
+        curr_price = rt.get('price', 0) or fallback.get('price', 0) or (price_list[-1]['price'] if price_list else 1)
+
+        if not df_fund.empty:
+            latest_f = df_fund.iloc[-1]
+            if (curr_pb <= 0 or total_shares <= 0) and latest_f['TOTAL_PARENT_EQUITY'] > 0:
+                if total_shares <= 0:
+                    market_cap = rt.get('market_cap', 0) or fallback.get('market_cap', 0)
+                    total_shares = market_cap / curr_price if curr_price > 0 and market_cap > 0 else 0
+
+                if total_shares > 0:
+                    curr_pb = (curr_price * total_shares) / latest_f['TOTAL_PARENT_EQUITY']
+                    curr_pe = (curr_price * total_shares) / latest_f['ttm_profit'] if latest_f['ttm_profit'] > 0 else 0
+
+        history = []
+        for _, row in df_aligned.iterrows():
+            price = row['price']
+            date_dt = pd.to_datetime(row['date'])
+            ttm_profit = row.get('ttm_profit', 0)
+            equity = row.get('TOTAL_PARENT_EQUITY', 0)
+
+            pe = (price * total_shares) / ttm_profit if ttm_profit and ttm_profit > 0 and total_shares > 0 else (curr_pe * (price / curr_price) if curr_price > 0 else 0)
+            pb = (price * total_shares) / equity if equity and equity > 0 and total_shares > 0 else (curr_pb * (price / curr_price) if curr_price > 0 else 0)
+
+            ltm_div_sum = FundamentalService.calculate_dividend_at_date(df_divs, date_dt)
+            dy = (ltm_div_sum / price) * 100 if price > 0 else 0
+
+            rt_dy = rt.get('dividend_yield', 0)
+            if dy <= 0 and rt_dy > 0 and (datetime.now() - date_dt).days <= 365:
+                dy = rt_dy
+
+            calc_roe = (pb / pe * 100) if pe > 0 else 0
+            if '002304' in fixed_symbol and calc_roe < 20:
+                calc_roe = 20
+            roi = calc_roe / pb if pb > 0 else 0
+
+            history.append({
+                'date': row['date'],
+                'price': round(price, 2),
+                'pe': round(pe, 2) if pe > 0 else 0,
+                'pb': round(pb, 2) if pb > 0 else 0,
+                'dividend_yield': round(dy, 2) if dy > 0 else 0,
+                'roi': round(roi, 2)
+            })
+
+        if requested_period == 'annual' and history:
+            annual_history = []
+            for item in history:
+                year = item['date'][:4]
+                if annual_history and annual_history[-1]['date'][:4] == year:
+                    annual_history[-1] = item
+                else:
+                    annual_history.append(item)
+            history = annual_history[-limit:]
+
+        return history
+
+    @classmethod
+    def get_historical_data(cls, symbols, limit=30, period='day'):
+        """获取历史 K 线并对齐真实财报指标 (TTM) - 带缓存"""
         requested_period = period
-        
-        # 映射周期标识 (支持 1d, 30d, 1y_week, 5y, 10y)
+
         period_map = {
             '1d': ('minute', 241),
             '30d': ('day', 30),
@@ -208,150 +313,55 @@ class PriceService:
             '10y': ('month', 120),
             'annual': ('year', limit)
         }
-        
+
         if period in period_map:
             p_type, p_limit = period_map[period]
-            # 如果是 1d 请求，直接走分流
             if p_type == 'minute':
                 return cls.get_intraday_data(symbols)
             period = p_type
             limit = p_limit
 
-        # 使用标准化后的符号作为缓存键的一部分，但保留原始输入用于返回
         norm_symbols = [cls._fix_symbol(s) for s in symbols]
-        cache_key = f"hist_v8_{'_'.join(sorted(norm_symbols))}_{requested_period}_{period}_{limit}"
-        
+        cache_key = f"hist_v9_{'_'.join(sorted(norm_symbols))}_{requested_period}_{period}_{limit}"
         cached_data = cls._cache_get(cache_key)
-        if cached_data:
+        if cached_data is not None:
             return cached_data
 
         rt_data = cls.get_realtime_price(norm_symbols)
         spot_fallback = cls._get_spot_snapshot_map(norm_symbols)
         results = {}
-        fetch_period = period
-        fetch_limit = limit
-        
-        # 修复腾讯 API 周期识别 (day -> day, month -> month, week -> week)
-        if period == 'year':
-            fetch_period = 'month'
-            fetch_limit = limit * 12
 
-        for idx, orig_symbol in enumerate(symbols):
-            # no sleep
+        for orig_symbol in symbols:
+            single_cache_key = cls._historical_single_cache_key(orig_symbol, requested_period, period, limit)
+            cached_history = cls._cache_get(single_cache_key)
+            if cached_history is not None:
+                cached_history = cls._normalize_historical_cache_value(cached_history)
+                results[orig_symbol] = cached_history
+                continue
+
             symbol = cls._fix_symbol(orig_symbol)
-            s = symbol.lower()
-            url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={s},{fetch_period},,,{fetch_limit},qfq"
             try:
-                resp = cls._session.get(url, timeout=8)
-                data_json = resp.json()
-                if data_json.get('code') != 0: continue
-                
-                data_res = data_json.get('data')
-                if not isinstance(data_res, dict):
-                    logger.warning(f"Unexpected response format for {symbol}: {data_res}")
-                    continue
-                    
-                stock_data = data_res.get(s, {})
-                key = f"qfq{fetch_period}"
-                days = stock_data.get(key) or stock_data.get(fetch_period) or []
-                
-                price_list = []
-                for d in days:
-                    if len(d) >= 3:
-                        price_list.append({'date': d[0], 'price': float(d[2])})
-                df_prices = pd.DataFrame(price_list)
-                
-                # 获取真实基本面数据
-                df_fund = FundamentalService.get_ttm_fundamentals(symbol)
-                df_aligned = FundamentalService.align_to_prices(df_fund, df_prices, symbol)
-                
-                # 获取分红数据
-                df_divs = FundamentalService.get_historical_dividends(symbol)
-                
-                rt = rt_data.get(symbol.upper(), {})
-                fallback = spot_fallback.get(symbol.upper(), {})
-                total_shares = rt.get('total_shares', 0) or fallback.get('total_shares', 0)
-                curr_pe = rt.get('pe', 0) or fallback.get('pe', 0)
-                curr_pb = rt.get('pb', 0) or fallback.get('pb', 0)
-                curr_price = rt.get('price', 0) or fallback.get('price', 0) or (price_list[-1]['price'] if price_list else 1)
-
-                # 关键修复 (V3.7)：如果实时 PE/PB 为 0，则基于最新财报手动反推
-                if not df_fund.empty:
-                    latest_f = df_fund.iloc[-1]
-                    if (curr_pb <= 0 or total_shares <= 0) and latest_f['TOTAL_PARENT_EQUITY'] > 0:
-                        # 重新校正 total_shares (如果从腾讯获取失败)
-                        if total_shares <= 0:
-                            market_cap = rt.get('market_cap', 0) or fallback.get('market_cap', 0)
-                            total_shares = market_cap / curr_price if curr_price > 0 and market_cap > 0 else 0
-                        
-                        # 手动计算
-                        if total_shares > 0:
-                            curr_pb = (curr_price * total_shares) / latest_f['TOTAL_PARENT_EQUITY']
-                            curr_pe = (curr_price * total_shares) / latest_f['ttm_profit'] if latest_f['ttm_profit'] > 0 else 0
-
-                history = []
-                for _, row in df_aligned.iterrows():
-                    price = row['price']
-                    date_dt = pd.to_datetime(row['date'])
-                    ttm_profit = row.get('ttm_profit', 0)
-                    equity = row.get('TOTAL_PARENT_EQUITY', 0)
-                    
-                    # 优先使用对齐后的历史财报数据计算
-                    if ttm_profit and ttm_profit > 0 and total_shares > 0:
-                        pe = (price * total_shares) / ttm_profit
-                    else:
-                        # 回退 logic: 历史 PE = 当前 PE * (历史价格 / 当前价格)
-                        pe = curr_pe * (price / curr_price) if curr_price > 0 else 0
-                    
-                    if equity and equity > 0 and total_shares > 0:
-                        pb = (price * total_shares) / equity
-                    else:
-                        # 回退 logic: 历史 PB = 当前 PB * (历史价格 / 当前价格)
-                        pb = curr_pb * (price / curr_price) if curr_price > 0 else 0
-                    
-                    # 恢复自建的高精度推算引擎，因为第三方(腾讯)真实数据为严重滞后的 1%
-                    ltm_div_sum = FundamentalService.calculate_dividend_at_date(df_divs, date_dt)
-                    dy = (ltm_div_sum / price) * 100 if price > 0 else 0
-                    
-                    # 鲁棒性补充：如果计算出的历史 DY 为 0，尝试回退到 Tencent 接口
-                    rt_dy = rt.get('dividend_yield', 0)
-                    if dy <= 0 and rt_dy > 0:
-                        if (datetime.now() - date_dt).days <= 365: dy = rt_dy
-
-                    # ROI = ROE / PB (Yanghe floor 20%)
-                    calc_roe = (pb / pe * 100) if pe > 0 else 0
-                    if '002304' in symbol and calc_roe < 20:
-                        calc_roe = 20
-                    roi = calc_roe / pb if pb > 0 else 0
-
-                    history.append({
-                        'date': row['date'],
-                        'price': round(price, 2),
-                        'pe': round(pe, 2) if pe > 0 else 0,
-                        'pb': round(pb, 2) if pb > 0 else 0,
-                        'dividend_yield': round(dy, 2) if dy > 0 else 0,
-                        'roi': round(roi, 2)
-                    })
-                
-                if requested_period == 'annual' and history:
-                    annual_history = []
-                    for h in history:
-                        year = h['date'][:4]
-                        if annual_history and annual_history[-1]['date'][:4] == year:
-                            annual_history[-1] = h
-                        else:
-                            annual_history.append(h)
-                    history = annual_history[-limit:]
-
-                # 返回时使用原始输入的 symbol 作为 key，确保前端 lookup 成功
+                history = cls._build_single_historical_data(
+                    symbol,
+                    requested_period,
+                    period,
+                    limit,
+                    rt_data,
+                    spot_fallback,
+                )
                 results[orig_symbol] = history
+                if history:
+                    single_ttl = 3600 * 12
+                    if period == 'day':
+                        single_ttl = 3600 * 2
+                    cls._cache_set(single_cache_key, history, single_ttl)
             except Exception as e:
                 logger.error(f"PriceService Valuation Error for {symbol}: {e}")
-        
+
         if results and len(results) == len(symbols):
-            # 历史数据变化极慢，缓存 12 小时；日线缓存 2 小时
             ttl = 3600 * 12
-            if period == 'day': ttl = 3600 * 2
+            if period == 'day':
+                ttl = 3600 * 2
             cls._cache_set(cache_key, results, ttl)
         return results
 

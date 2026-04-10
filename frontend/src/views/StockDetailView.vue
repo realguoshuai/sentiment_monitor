@@ -26,12 +26,12 @@
     </div>
 
     <!-- Loading -->
-    <div v-if="!stockData" class="text-center py-20">
+    <div v-if="pageLoading" class="text-center py-20">
       <div class="w-10 h-10 border-4 border-indigo-100 border-t-indigo-500 rounded-full animate-spin mx-auto mb-4"></div>
       <p class="text-slate-500 font-bold">加载中...</p>
     </div>
 
-    <template v-else>
+    <template v-else-if="stockData">
       <!-- Stats & Valuation Cards -->
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <!-- Sentiment Stats -->
@@ -129,12 +129,17 @@
         </div>
       </div>
     </template>
+
+    <div v-else class="text-center py-20 text-slate-500 font-bold">
+      未找到该股票的舆情数据
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { stockApi, type SentimentData } from '@/api'
 import { useSentimentStore } from '@/stores/sentiment'
 import ContentTabs from '@/components/ContentTabs.vue'
 import NewsItem from '@/components/NewsItem.vue'
@@ -146,8 +151,27 @@ const store = useSentimentStore()
 
 const symbol = route.params.symbol as string
 const activeTab = ref<'news' | 'reports' | 'announcements'>('news')
+const fallbackStockData = ref<SentimentData | null>(null)
+const pageLoading = ref(true)
 
-const stockData = computed(() => store.getStockBySymbol(symbol))
+const stockData = computed(() => store.getStockBySymbol(symbol) ?? fallbackStockData.value)
+
+onMounted(async () => {
+  try {
+    if (!store.getStockBySymbol(symbol)) {
+      const response = await stockApi.getSentimentBySymbol(symbol)
+      fallbackStockData.value = response.data
+    }
+
+    if (!store.realtimePrices[symbol]) {
+      await store.fetchRealtimePrices()
+    }
+  } catch (error) {
+    console.error('Failed to load stock detail:', error)
+  } finally {
+    pageLoading.value = false
+  }
+})
 
 const sentimentColor = computed(() => {
   if (!stockData.value) return ''
@@ -197,13 +221,11 @@ function goBack() {
   router.push('/')
 }
 
-// Valuation variables
 const rtPrice = computed(() => store.realtimePrices[symbol])
 
 const roeValue = computed(() => {
   if (!rtPrice.value || rtPrice.value.pe <= 0 || rtPrice.value.pb <= 0) return null
   let roe = rtPrice.value.pb / rtPrice.value.pe
-  // 洋河股份 ROE 不足 20% 时按 20% 计算
   const stockSymbol = route.params.symbol as string
   if (stockSymbol === 'SZ002304' && roe < 0.20) {
     roe = 0.20

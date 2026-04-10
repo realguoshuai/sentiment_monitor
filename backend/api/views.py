@@ -2,11 +2,11 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 from django.core.cache import cache
+from django.utils import timezone
 from datetime import datetime, timedelta
 import akshare as ak
 import pandas as pd
 import logging
-import time
 import json
 
 from .models import Stock, SentimentData, News, Report, Announcement
@@ -16,10 +16,16 @@ from .serializers import (
 )
 from collector.collector import run_collection
 import threading
+from .analysis_service import AnalysisService
+from .history_backtest_service import HistoryBacktestService
 from .price_service import PriceService
 from .fundamental_service import FundamentalService
 
 logger = logging.getLogger(__name__)
+
+COLLECTION_LOCK_KEY = 'manual_collection_lock'
+COLLECTION_STATUS_KEY = 'manual_collection_status'
+COLLECTION_LOCK_TTL = 60 * 30
 
 
 class StockViewSet(viewsets.ModelViewSet):
@@ -73,7 +79,7 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         """只返回最近30天的数据"""
         thirty_days_ago = datetime.now().date() - timedelta(days=30)
-        return SentimentData.objects.filter(date__gte=thirty_days_ago)
+        return SentimentData.objects.filter(date__gte=thirty_days_ago).select_related('stock')
     
     @action(detail=False, methods=['get'])
     def today(self, request):
@@ -91,8 +97,9 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(serializer.data)
     
     @action(detail=True, methods=['get'])
-    def get_announcements(self, request, symbol=None):
-        announcements = Announcement.objects.filter(stock__stock_symbol=symbol).order_by('-pub_date')[:20]
+    def get_announcements(self, request, **kwargs):
+        sentiment = self.get_object()
+        announcements = sentiment.announcements.order_by('-pub_date')[:20]
         serializer = AnnouncementSerializer(announcements, many=True)
         return Response(serializer.data)
     
@@ -167,36 +174,9 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
         symbol = request.GET.get('symbol')
         if not symbol:
             return Response({'error': '需要股票代码'}, status=400)
-            
+
         period = request.GET.get('period', '10y')
-        # 对 10 年期分位采用月线计算，确保 100% 成功率且提升计算性能
-        hist_data = PriceService.get_historical_data([symbol], limit=120, period='month')
-        stock_hist = hist_data.get(symbol, [])
-        
-        # 2. 计算分位
-        pe_p = FundamentalService.calculate_percentiles(stock_hist, 'pe')
-        pb_p = FundamentalService.calculate_percentiles(stock_hist, 'pb')
-        roi_p = FundamentalService.calculate_percentiles(stock_hist, 'roi')
-        dy_p = FundamentalService.calculate_percentiles(stock_hist, 'dividend_yield')
-        
-        # 3. 计算安全性评分 (F-Score)
-        f_score = FundamentalService.get_f_score(symbol)
-        
-        # 4. 获取预测指标
-        forward = FundamentalService.get_forward_metrics(symbol)
-        
-        return Response({
-            'symbol': symbol,
-            'percentiles': {
-                'pe': pe_p,
-                'pb': pb_p,
-                'roi': roi_p,
-                'dy': dy_p
-            },
-            'f_score': f_score,
-            'forward': forward,
-            'history': stock_hist # 返回完整历史用于多点绘图
-        })
+        return Response(AnalysisService.get_analysis(symbol, period))
 
 
 @api_view(['GET'])
@@ -264,18 +244,52 @@ def get_quality_analysis(request):
         return Response({'error': str(e)}, status=500)
 
 
+@api_view(['GET'])
+def get_history_backtest(request):
+    symbol = request.GET.get('symbol', '').strip().upper()
+    if not symbol:
+        return Response({'error': 'No symbol provided'}, status=400)
+
+    try:
+        return Response(HistoryBacktestService.get_history_backtest(symbol))
+    except Exception as e:
+        logger.error(f"History Backtest Error for {symbol}: {e}")
+        return Response({'error': str(e)}, status=500)
+
+
 @api_view(['POST'])
 def trigger_collection(request):
     """手动触发数据采集 (异步执行)"""
+    if not cache.add(COLLECTION_LOCK_KEY, True, COLLECTION_LOCK_TTL):
+        return Response(
+            {'status': 'running', 'message': '数据采集任务正在运行'},
+            status=status.HTTP_409_CONFLICT
+        )
+
+    cache.set(COLLECTION_STATUS_KEY, {
+        'status': 'running',
+        'started_at': timezone.now().isoformat(),
+    }, COLLECTION_LOCK_TTL)
+
     def task():
         try:
             run_collection()
+            cache.set(COLLECTION_STATUS_KEY, {
+                'status': 'completed',
+                'finished_at': timezone.now().isoformat(),
+            }, 300)
             print("[API] Manual collection completed successfully.")
         except Exception as e:
+            cache.set(COLLECTION_STATUS_KEY, {
+                'status': 'failed',
+                'finished_at': timezone.now().isoformat(),
+                'error': str(e),
+            }, 300)
             print(f"[API] Manual collection failed: {str(e)}")
+        finally:
+            cache.delete(COLLECTION_LOCK_KEY)
 
-    # 使用线程异步执行，避免 API 超时
-    thread = threading.Thread(target=task)
+    thread = threading.Thread(target=task, daemon=True)
     thread.start()
     
     return Response({'status': 'started', 'message': '数据采集任务已在后台启动'})

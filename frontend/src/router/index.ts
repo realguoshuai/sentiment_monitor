@@ -28,6 +28,12 @@ const router = createRouter({
       props: true
     },
     {
+      path: '/analysis/:symbol/history',
+      name: 'history-backtest',
+      component: () => import('@/views/HistoryBacktestView.vue'),
+      props: true
+    },
+    {
       path: '/quality/:symbol',
       name: 'quality-analysis',
       component: () => import('@/views/QualityView.vue'),
