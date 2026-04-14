@@ -1,3 +1,6 @@
+﻿from bootstrap_django import setup_django
+setup_django()
+
 #!/usr/bin/env python3
 """
 Django Database Initialization Script
@@ -17,24 +20,24 @@ from api.models import Stock
 # Stock list to monitor
 STOCKS = [
     {
-        "name": "东阿阿胶",
+        "name": "涓滈樋闃胯兌",
         "symbol": "SZ000423",
-        "keywords": ["东阿阿胶", "阿胶", "滋补"]
+        "keywords": ["涓滈樋闃胯兌", "闃胯兌", "婊嬭ˉ"]
     },
     {
-        "name": "洋河股份",
+        "name": "娲嬫渤鑲′唤",
         "symbol": "SZ002304",
-        "keywords": ["洋河", "白酒", "蓝色经典"]
+        "keywords": ["娲嬫渤", "鐧介厭", "钃濊壊缁忓吀"]
     },
     {
-        "name": "贵州茅台",
+        "name": "璐靛窞鑼呭彴",
         "symbol": "SH600519",
-        "keywords": ["茅台", "白酒", "高端消费"]
+        "keywords": ["鑼呭彴", "鐧介厭", "楂樼娑堣垂"]
     },
     {
-        "name": "格力电器",
+        "name": "鏍煎姏鐢靛櫒",
         "symbol": "SZ000651",
-        "keywords": ["格力", "空调", "家电"]
+        "keywords": ["鏍煎姏", "绌鸿皟", "瀹剁數"]
     }
 ]
 
@@ -77,3 +80,4 @@ def init_stocks():
 
 if __name__ == "__main__":
     init_stocks()
+

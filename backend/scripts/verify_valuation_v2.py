@@ -1,3 +1,6 @@
+﻿from bootstrap_django import setup_django
+setup_django()
+
 import os, sys, django
 sys.path.append(os.getcwd())
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'sentiment_monitor.settings')
@@ -29,3 +32,4 @@ def verify_stock(symbol):
 
 if __name__ == "__main__":
     verify_stock('SZ002304')
+

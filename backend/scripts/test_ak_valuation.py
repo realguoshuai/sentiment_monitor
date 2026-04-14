@@ -1,3 +1,6 @@
+﻿from bootstrap_django import setup_backend_path
+setup_backend_path()
+
 import requests
 import re
 import akshare as ak
@@ -28,8 +31,7 @@ def test_valuation(symbol):
     pe_rt = float(fields[39])
     pb_rt = float(fields[46])
     price_rt = float(fields[3])
-    market_cap_rt = float(fields[45]) * 1e8 # 亿
-    
+    market_cap_rt = float(fields[45]) * 1e8 # 浜?    
     print(f"--- {symbol} ---")
     print(f"Price: {price_rt}")
     print(f"RT PE: {pe_rt}")
@@ -53,3 +55,4 @@ def test_valuation(symbol):
     
 test_valuation("SZ000423") # Donge
 test_valuation("SZ002304") # Yanghe
+

@@ -1,19 +1,62 @@
 import axios from 'axios'
 
-// 动态获取 API 基础路径
-// 1. 优先使用环境变量 (生产环境建议)
-// 2. 如果是本地开发 (localhost)，指向 127.0.0.1:8000
-// 3. 如果是部署到服务器，自动指向当前服务器 IP 的 8000 端口
+/**
+ * 动态获取 API 基础路径
+ * 优先级: 环境变量 > 自动探测 (本地 vs 远程)
+ */
+const getBaseURL = () => {
+  // 1. 优先使用环境变量 (支持 Vite)
+  const envBase = import.meta.env.VITE_API_BASE_URL
+  if (envBase) return envBase
 
-const getBaseURL = () => '/api'
+  // 2. 自动探测逻辑
+  if (typeof window !== 'undefined') {
+    const { hostname, protocol } = window.location
+    // 如果是开发环境或本地访问，指向开发服务器
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return 'http://127.0.0.1:8000/api'
+    }
+    // 生产环境自动指向当前域名的 /api 路径
+    return `${protocol}//${hostname}${window.location.port ? ':' + window.location.port : ''}/api`
+  }
+  return '/api'
+}
 
 const api = axios.create({
   baseURL: getBaseURL(),
-  timeout: 15000, // 深度分析耗时较长，增加超时时间到 15s
+  timeout: 15000, // 深度分析耗时较长，增加超时时间
   headers: {
     'Content-Type': 'application/json',
   },
 })
+
+// --- 全局拦截器 ---
+
+// 请求拦截器
+api.interceptors.request.use(
+  (config) => {
+    // 可以在此处添加通用 Auth Header 或全局 Loading 状态
+    return config
+  },
+  (error) => {
+    return Promise.reject(error)
+  }
+)
+
+// 响应拦截器
+api.interceptors.response.use(
+  (response) => {
+    return response
+  },
+  (error) => {
+    // 统一处理后端错误响应
+    const message = error.response?.data?.message || error.message || '网络请求故障'
+    console.error(`[API Error] ${error.config?.url}:`, message)
+    
+    // 可以在此处集成 UI 通知库 (如 message.error)
+    return Promise.reject(error)
+  }
+)
 
 // Types
 export interface Stock {
@@ -89,7 +132,7 @@ export const stockApi = {
   getComparisonHistorical: (symbols: string[], limit: number = 30, period: string = 'day') =>
     api.get<Record<string, any[]>>(`/sentiment/comparison_historical/?symbols=${symbols.join(',')}&limit=${limit}&period=${period}`),
   searchStocks: (q: string) => api.get<any[]>('/sentiment/search/', { params: { q } }),
-  getAnalysis: (symbol: string) => api.get<any>(`/stocks/analysis/?symbol=${symbol}`),
+  getAnalysis: (symbol: string) => api.get<any>(`/sentiment/analysis/?symbol=${symbol}`),
   getHistoryBacktest: (symbol: string) => api.get<any>(`/sentiment/history-backtest/?symbol=${symbol}`),
   getQualityAnalysis: (symbol: string) => api.get<any>(`/sentiment/quality/?symbol=${symbol}`),
 }

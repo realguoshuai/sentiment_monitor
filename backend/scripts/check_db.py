@@ -1,3 +1,6 @@
+﻿from bootstrap_django import setup_django
+setup_django()
+
 import os
 import django
 
@@ -17,3 +20,4 @@ for stock in Stock.objects.all():
         print(f"{stock.name}: {sd.date} (News: {sd.news_count}, Reports: {sd.report_count})")
     else:
         print(f"{stock.name}: NO DATA")
+

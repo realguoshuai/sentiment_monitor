@@ -8,43 +8,21 @@ from datetime import datetime
 
 from django.core.cache import cache
 
+from .utils import format_symbol
+from .cache_manager import CacheManager
+
 logger = logging.getLogger(__name__)
 
 class FundamentalService:
     @staticmethod
     def _cache_get(key):
-        try:
-            val = cache.get(key)
-            if isinstance(val, list):
-                # 如果是列表，说明是 Safe-Cache 存入的字典序列，恢复为 DataFrame
-                df = pd.DataFrame(val)
-                # 恢复关键日期列
-                for col in ['REPORT_DATE', 'NOTICE_DATE', 'ann_date', 'date_dt']:
-                    if col in df.columns:
-                        df[col] = pd.to_datetime(df[col])
-                return df
-            return val
-        except Exception as e:
-            logger.warning(f"Cache unpickle failed for {key}, deleting: {e}")
-            cache.delete(key) # 发现有毒缓存，直接物理删除
-            return None
+        """委托给 CacheManager (保留接口兼容性)"""
+        return CacheManager.get_df(key)
 
     @staticmethod
     def _cache_set(key, value, ttl):
-        """
-        真・安全缓存机制：
-        通过 JSON 序列化对 DataFrame 进行“脱水”，彻底移除 NaT, Timestamp 等
-        会导致分布式/跨版本 Pickle 崩溃的 Pandas 特有对象。
-        """
-        try:
-            if isinstance(value, pd.DataFrame):
-                # 使用 JSON 往返消除所有 Numpy/Pandas 特有二进制结构
-                # date_format='iso' 会自动将 NaT 转换为 null (None)
-                json_str = value.to_json(orient='records', date_format='iso')
-                value = json.loads(json_str)
-            cache.set(key, value, ttl)
-        except Exception as e:
-            logger.warning(f"Cache set failed for {key}: {e}")
+        """委托给 CacheManager (保留接口兼容性)"""
+        CacheManager.set_df(key, value, ttl)
 
     @classmethod
     def get_ttm_fundamentals(cls, symbol):
@@ -205,10 +183,249 @@ class FundamentalService:
             return pd.DataFrame()
 
     @classmethod
-    def get_quality_data(cls, symbol):
-        """获取近10年高质量基本面数据 (杜邦因子+护城河+派息)"""
+    def get_yearly_cashflow(cls, symbol):
+        """获取年度现金流数据 (含 24h 缓存)"""
         symbol = cls._fix_symbol(symbol)
-        cache_key = f"quality_v7_{symbol}"
+        cache_key = f"cashflow_yearly_v1_{symbol}"
+        cached_df = cls._cache_get(cache_key)
+        if cached_df is not None:
+            return cached_df
+
+        fetchers = [
+            getattr(ak, 'stock_cash_flow_sheet_by_yearly_em', None),
+            getattr(ak, 'stock_cash_flow_sheet_by_report_em', None),
+        ]
+        for fetcher in fetchers:
+            if fetcher is None:
+                continue
+            fetcher_name = getattr(fetcher, '__name__', '')
+            try:
+                df_cash = fetcher(symbol=symbol)
+                if df_cash is None or df_cash.empty:
+                    continue
+                if 'REPORT_DATE' in df_cash.columns:
+                    df_cash['REPORT_DATE'] = pd.to_datetime(df_cash['REPORT_DATE'], errors='coerce')
+                    df_cash = df_cash.dropna(subset=['REPORT_DATE']).sort_values('REPORT_DATE')
+                    if fetcher_name.endswith('_report_em'):
+                        df_cash = df_cash[df_cash['REPORT_DATE'].dt.month == 12]
+                cls._cache_set(cache_key, df_cash, 24 * 3600)
+                return df_cash
+            except Exception as e:
+                logger.warning(f"Yearly cashflow fetch failed for {symbol} via {fetcher_name or 'unknown'}: {e}")
+
+        return pd.DataFrame()
+
+    @staticmethod
+    def _first_existing_column(df, candidates):
+        for column in candidates:
+            if column in df.columns:
+                return column
+        return None
+
+    @classmethod
+    def _extract_cashflow_metrics(cls, df_cash):
+        if df_cash is None or df_cash.empty:
+            return pd.DataFrame(columns=['REPORT_DATE', 'cfo', 'capex']), 'unavailable'
+
+        working = df_cash.copy()
+        cfo_column = cls._first_existing_column(
+            working,
+            ['NETCASH_OPERATE', '经营活动产生的现金流量净额']
+        )
+        capex_column = cls._first_existing_column(
+            working,
+            [
+                'CONSTRUCT_LONG_ASSET',
+                'FIXED_ASSET_OTHER_LONG_ASSET_PAY',
+                'CONSTRUCT_FIX_INTANGIBLE_OTHER_LONG_ASSET_PAY',
+                'PURCHASE_FIX_INTAN_OTHER_LONG_ASSET',
+                '购建固定资产、无形资产和其他长期资产支付的现金',
+                '购建固定资产无形资产和其他长期资产支付的现金',
+                '购建固定资产、无形资产及其他长期资产支付的现金',
+            ]
+        )
+        invest_column = cls._first_existing_column(
+            working,
+            [
+                'NETCASH_INVEST',
+                'INVEST_NET_CASHFLOW',
+                'INVEST_NETCASHFLOW',
+                '投资活动产生的现金流量净额',
+            ]
+        )
+
+        if cfo_column:
+            working['cfo'] = pd.to_numeric(working[cfo_column], errors='coerce').fillna(0)
+        else:
+            working['cfo'] = 0.0
+
+        capex_source = 'unavailable'
+        if capex_column:
+            working['capex'] = pd.to_numeric(working[capex_column], errors='coerce').fillna(0).abs()
+            capex_source = capex_column
+        elif invest_column:
+            invest_series = pd.to_numeric(working[invest_column], errors='coerce').fillna(0)
+            working['capex'] = invest_series.apply(lambda x: abs(x) if x < 0 else 0.0)
+            capex_source = f'{invest_column}:fallback'
+        else:
+            working['capex'] = 0.0
+
+        return working[['REPORT_DATE', 'cfo', 'capex']], capex_source
+
+    @staticmethod
+    def _safe_ratio(numerator, denominator):
+        if denominator and denominator > 0:
+            return numerator / denominator
+        return 0.0
+
+    @staticmethod
+    def _classify_cashflow_quality(cfo_to_profit_pct, fcf_to_profit_pct):
+        if cfo_to_profit_pct >= 100 and fcf_to_profit_pct >= 60:
+            return '强'
+        if cfo_to_profit_pct >= 80 and fcf_to_profit_pct >= 30:
+            return '中'
+        return '弱'
+
+    @classmethod
+    def _extract_capital_structure_metrics(cls, df_balance):
+        columns = ['REPORT_DATE', 'cash_balance', 'interest_bearing_debt', 'invested_capital']
+        if df_balance is None or df_balance.empty:
+            return pd.DataFrame(columns=columns), 'equity_only'
+
+        working = df_balance.copy()
+        cash_column = cls._first_existing_column(
+            working,
+            ['MONETARYFUNDS', 'MONETARY_CAP', 'CASH_AND_CASH_EQUIV']
+        )
+        debt_columns = [
+            column for column in [
+                'SHORT_LOAN',
+                'NONCURRENT_LIAB_DUE_WITHIN_1Y',
+                'LONG_LOAN',
+                'BOND_PAYABLE',
+                'LONG_PAYABLE',
+            ]
+            if column in working.columns
+        ]
+
+        if cash_column:
+            working['cash_balance'] = pd.to_numeric(working[cash_column], errors='coerce').fillna(0)
+        else:
+            working['cash_balance'] = 0.0
+
+        debt_series = pd.Series(0.0, index=working.index, dtype='float64')
+        for column in debt_columns:
+            debt_series = debt_series.add(
+                pd.to_numeric(working[column], errors='coerce').fillna(0),
+                fill_value=0,
+            )
+        working['interest_bearing_debt'] = debt_series
+
+        equity_series = pd.to_numeric(working['TOTAL_PARENT_EQUITY'], errors='coerce').fillna(0)
+        working['invested_capital'] = (
+            equity_series + working['interest_bearing_debt'] - working['cash_balance']
+        ).clip(lower=0)
+
+        source = 'equity_only'
+        if debt_columns or cash_column:
+            source = 'equity_debt_cash_proxy'
+
+        return working[columns], source
+
+    @staticmethod
+    def _classify_financing_signal(share_change_pct):
+        if share_change_pct <= -1.5:
+            return '回购/缩股'
+        if share_change_pct >= 3:
+            return '再融资/摊薄'
+        return '股本稳定'
+
+    @staticmethod
+    def _classify_capital_allocation(roic_proxy_pct, bvps_growth_pct, share_change_pct, payout_ratio):
+        if roic_proxy_pct >= 12 and bvps_growth_pct >= 8 and share_change_pct <= 1:
+            return '高质量复投'
+        if share_change_pct >= 3 and bvps_growth_pct <= 5:
+            return '摊薄扩张'
+        if payout_ratio >= 60 and bvps_growth_pct < 8:
+            return '分红兑现'
+        return '均衡配置'
+
+    @staticmethod
+    def _series_volatility(series):
+        clean = pd.to_numeric(pd.Series(series), errors='coerce').dropna()
+        if len(clean) <= 1:
+            return 0.0
+        return float(clean.std(ddof=0))
+
+    @staticmethod
+    def _series_range(series):
+        clean = pd.to_numeric(pd.Series(series), errors='coerce').dropna()
+        if clean.empty:
+            return 0.0
+        return float(clean.max() - clean.min())
+
+    @staticmethod
+    def _classify_margin_stability(gross_margin_volatility_pct, net_margin_volatility_pct):
+        worst = max(gross_margin_volatility_pct, net_margin_volatility_pct)
+        if worst <= 3:
+            return '高稳定'
+        if worst <= 6:
+            return '中等波动'
+        return '高波动'
+
+    @staticmethod
+    def _classify_return_stability(roe_volatility_pct, roic_proxy_volatility_pct):
+        worst = max(roe_volatility_pct, roic_proxy_volatility_pct)
+        if worst <= 4:
+            return '高稳定'
+        if worst <= 8:
+            return '中等波动'
+        return '高波动'
+
+    @staticmethod
+    def _classify_moat_strength(avg_gross_margin_pct, gross_margin_volatility_pct, net_margin_volatility_pct):
+        if avg_gross_margin_pct >= 45 and gross_margin_volatility_pct <= 4 and net_margin_volatility_pct <= 3:
+            return '宽护城河'
+        if avg_gross_margin_pct >= 30 and gross_margin_volatility_pct <= 7 and net_margin_volatility_pct <= 5:
+            return '中等护城河'
+        return '待验证'
+
+    @staticmethod
+    def _classify_cyclicality(
+        revenue_growth_volatility_pct,
+        negative_growth_years,
+        roe_volatility_pct,
+        gross_margin_range_pct,
+    ):
+        score = 0
+        if revenue_growth_volatility_pct >= 15:
+            score += 1
+        if negative_growth_years >= 2:
+            score += 1
+        if roe_volatility_pct >= 8:
+            score += 1
+        if gross_margin_range_pct >= 10:
+            score += 1
+
+        if score >= 3:
+            return '强周期'
+        if score >= 2:
+            return '中周期'
+        return '弱周期'
+
+    @staticmethod
+    def _classify_operating_stability(margin_stability_label, return_stability_label, cyclical_label):
+        if cyclical_label == '弱周期' and margin_stability_label == '高稳定' and return_stability_label != '高波动':
+            return '经营稳健'
+        if cyclical_label == '强周期' or return_stability_label == '高波动':
+            return '波动明显'
+        return '中性'
+
+    @classmethod
+    def get_quality_data(cls, symbol):
+        """获取近10年高质量基本面数据 (杜邦因子+护城河+派息+现金流质量)"""
+        symbol = cls._fix_symbol(symbol)
+        cache_key = f"quality_v10_{symbol}"
         # 直接使用 cache.get 避免 _cache_get 的自动 DataFrame 转换
         cached_data = cache.get(cache_key)
         if cached_data is not None:
@@ -226,14 +443,25 @@ class FundamentalService:
             df_balance['REPORT_DATE'] = pd.to_datetime(df_balance['REPORT_DATE'])
             df_balance = df_balance[df_balance['REPORT_DATE'].dt.month == 12]
 
+            # 2.1 获取年度现金流数据
+            df_cash = cls.get_yearly_cashflow(symbol)
+            cashflow_metrics, capex_source = cls._extract_cashflow_metrics(df_cash)
+            capital_structure_metrics, invested_capital_source = cls._extract_capital_structure_metrics(df_balance)
+
             # 3. 合并表
             df = pd.merge(
                 df_profit[['REPORT_DATE', 'TOTAL_OPERATE_INCOME', 'PARENT_NETPROFIT', 'OPERATE_COST', 'BASIC_EPS']],
                 df_balance[['REPORT_DATE', 'TOTAL_ASSETS', 'TOTAL_PARENT_EQUITY']],
                 on='REPORT_DATE', how='inner'
             )
+            df = pd.merge(df, cashflow_metrics, on='REPORT_DATE', how='left')
+            df = pd.merge(df, capital_structure_metrics, on='REPORT_DATE', how='left')
 
-            for col in ['TOTAL_OPERATE_INCOME', 'PARENT_NETPROFIT', 'OPERATE_COST', 'TOTAL_ASSETS', 'TOTAL_PARENT_EQUITY', 'BASIC_EPS']:
+            for col in [
+                'TOTAL_OPERATE_INCOME', 'PARENT_NETPROFIT', 'OPERATE_COST', 'TOTAL_ASSETS',
+                'TOTAL_PARENT_EQUITY', 'BASIC_EPS', 'cfo', 'capex', 'cash_balance',
+                'interest_bearing_debt', 'invested_capital',
+            ]:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
             # 4. 计算杜邦与利润指标
@@ -242,6 +470,19 @@ class FundamentalService:
             df['equity_multiplier'] = df.apply(lambda r: r['TOTAL_ASSETS'] / r['TOTAL_PARENT_EQUITY'] if r['TOTAL_PARENT_EQUITY'] > 0 else 0, axis=1)
             df['gross_margin'] = df.apply(lambda r: ((r['TOTAL_OPERATE_INCOME'] - r['OPERATE_COST']) / r['TOTAL_OPERATE_INCOME']) * 100 if r['TOTAL_OPERATE_INCOME'] > 0 else 0, axis=1)
             df['roe'] = df['net_margin'] * df['asset_turnover'] * df['equity_multiplier']
+            df['fcf'] = df['cfo'] - df['capex']
+            df['cfo_to_profit_pct'] = df.apply(
+                lambda r: cls._safe_ratio(r['cfo'], r['PARENT_NETPROFIT']) * 100,
+                axis=1,
+            )
+            df['fcf_to_profit_pct'] = df.apply(
+                lambda r: cls._safe_ratio(r['fcf'], r['PARENT_NETPROFIT']) * 100,
+                axis=1,
+            )
+            df['capex_intensity_pct'] = df.apply(
+                lambda r: cls._safe_ratio(r['capex'], r['TOTAL_OPERATE_INCOME']) * 100,
+                axis=1,
+            )
 
             # 5. 计算分红与派息率
             df_div = cls.get_historical_dividends(symbol)
@@ -260,20 +501,168 @@ class FundamentalService:
 
             df['dps'] = df.apply(lambda r: div_by_year.get(r['REPORT_DATE'].year + 1, div_by_year.get(r['REPORT_DATE'].year, 0)), axis=1)
             df['payout_ratio'] = df.apply(get_payout_ratio, axis=1)
+            df['revenue_growth_pct'] = (
+                df['TOTAL_OPERATE_INCOME'].replace(0, pd.NA).pct_change().fillna(0) * 100
+            )
+            df['retention_ratio_pct'] = 100 - df['payout_ratio']
+            df['reinvestment_rate_pct'] = df.apply(
+                lambda r: cls._safe_ratio(r['capex'], r['cfo']) * 100,
+                axis=1,
+            )
+            df['implied_share_count'] = df.apply(
+                lambda r: cls._safe_ratio(r['PARENT_NETPROFIT'], r['BASIC_EPS']) if r['BASIC_EPS'] > 0 else 0,
+                axis=1,
+            )
+            df['book_value_per_share'] = df.apply(
+                lambda r: cls._safe_ratio(r['TOTAL_PARENT_EQUITY'], r['implied_share_count']),
+                axis=1,
+            )
+            df['share_change_pct'] = (
+                df['implied_share_count'].replace(0, pd.NA).pct_change().fillna(0) * 100
+            )
+            df['book_value_per_share_growth_pct'] = (
+                df['book_value_per_share'].replace(0, pd.NA).pct_change().fillna(0) * 100
+            )
+            df['equity_growth_pct'] = (
+                df['TOTAL_PARENT_EQUITY'].replace(0, pd.NA).pct_change().fillna(0) * 100
+            )
+            previous_invested_capital = df['invested_capital'].shift(1)
+            df['avg_invested_capital'] = df.apply(
+                lambda r: (
+                    r['invested_capital'] + (
+                        previous_invested_capital.loc[r.name]
+                        if pd.notnull(previous_invested_capital.loc[r.name])
+                        else r['invested_capital']
+                    )
+                ) / 2,
+                axis=1,
+            )
+            df['roic_proxy_pct'] = df.apply(
+                lambda r: cls._safe_ratio(r['PARENT_NETPROFIT'], r['avg_invested_capital']) * 100,
+                axis=1,
+            )
             df['year'] = df['REPORT_DATE'].dt.year
             df['date'] = df['REPORT_DATE'].dt.strftime('%Y-%m-%d')
 
             # 选取最近10年
             df = df.sort_values('REPORT_DATE').tail(10)
 
-            # 整理返回格式
-            records = df[['date', 'year', 'TOTAL_OPERATE_INCOME', 'PARENT_NETPROFIT', 'net_margin', 'asset_turnover', 'equity_multiplier', 'roe', 'gross_margin', 'BASIC_EPS', 'dps', 'payout_ratio']].to_dict(orient='records')
-            
-            cls._cache_set(cache_key, records, 12 * 3600)
-            return records
+            stability_window = df.tail(5)
+            latest = df.iloc[-1] if not df.empty else None
+            latest_market_cap = 0.0
+            if latest is not None:
+                try:
+                    from .price_service import PriceService
+                    rt_map = PriceService.get_realtime_price([symbol], fetch_fundamentals=False)
+                    latest_market_cap = float((rt_map.get(symbol) or {}).get('market_cap', 0) or 0)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch market cap for quality summary {symbol}: {e}")
+
+            latest_fcf = float(latest['fcf']) if latest is not None else 0.0
+            latest_fcf_yield_pct = cls._safe_ratio(latest_fcf, latest_market_cap) * 100 if latest_market_cap > 0 else 0.0
+            summary = {
+                'latest_cfo': round(float(latest['cfo']) if latest is not None else 0, 2),
+                'latest_fcf': round(latest_fcf, 2),
+                'latest_cfo_to_profit_pct': round(float(latest['cfo_to_profit_pct']) if latest is not None else 0, 2),
+                'latest_fcf_to_profit_pct': round(float(latest['fcf_to_profit_pct']) if latest is not None else 0, 2),
+                'latest_capex_intensity_pct': round(float(latest['capex_intensity_pct']) if latest is not None else 0, 2),
+                'latest_fcf_yield_pct': round(latest_fcf_yield_pct, 2),
+                'cashflow_quality_label': cls._classify_cashflow_quality(
+                    float(latest['cfo_to_profit_pct']) if latest is not None else 0,
+                    float(latest['fcf_to_profit_pct']) if latest is not None else 0,
+                ),
+                'capex_source': capex_source,
+            }
+            capital_allocation_summary = {
+                'latest_roic_proxy_pct': round(float(latest['roic_proxy_pct']) if latest is not None else 0, 2),
+                'latest_reinvestment_rate_pct': round(float(latest['reinvestment_rate_pct']) if latest is not None else 0, 2),
+                'latest_retention_ratio_pct': round(float(latest['retention_ratio_pct']) if latest is not None else 0, 2),
+                'latest_share_change_pct': round(float(latest['share_change_pct']) if latest is not None else 0, 2),
+                'latest_book_value_per_share': round(float(latest['book_value_per_share']) if latest is not None else 0, 2),
+                'latest_book_value_per_share_growth_pct': round(float(latest['book_value_per_share_growth_pct']) if latest is not None else 0, 2),
+                'latest_equity_growth_pct': round(float(latest['equity_growth_pct']) if latest is not None else 0, 2),
+                'capital_allocation_label': cls._classify_capital_allocation(
+                    float(latest['roic_proxy_pct']) if latest is not None else 0,
+                    float(latest['book_value_per_share_growth_pct']) if latest is not None else 0,
+                    float(latest['share_change_pct']) if latest is not None else 0,
+                    float(latest['payout_ratio']) if latest is not None else 0,
+                ),
+                'financing_signal': cls._classify_financing_signal(
+                    float(latest['share_change_pct']) if latest is not None else 0,
+                ),
+                'invested_capital_source': invested_capital_source,
+            }
+            gross_margin_volatility_pct = cls._series_volatility(stability_window['gross_margin'])
+            net_margin_volatility_pct = cls._series_volatility(stability_window['net_margin'])
+            roe_volatility_pct = cls._series_volatility(stability_window['roe'])
+            roic_proxy_volatility_pct = cls._series_volatility(stability_window['roic_proxy_pct'])
+            revenue_growth_volatility_pct = cls._series_volatility(stability_window['revenue_growth_pct'])
+            gross_margin_range_pct = cls._series_range(stability_window['gross_margin'])
+            negative_growth_years = int((stability_window['revenue_growth_pct'] < 0).sum())
+            margin_stability_label = cls._classify_margin_stability(
+                gross_margin_volatility_pct,
+                net_margin_volatility_pct,
+            )
+            return_stability_label = cls._classify_return_stability(
+                roe_volatility_pct,
+                roic_proxy_volatility_pct,
+            )
+            cyclical_label = cls._classify_cyclicality(
+                revenue_growth_volatility_pct,
+                negative_growth_years,
+                roe_volatility_pct,
+                gross_margin_range_pct,
+            )
+            stability_summary = {
+                'window_years': int(len(stability_window)),
+                'gross_margin_volatility_pct': round(gross_margin_volatility_pct, 2),
+                'net_margin_volatility_pct': round(net_margin_volatility_pct, 2),
+                'roe_volatility_pct': round(roe_volatility_pct, 2),
+                'roic_proxy_volatility_pct': round(roic_proxy_volatility_pct, 2),
+                'revenue_growth_volatility_pct': round(revenue_growth_volatility_pct, 2),
+                'gross_margin_range_pct': round(gross_margin_range_pct, 2),
+                'negative_growth_years': negative_growth_years,
+                'margin_stability_label': margin_stability_label,
+                'return_stability_label': return_stability_label,
+                'moat_label': cls._classify_moat_strength(
+                    float(stability_window['gross_margin'].mean()) if not stability_window.empty else 0,
+                    gross_margin_volatility_pct,
+                    net_margin_volatility_pct,
+                ),
+                'cyclical_label': cyclical_label,
+                'operating_stability_label': cls._classify_operating_stability(
+                    margin_stability_label,
+                    return_stability_label,
+                    cyclical_label,
+                ),
+            }
+
+            records = df[
+                [
+                    'date', 'year', 'TOTAL_OPERATE_INCOME', 'PARENT_NETPROFIT',
+                    'net_margin', 'asset_turnover', 'equity_multiplier', 'roe',
+                    'gross_margin', 'BASIC_EPS', 'dps', 'payout_ratio',
+                    'cfo', 'capex', 'fcf', 'cfo_to_profit_pct', 'fcf_to_profit_pct',
+                    'capex_intensity_pct', 'retention_ratio_pct', 'reinvestment_rate_pct',
+                    'revenue_growth_pct',
+                    'cash_balance', 'interest_bearing_debt', 'invested_capital',
+                    'roic_proxy_pct', 'implied_share_count', 'share_change_pct',
+                    'book_value_per_share', 'book_value_per_share_growth_pct',
+                    'equity_growth_pct',
+                ]
+            ].round(4).to_dict(orient='records')
+
+            payload = {
+                'history': records,
+                'cashflow_summary': summary,
+                'capital_allocation_summary': capital_allocation_summary,
+                'stability_summary': stability_summary,
+            }
+            cls._cache_set(cache_key, payload, 12 * 3600)
+            return payload
         except Exception as e:
             logger.error(f"Failed to fetch quality data for {symbol}: {e}")
-            return []
+            return {'history': [], 'cashflow_summary': {}, 'capital_allocation_summary': {}, 'stability_summary': {}}
 
     @classmethod
     def calculate_dividend_at_date(cls, df_divs, date_dt):
@@ -481,14 +870,8 @@ class FundamentalService:
 
     @staticmethod
     def _fix_symbol(symbol):
-        """工具方法：补全市场前缀"""
-        if re.match(r'^(SH|SZ|sh|sz)\d{6}$', symbol):
-            return symbol.upper()
-        if re.match(r'^\d{6}$', symbol):
-            if symbol.startswith('6'):
-                return f"SH{symbol}"
-            return f"SZ{symbol}"
-        return symbol
+        """工具方法：补全市场前缀 (委托给 format_symbol)"""
+        return format_symbol(symbol)
 
     @classmethod
     def _save_snapshot(cls, symbol, df_fund):

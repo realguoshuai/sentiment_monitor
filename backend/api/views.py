@@ -237,7 +237,10 @@ def get_quality_analysis(request):
         
         return Response({
             'symbol': symbol,
-            'quality_history': quality_data
+            'quality_history': quality_data.get('history', []),
+            'cashflow_summary': quality_data.get('cashflow_summary', {}),
+            'capital_allocation_summary': quality_data.get('capital_allocation_summary', {}),
+            'stability_summary': quality_data.get('stability_summary', {}),
         })
     except Exception as e:
         logger.error(f"Quality Analysis Error for {symbol}: {e}")

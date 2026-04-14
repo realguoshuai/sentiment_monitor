@@ -1,3 +1,6 @@
+﻿from bootstrap_django import setup_django
+setup_django()
+
 import os, sys, django
 sys.path.append(os.getcwd())
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'sentiment_monitor.settings')
@@ -30,3 +33,4 @@ def verify(symbols):
             print(f"  {p['date']}: Price={p['price']:.2f}, PE={p['pe']:.2f}, PB={p['pb']:.2f}, DY={p['dividend_yield']:.2f}")
 
 verify(['SZ000423', 'SZ002304'])
+

@@ -5,6 +5,9 @@ import logging
 from datetime import datetime
 from django.conf import settings
 
+from .utils import format_symbol
+from .cache_manager import CacheManager
+
 logger = logging.getLogger('api')
 
 class PriceService:
@@ -19,35 +22,13 @@ class PriceService:
 
     @staticmethod
     def _cache_get(key):
-        from django.core.cache import cache
-        import pandas as pd
-        try:
-            val = cache.get(key)
-            if isinstance(val, list):
-                # Safe-Cache 探测：自动恢复为 DataFrame
-                df = pd.DataFrame(val)
-                for col in ['date', 'time', 'date_dt', 'REPORT_DATE', 'NOTICE_DATE']:
-                    if col in df.columns: df[col] = pd.to_datetime(df[col])
-                return df
-            return val
-        except Exception as e:
-            logger.warning(f"Cache get failed for {key}: {e}")
-            return None
+        """委托给 CacheManager (保留接口兼容性)"""
+        return CacheManager.get_df(key)
 
     @staticmethod
     def _cache_set(key, value, ttl):
-        from django.core.cache import cache
-        import pandas as pd
-        try:
-            if isinstance(value, pd.DataFrame):
-                # Safe-Cache: 转换为字典列表，避免 pickle 二进制冲突
-                temp_df = value.copy()
-                for col in temp_df.select_dtypes(include=['datetime']).columns:
-                    temp_df[col] = temp_df[col].dt.strftime('%Y-%m-%d %H:%M:%S')
-                value = temp_df.to_dict(orient='records')
-            cache.set(key, value, ttl)
-        except Exception as e:
-            logger.warning(f"Cache set failed for {key}: {e}")
+        """委托给 CacheManager (保留接口兼容性)"""
+        CacheManager.set_df(key, value, ttl)
 
     @staticmethod
     def _normalize_historical_cache_value(value):
@@ -191,13 +172,8 @@ class PriceService:
 
     @classmethod
     def _fix_symbol(cls, s):
-        """确保股票代码带有 SH/SZ 前缀"""
-        s = s.upper()
-        if s.startswith('SH') or s.startswith('SZ'):
-            return s
-        if s.startswith('6'):
-            return f"SH{s}"
-        return f"SZ{s}"
+        """确保股票代码带有 SH/SZ 前缀 (委托给 format_symbol)"""
+        return format_symbol(s)
 
     @classmethod
     def _historical_single_cache_key(cls, symbol, requested_period, period, limit):

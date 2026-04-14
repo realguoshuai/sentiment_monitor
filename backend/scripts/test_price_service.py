@@ -1,3 +1,6 @@
+﻿from bootstrap_django import setup_django
+setup_django()
+
 import os
 import django
 
@@ -21,3 +24,4 @@ def test_period(name, limit, period):
 
 test_period("5Y Month", 60, "month")
 test_period("10Y Annual", 10, "annual")
+
