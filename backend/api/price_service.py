@@ -251,8 +251,14 @@ class PriceService:
                 dy = rt_dy
 
             calc_roe = (pb / pe * 100) if pe > 0 else 0
-            if '002304' in fixed_symbol and calc_roe < 20:
-                calc_roe = 20
+            
+            # Apply dynamic valuation config (e.g. ROE floor)
+            from .utils import get_valuation_config
+            val_config = get_valuation_config(fixed_symbol)
+            roe_floor = val_config.get('roe_floor')
+            if roe_floor and calc_roe < roe_floor:
+                calc_roe = roe_floor
+            
             roi = calc_roe / pb if pb > 0 else 0
 
             history.append({
@@ -409,8 +415,14 @@ class PriceService:
                             
                             # 估值计算逻辑 (ROE / PB)
                             roe = (latest_f['ttm_profit'] / latest_f['TOTAL_PARENT_EQUITY'] * 100) if latest_f['TOTAL_PARENT_EQUITY'] > 0 else 0
-                            # 洋河保底
-                            if '002304' in symbol and roe < 20: roe = 20
+                            
+                            # Apply dynamic valuation config
+                            from .utils import get_valuation_config
+                            val_config = get_valuation_config(symbol)
+                            roe_floor = val_config.get('roe_floor')
+                            if roe_floor and roe < roe_floor:
+                                roe = roe_floor
+                                
                             roi = roe / pb if pb > 0 else 0
                             
                             # 股息率建议直接用 LTM

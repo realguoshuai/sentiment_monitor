@@ -1,4 +1,4 @@
-﻿from statistics import median
+from statistics import median
 from typing import Dict, List, Optional
 
 from django.core.cache import cache
@@ -51,6 +51,9 @@ class AnalysisService:
         except Exception:
             quality_data = {}
 
+        from .utils import get_valuation_config
+        val_config = get_valuation_config(fixed_symbol)
+
         return {
             'symbol': fixed_symbol,
             'percentiles': percentiles,
@@ -61,6 +64,7 @@ class AnalysisService:
                 percentiles,
                 forward,
                 quality_data,
+                val_config=val_config
             ),
             'history': stock_hist,
         }
@@ -72,6 +76,7 @@ class AnalysisService:
         percentiles: dict,
         forward: dict,
         quality_data: Optional[dict] = None,
+        val_config: Optional[dict] = None,
     ) -> dict:
         latest = cls._latest_history_point(history)
         current_price = cls._safe_float(latest.get('price'))
@@ -94,6 +99,7 @@ class AnalysisService:
             current_pe=current_pe,
             expected_roe=expected_roe,
             quality_data=quality_data or {},
+            val_config=val_config or {},
         )
         available_models = [model for model in models if model['status'] == 'available']
         blended_range = cls._blend_models(available_models)
@@ -102,9 +108,9 @@ class AnalysisService:
 
         assumptions = {
             'expected_roe': cls._round(expected_roe),
-            'required_return_low': cls.CONSERVATIVE_REQUIRED_RETURN,
-            'required_return_base': cls.BASE_REQUIRED_RETURN,
-            'required_return_high': cls.OPTIMISTIC_REQUIRED_RETURN,
+            'required_return_low': val_config.get('return_low', cls.CONSERVATIVE_REQUIRED_RETURN),
+            'required_return_base': val_config.get('return_base', cls.BASE_REQUIRED_RETURN),
+            'required_return_high': val_config.get('return_high', cls.OPTIMISTIC_REQUIRED_RETURN),
             'owner_growth_low': cls._round(owner_assumptions.get('growth_low_pct')),
             'owner_growth_base': cls._round(owner_assumptions.get('growth_base_pct')),
             'owner_growth_high': cls._round(owner_assumptions.get('growth_high_pct')),
@@ -243,9 +249,10 @@ class AnalysisService:
         current_pe: float,
         expected_roe: float,
         quality_data: dict,
+        val_config: dict = {},
     ) -> List[dict]:
         models = [
-            cls._build_roe_anchor_model(current_price, current_pb, expected_roe),
+            cls._build_roe_anchor_model(current_price, current_pb, expected_roe, val_config),
             cls._build_earnings_power_model(current_price, current_pe),
             cls._build_owner_earnings_model(current_price, expected_roe, quality_data),
         ]
@@ -273,6 +280,7 @@ class AnalysisService:
         current_price: float,
         current_pb: float,
         expected_roe: float,
+        val_config: dict = {},
     ) -> dict:
         if current_price <= 0 or current_pb <= 0 or expected_roe <= 0:
             return cls._build_unavailable_model(
@@ -282,9 +290,9 @@ class AnalysisService:
             )
 
         book_value_per_share = current_price / current_pb
-        pb_low = expected_roe / cls.CONSERVATIVE_REQUIRED_RETURN
-        pb_base = expected_roe / cls.BASE_REQUIRED_RETURN
-        pb_high = expected_roe / cls.OPTIMISTIC_REQUIRED_RETURN
+        pb_low = expected_roe / val_config.get('return_low', cls.CONSERVATIVE_REQUIRED_RETURN)
+        pb_base = expected_roe / val_config.get('return_base', cls.BASE_REQUIRED_RETURN)
+        pb_high = expected_roe / val_config.get('return_high', cls.OPTIMISTIC_REQUIRED_RETURN)
         price_low = book_value_per_share * pb_low
         price_base = book_value_per_share * pb_base
         price_high = book_value_per_share * pb_high

@@ -37,3 +37,39 @@ def format_symbol(symbol: str) -> str:
             return f'SZ{code}'
 
     return symbol
+
+
+def get_valuation_config(symbol: str) -> dict:
+    """
+    获取股票的估值配置，优先从缓存读取。
+    
+    Args:
+        symbol: 股票代码
+        
+    Returns:
+        dict: 估值配置，如 {"roe_floor": 20.0}
+    """
+    from django.core.cache import cache
+    from .models import Stock
+    
+    clean_symbol = format_symbol(symbol)
+    cache_key = f"valuation_config_{clean_symbol}"
+    
+    # 尝试从缓存获取
+    config = cache.get(cache_key)
+    if config is not None:
+        return config
+        
+    # 从数据库获取
+    try:
+        stock = Stock.objects.filter(symbol=clean_symbol).first()
+        if stock:
+            config = stock.get_valuation_config()
+        else:
+            config = {}
+    except:
+        config = {}
+        
+    # 缓存 1 小时
+    cache.set(cache_key, config, 3600)
+    return config

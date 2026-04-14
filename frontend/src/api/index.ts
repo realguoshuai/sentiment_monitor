@@ -135,6 +135,7 @@ export const stockApi = {
   getAnalysis: (symbol: string) => api.get<any>(`/sentiment/analysis/?symbol=${symbol}`),
   getHistoryBacktest: (symbol: string) => api.get<any>(`/sentiment/history-backtest/?symbol=${symbol}`),
   getQualityAnalysis: (symbol: string) => api.get<any>(`/sentiment/quality/?symbol=${symbol}`),
+  refreshQualityAnalysis: (symbol: string) => api.post<any>('/sentiment/quality/refresh/', { symbol }),
 }
 
 export default api

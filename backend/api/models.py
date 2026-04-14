@@ -9,6 +9,7 @@ class Stock(models.Model):
     keywords = models.TextField(default='[]', verbose_name='关键词')
     extra_links = models.TextField(default='[]', verbose_name='额外链接')
     created_at = models.DateTimeField(auto_now_add=True)
+    valuation_config = models.TextField(default='{}', verbose_name='估值配置')
     
     class Meta:
         verbose_name = '监控股票'
@@ -28,6 +29,17 @@ class Stock(models.Model):
     def set_keywords(self, keywords_list):
         """设置关键词列表"""
         self.keywords = json.dumps(keywords_list)
+
+    def get_valuation_config(self):
+        """获取估值配置"""
+        try:
+            return json.loads(self.valuation_config)
+        except:
+            return {}
+
+    def set_valuation_config(self, config_dict):
+        """设置估值配置"""
+        self.valuation_config = json.dumps(config_dict)
 
 
 class SentimentData(models.Model):

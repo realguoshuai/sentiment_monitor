@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="quality-view">
     <header class="page-header">
       <div v-if="latestStats" class="stock-info">
@@ -7,21 +7,27 @@
           <span class="symbol-tag">{{ symbol }}</span>
         </div>
         <div class="badges">
-          <div class="badge-item">
-            <span class="label">最新 ROE</span>
+          <div class="badge-item" @mouseenter="showTooltip($event, 'roe')" @mouseleave="hideTooltip">
+            <span class="label">最新 ROE <i class="info-icon">i</i></span>
             <span class="value">{{ latestStats.roe.toFixed(2) }}%</span>
           </div>
-          <div class="badge-item">
-            <span class="label">净利率</span>
+          <div class="badge-item" @mouseenter="showTooltip($event, 'net_margin')" @mouseleave="hideTooltip">
+            <span class="label">净利率 <i class="info-icon">i</i></span>
             <span class="value">{{ latestStats.net_margin.toFixed(2) }}%</span>
           </div>
-          <div class="badge-item">
-            <span class="label">派息率</span>
+          <div class="badge-item" @mouseenter="showTooltip($event, 'payout_ratio')" @mouseleave="hideTooltip">
+            <span class="label">派息率 <i class="info-icon">i</i></span>
             <span class="value">{{ latestStats.payout_ratio.toFixed(2) }}%</span>
           </div>
         </div>
       </div>
-      <button @click="$router.back()" class="btn-back">返回</button>
+      <div class="header-actions">
+        <div class="refresh-box" :class="{ 'is-refreshing': isRefreshing }" @click="handleRefresh">
+          <i class="refresh-icon">↻</i>
+          <span>{{ isRefreshing ? '刷新中...' : '强制刷新' }}</span>
+        </div>
+        <button @click="$router.back()" class="btn-back">返回</button>
+      </div>
     </header>
 
     <div v-if="loading" class="loading-overlay">
@@ -33,20 +39,20 @@
 
     <main v-else class="content-grid">
       <section v-if="cashflowSummary" class="summary-strip card">
-        <div class="summary-card">
-          <span class="summary-label">CFO / 净利润</span>
+        <div class="summary-card" @mouseenter="showTooltip($event, 'cfo_to_profit')" @mouseleave="hideTooltip">
+          <span class="summary-label">CFO / 净利润 <i class="info-icon-mini">i</i></span>
           <strong>{{ cashflowSummary.latest_cfo_to_profit_pct.toFixed(1) }}%</strong>
         </div>
-        <div class="summary-card">
-          <span class="summary-label">FCF / 净利润</span>
+        <div class="summary-card" @mouseenter="showTooltip($event, 'fcf_to_profit')" @mouseleave="hideTooltip">
+          <span class="summary-label">FCF / 净利润 <i class="info-icon-mini">i</i></span>
           <strong>{{ cashflowSummary.latest_fcf_to_profit_pct.toFixed(1) }}%</strong>
         </div>
-        <div class="summary-card">
-          <span class="summary-label">FCF 收益率</span>
+        <div class="summary-card" @mouseenter="showTooltip($event, 'fcf_yield')" @mouseleave="hideTooltip">
+          <span class="summary-label">FCF 收益率 <i class="info-icon-mini">i</i></span>
           <strong>{{ cashflowSummary.latest_fcf_yield_pct.toFixed(1) }}%</strong>
         </div>
-        <div class="summary-card">
-          <span class="summary-label">资本开支强度</span>
+        <div class="summary-card" @mouseenter="showTooltip($event, 'capex_intensity')" @mouseleave="hideTooltip">
+          <span class="summary-label">资本开支强度 <i class="info-icon-mini">i</i></span>
           <strong>{{ cashflowSummary.latest_capex_intensity_pct.toFixed(1) }}%</strong>
         </div>
         <div class="summary-card">
@@ -56,20 +62,20 @@
       </section>
 
       <section v-if="capitalAllocationSummary" class="summary-strip summary-strip-secondary card">
-        <div class="summary-card">
-          <span class="summary-label">ROIC 代理</span>
+        <div class="summary-card" @mouseenter="showTooltip($event, 'roic_proxy')" @mouseleave="hideTooltip">
+          <span class="summary-label">ROIC 代理 <i class="info-icon-mini">i</i></span>
           <strong>{{ capitalAllocationSummary.latest_roic_proxy_pct.toFixed(1) }}%</strong>
         </div>
-        <div class="summary-card">
-          <span class="summary-label">再投资率</span>
+        <div class="summary-card" @mouseenter="showTooltip($event, 'reinvestment_rate')" @mouseleave="hideTooltip">
+          <span class="summary-label">再投资率 <i class="info-icon-mini">i</i></span>
           <strong>{{ capitalAllocationSummary.latest_reinvestment_rate_pct.toFixed(1) }}%</strong>
         </div>
-        <div class="summary-card">
-          <span class="summary-label">BVPS 增长</span>
+        <div class="summary-card" @mouseenter="showTooltip($event, 'bvps_growth')" @mouseleave="hideTooltip">
+          <span class="summary-label">BVPS 增长 <i class="info-icon-mini">i</i></span>
           <strong>{{ capitalAllocationSummary.latest_book_value_per_share_growth_pct.toFixed(1) }}%</strong>
         </div>
-        <div class="summary-card">
-          <span class="summary-label">股本变动</span>
+        <div class="summary-card" @mouseenter="showTooltip($event, 'share_change')" @mouseleave="hideTooltip">
+          <span class="summary-label">股本变动 <i class="info-icon-mini">i</i></span>
           <strong>{{ capitalAllocationSummary.latest_share_change_pct.toFixed(1) }}%</strong>
         </div>
         <div class="summary-card">
@@ -80,16 +86,16 @@
       </section>
 
       <section v-if="stabilitySummary" class="summary-strip summary-strip-tertiary card">
-        <div class="summary-card">
-          <span class="summary-label">毛利率波动</span>
+        <div class="summary-card" @mouseenter="showTooltip($event, 'gross_margin_vol')" @mouseleave="hideTooltip">
+          <span class="summary-label">毛利率波动 <i class="info-icon-mini">i</i></span>
           <strong>{{ stabilitySummary.gross_margin_volatility_pct.toFixed(1) }}%</strong>
         </div>
-        <div class="summary-card">
-          <span class="summary-label">ROE 波动</span>
+        <div class="summary-card" @mouseenter="showTooltip($event, 'roe_vol')" @mouseleave="hideTooltip">
+          <span class="summary-label">ROE 波动 <i class="info-icon-mini">i</i></span>
           <strong>{{ stabilitySummary.roe_volatility_pct.toFixed(1) }}%</strong>
         </div>
-        <div class="summary-card">
-          <span class="summary-label">ROIC 波动</span>
+        <div class="summary-card" @mouseenter="showTooltip($event, 'roic_vol')" @mouseleave="hideTooltip">
+          <span class="summary-label">ROIC 波动 <i class="info-icon-mini">i</i></span>
           <strong>{{ stabilitySummary.roic_proxy_volatility_pct.toFixed(1) }}%</strong>
         </div>
         <div class="summary-card">
@@ -227,6 +233,25 @@
         </div>
       </section>
     </main>
+
+    <!-- Premium Glassmorphism Tooltip -->
+    <transition name="fade">
+      <div v-if="tooltip.visible" class="premium-tooltip" :style="tooltip.style">
+        <div class="tooltip-header">
+          <span class="tooltip-title">{{ tooltip.data.label }}</span>
+        </div>
+        <div class="tooltip-body">
+          <div class="tooltip-row">
+            <span class="row-label">计算：</span>
+            <span class="row-value">{{ tooltip.data.calc }}</span>
+          </div>
+          <div class="tooltip-row">
+            <span class="row-label">用途：</span>
+            <span class="row-value">{{ tooltip.data.use }}</span>
+          </div>
+        </div>
+      </div>
+    </transition>
   </div>
 </template>
 
@@ -242,10 +267,51 @@ const route = useRoute()
 const sentimentStore = useSentimentStore()
 const symbol = route.params.symbol as string
 const loading = ref(true)
+const isRefreshing = ref(false)
 const qualityData = ref<any[]>([])
 const cashflowSummary = ref<any | null>(null)
 const capitalAllocationSummary = ref<any | null>(null)
 const stabilitySummary = ref<any | null>(null)
+
+const tooltip = ref({
+  visible: false,
+  style: {} as any,
+  data: { label: '', calc: '', use: '' }
+})
+
+const metricDefs: Record<string, { label: string, calc: string, use: string }> = {
+  roe: { label: 'ROE (净资产收益率)', calc: '归母净利润 / 平均净资产', use: '衡量核心资本效率。反映公司每投入 100 元自有资金能换回多少利润，是价值投资者的第一指标。' },
+  net_margin: { label: '销售净利率', calc: '净利润 / 营业收入', use: '反映产品竞争力和成本控制力。高而稳定的净利率通常代表企业在产业链中拥有定价权。' },
+  payout_ratio: { label: '分红率 (派息率)', calc: '当年分红总额 / 当年归母净利润', use: '反映赚到的钱有多少分给了股东。持续、高比例的分红通常意味着现金流真实且管理层重视股东回报。' },
+  cfo_to_profit: { label: '净利含金量', calc: '经营活动现金流净额 / 净利润', use: '评估利润扣除应收/预收等账面项后的实收现金比例。长期 > 100% 说明利润极为真实。' },
+  fcf_to_profit: { label: '自由现金流比率', calc: '自由现金流 (CFO-Capex) / 净利润', use: '衡量企业在维持当前规模后的提现能力。FCF 是股东回报的物理极限。' },
+  fcf_yield: { label: 'FCF 收益率', calc: '自由现金流 / 当前总市值', use: '从现金流角度评估当前股价的便宜程度。高于 5-10% 通常意味着估值极具吸引力。' },
+  capex_intensity: { label: '资本开支强度', calc: '购建资产劳务支出 / 营业收入', use: '衡量生意的“重度”。低强度（<5%）通常代表轻资产、容易扩张的生意。' },
+  roic_proxy: { label: 'ROIC 代理 (投入资本回报)', calc: '净利润 / (净资产 + 有息负债)', use: '衡量包含债权在内的总投入效率。不受财务杠杆调节影响，真实反映经营护城河。' },
+  reinvestment_rate: { label: '再投资率', calc: '资本开支 / 经营活动现金流', use: '反映赚来的钱必须拿回去复投的比例。越低代表自由度越高。' },
+  bvps_growth: { label: '每股净资产增速', calc: '(本期BVPS / 上期BVPS) - 1', use: '复利成长的底层驱动力。长期增速若高于 Roe，说明有高溢价融资或低价回购。' },
+  share_change: { label: '股本变动', calc: '(最新股本 / 初始股本) - 1', use: '由于增发或股权激励导致的股权摊薄。负值代表回购注销，对老股东有利。' },
+  gross_margin_vol: { label: '毛利稳定性', calc: '过去10年毛利率的标准差', use: '波动越小，说明行业格局稳定或产品护城河深。大起大落往往对应深周期性。' },
+  roe_vol: { label: '盈利连贯性', calc: '过去10年 ROE 的标准差', use: '衡量核心获利能力的波动。低波动意味着业绩可预测性强，更容易给高估值。' },
+  roic_vol: { label: '回报稳定性', calc: '过去10年 ROIC 的标准差', use: '衡量投入资本整体回报的稳定性。核心看护城河是否能跨越行业周期。' }
+}
+
+const showTooltip = (event: MouseEvent, key: string) => {
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  const info = metricDefs[key]
+  if (!info) return
+
+  tooltip.value.data = info
+  tooltip.value.style = {
+    top: `${rect.bottom + window.scrollY + 10}px`,
+    left: `${rect.left + window.scrollX}px`,
+  }
+  tooltip.value.visible = true
+}
+
+const hideTooltip = () => {
+  tooltip.value.visible = false
+}
 
 const dupontChartRef = ref<HTMLElement | null>(null)
 const cashflowChartRef = ref<HTMLElement | null>(null)
@@ -301,6 +367,31 @@ const fetchData = async () => {
     console.error('Failed to fetch quality data:', err)
   } finally {
     loading.value = false
+  }
+}
+
+const handleRefresh = async () => {
+  if (isRefreshing.value) return
+  
+  if (!confirm('强制刷新将清理该股票的所有离线快照并重新爬取原始财报数据，可能耗时 5-10 秒。确定继续？')) {
+    return
+  }
+
+  isRefreshing.value = true
+  try {
+    // 1. 调用后端清理接口
+    await stockApi.refreshQualityAnalysis(symbol)
+    
+    // 2. 重新拉取数据 (触发全量冷启动抓取)
+    await fetchData()
+    
+    // 提示成功 (如果有全局 message 组件可以调用)
+    console.log('Cache purged and data re-fetched.')
+  } catch (err) {
+    console.error('Refresh failed:', err)
+    alert('刷新失败，请检查网络或后端日志')
+  } finally {
+    isRefreshing.value = false
   }
 }
 
@@ -907,5 +998,154 @@ onUnmounted(() => {
   .card-content {
     flex-direction: column;
   }
+}
+
+/* Tooltip Styles */
+.info-icon, .info-icon-mini {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+  border-radius: 50%;
+  font-size: 10px;
+  font-style: italic;
+  font-weight: 800;
+  margin-left: 6px;
+  cursor: help;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  vertical-align: middle;
+  transition: all 0.2s;
+}
+
+.info-icon:hover, .info-icon-mini:hover {
+  background: #3b82f6;
+  color: #fff;
+}
+
+.premium-tooltip {
+  position: absolute;
+  z-index: 1000;
+  width: 280px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  pointer-events: none;
+}
+
+.tooltip-title {
+  display: block;
+  font-weight: 800;
+  color: #1e293b;
+  font-size: 0.95rem;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.tooltip-row {
+  margin-bottom: 10px;
+}
+
+.tooltip-row:last-child {
+  margin-bottom: 0;
+}
+
+.row-label {
+  display: block;
+  font-size: 0.75rem;
+  color: #64748b;
+  margin-bottom: 2px;
+  font-weight: 600;
+}
+
+.row-value {
+  display: block;
+  font-size: 0.85rem;
+  color: #334155;
+  line-height: 1.5;
+}
+
+.fade-enter-active, .fade-leave-active {
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.fade-enter-from, .fade-leave-to {
+  opacity: 0;
+  transform: translateY(-5px);
+}
+
+/* Refresh Button Styles */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.refresh-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 0.9rem;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.refresh-box:hover {
+  background: #fff;
+  color: #3b82f6;
+  border-color: #3b82f6;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.1);
+}
+
+.refresh-icon {
+  font-size: 1.2rem;
+  font-style: normal;
+  display: inline-block;
+  transition: transform 0.3s;
+}
+
+.is-refreshing {
+  pointer-events: none;
+  opacity: 0.7;
+  color: #3b82f6;
+}
+
+.is-refreshing .refresh-icon {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.btn-back {
+  padding: 8px 24px;
+  background: #1e293b;
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-back:hover {
+  background: #334155;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 </style>

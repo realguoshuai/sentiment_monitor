@@ -25,6 +25,35 @@ class FundamentalService:
         CacheManager.set_df(key, value, ttl)
 
     @classmethod
+    def _clear_cache(cls, key):
+        cache.delete(key)
+
+    @classmethod
+    def purge_data(cls, symbol):
+        """完全清理该个股的所有缓存与数据库快照 (用于核武器级刷新)"""
+        symbol = format_symbol(symbol)
+        
+        # 1. 清理 Redis 缓存
+        cache_keys = [
+            f"fundamentals_v7_{symbol}",
+            f"cashflow_v7_{symbol}",
+            f"dividends_v8_{symbol}",
+            f"cashflow_yearly_v1_{symbol}"
+        ]
+        for key in cache_keys:
+            cls._clear_cache(key)
+        
+        # 2. 清理数据库快照
+        try:
+            from .models import FundamentalSnapshot
+            FundamentalSnapshot.objects.filter(symbol=symbol.upper()).delete()
+            logger.info(f"Purged DB snapshots and cache for {symbol}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to purge DB snapshots for {symbol}: {e}")
+            return False
+
+    @classmethod
     def get_ttm_fundamentals(cls, symbol):
         """获取 TTM 净利润和净资产序列 (含 24h 缓存)"""
         cache_key = f"fundamentals_v7_{symbol}"
@@ -133,7 +162,7 @@ class FundamentalService:
     def get_historical_dividends(cls, symbol):
         """获取历史分红记录 (含 24h 缓存)"""
         symbol = cls._fix_symbol(symbol)
-        cache_key = f"dividends_v7_{symbol}"
+        cache_key = f"dividends_v8_{symbol}"
         cached_df = cls._cache_get(cache_key)
         if cached_df is not None:
             return cached_df
@@ -167,7 +196,7 @@ class FundamentalService:
             for idx, row in df.iterrows():
                 if prev_row is not None:
                     same_amount = abs(row['cash_div'] - prev_row['cash_div']) < 1e-5
-                    close_date = (row['ann_date'] - prev_row['ann_date']).days <= 90
+                    close_date = (row['ann_date'] - prev_row['ann_date']).days <= 180
                     if same_amount and close_date:
                         # 发现重复，移除前面的记录
                         if cleaned_indices: cleaned_indices.pop()
@@ -432,11 +461,14 @@ class FundamentalService:
             return cached_data
 
         try:
-            # 1. 获取利润表数据
-            df_profit = ak.stock_profit_sheet_by_quarterly_em(symbol=symbol)
+            # 1. 获取利润表数据 (使用报告期接口，确保 12/31 是全年累积数据)
+            df_profit = ak.stock_profit_sheet_by_report_em(symbol=symbol)
             df_profit['REPORT_DATE'] = pd.to_datetime(df_profit['REPORT_DATE'])
             # 仅提取年报数据
             df_profit = df_profit[df_profit['REPORT_DATE'].dt.month == 12]
+            # 强化去重：处理可能存在的重报或重复数据，保留最新的一条
+            df_profit = df_profit.sort_values(['REPORT_DATE', 'NOTICE_DATE']).drop_duplicates('REPORT_DATE', keep='last')
+            df_profit = df_profit.sort_values('REPORT_DATE')
 
             # 2. 获取资产负债表数据
             df_balance = ak.stock_balance_sheet_by_report_em(symbol=symbol)
@@ -488,18 +520,24 @@ class FundamentalService:
             df_div = cls.get_historical_dividends(symbol)
             div_by_year = {}
             if not df_div.empty:
-                df_div['year'] = df_div['ann_date'].dt.year
-                div_by_year = df_div.groupby('year')['cash_div'].sum().to_dict()
+                # 归属逻辑：1-7月公告的通常是上年度年报分红；8-12月通常是本年度中期分红
+                def get_attribution_year(ann_date):
+                    if ann_date.month <= 7:
+                        return ann_date.year - 1
+                    return ann_date.year
+                
+                df_div['attr_year'] = df_div['ann_date'].apply(get_attribution_year)
+                div_by_year = df_div.groupby('attr_year')['cash_div'].sum().to_dict()
 
             def get_payout_ratio(row):
                 year = row['REPORT_DATE'].year
                 eps = row['BASIC_EPS']
-                dps = div_by_year.get(year + 1, div_by_year.get(year, 0)) # 近似用下一年的派发配对当年的业绩
+                dps = div_by_year.get(year, 0) # 已经处理过归属逻辑，直接对应年份
                 if eps > 0:
-                    return min(dps / eps * 100, 200.0) # 封顶200%
+                    return dps / eps * 100
                 return 0.0
 
-            df['dps'] = df.apply(lambda r: div_by_year.get(r['REPORT_DATE'].year + 1, div_by_year.get(r['REPORT_DATE'].year, 0)), axis=1)
+            df['dps'] = df.apply(lambda r: div_by_year.get(r['REPORT_DATE'].year, 0), axis=1)
             df['payout_ratio'] = df.apply(get_payout_ratio, axis=1)
             df['revenue_growth_pct'] = (
                 df['TOTAL_OPERATE_INCOME'].replace(0, pd.NA).pct_change().fillna(0) * 100
@@ -857,8 +895,12 @@ class FundamentalService:
         avg_roe = df_fund.tail(20)['roe'].mean() # 过去 5 年 (20个季度)
         
         # 洋河保底逻辑同步到这里
-        if '002304' in symbol and avg_roe < 20:
-            avg_roe = 20
+        # Apply dynamic valuation config (e.g. ROE floor)
+        from .utils import get_valuation_config
+        val_config = get_valuation_config(symbol)
+        roe_floor = val_config.get('roe_floor')
+        if roe_floor and avg_roe < roe_floor:
+            avg_roe = roe_floor
         
         # 2. 内在价值计算 (ROE / 目标回报率 * 每股净资产)
         # 获取最新每股净资产 (暂以 Equity / TotalShares 模拟)

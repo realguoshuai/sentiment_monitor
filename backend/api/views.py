@@ -247,6 +247,21 @@ def get_quality_analysis(request):
         return Response({'error': str(e)}, status=500)
 
 
+@api_view(['POST'])
+def refresh_quality_data(request):
+    """强制刷新个股财务深度分析数据 (清理缓存+快照)"""
+    symbol = request.data.get('symbol', '').strip().upper()
+    if not symbol:
+        return Response({'error': 'No symbol provided'}, status=400)
+    
+    from .fundamental_service import FundamentalService
+    success = FundamentalService.purge_data(symbol)
+    if success:
+        return Response({'message': f'Successfully purged cache and snapshots for {symbol}'})
+    else:
+        return Response({'error': 'Failed to purge data'}, status=500)
+
+
 @api_view(['GET'])
 def get_history_backtest(request):
     symbol = request.GET.get('symbol', '').strip().upper()
