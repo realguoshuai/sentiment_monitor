@@ -14,7 +14,19 @@ class CacheManager:
     """
 
     # 需要自动恢复为 datetime 类型的列名列表
-    DATE_COLUMNS = ['date', 'time', 'date_dt', 'REPORT_DATE', 'NOTICE_DATE', 'ann_date']
+    DATE_COLUMNS = [
+        'date',
+        'time',
+        'date_dt',
+        'trade_date',
+        'margin_trade_date',
+        'foreign_trade_date',
+        'REPORT_DATE',
+        'NOTICE_DATE',
+        'ann_date',
+        'end_date',
+        'notice_date',
+    ]
 
     @classmethod
     def get_df(cls, key: str) -> Optional[pd.DataFrame]:

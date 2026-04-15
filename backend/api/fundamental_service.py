@@ -1,9 +1,11 @@
-import akshare as ak
+﻿import akshare as ak
 import pandas as pd
 import re
 import logging
 import time
 import json
+import os
+from contextlib import contextmanager
 from datetime import datetime
 
 from django.core.cache import cache
@@ -22,7 +24,10 @@ class FundamentalService:
     @staticmethod
     def _cache_set(key, value, ttl):
         """委托给 CacheManager (保留接口兼容性)"""
-        CacheManager.set_df(key, value, ttl)
+        if isinstance(value, pd.DataFrame):
+            CacheManager.set_df(key, value, ttl)
+        else:
+            cache.set(key, value, ttl)
 
     @classmethod
     def _clear_cache(cls, key):
@@ -38,7 +43,10 @@ class FundamentalService:
             f"fundamentals_v7_{symbol}",
             f"cashflow_v7_{symbol}",
             f"dividends_v8_{symbol}",
-            f"cashflow_yearly_v1_{symbol}"
+            f"cashflow_yearly_v1_{symbol}",
+            f"shareholder_history_v1_{symbol}",
+            f"quality_v10_{symbol}",
+            f"f_score_v7_{symbol}",
         ]
         for key in cache_keys:
             cls._clear_cache(key)
@@ -243,6 +251,100 @@ class FundamentalService:
                 logger.warning(f"Yearly cashflow fetch failed for {symbol} via {fetcher_name or 'unknown'}: {e}")
 
         return pd.DataFrame()
+
+    @staticmethod
+    @contextmanager
+    def _without_proxy_env():
+        proxy_keys = ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'all_proxy', 'ALL_PROXY']
+        original = {key: os.environ.get(key) for key in proxy_keys}
+        for key in proxy_keys:
+            os.environ.pop(key, None)
+        try:
+            yield
+        finally:
+            for key, value in original.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+    @staticmethod
+    def _classify_holder_trend(change_pct):
+        if change_pct <= -10:
+            return '筹码集中'
+        if change_pct >= 10:
+            return '筹码分散'
+        return '基本稳定'
+
+    @classmethod
+    def get_shareholder_history(cls, symbol):
+        symbol = cls._fix_symbol(symbol)
+        cache_key = f"shareholder_history_v1_{symbol}"
+        cached_df = cls._cache_get(cache_key)
+        if cached_df is not None:
+            return cached_df
+
+        try:
+            with cls._without_proxy_env():
+                df = ak.stock_zh_a_gdhs_detail_em(symbol=symbol[2:])
+            if df is None or df.empty:
+                return pd.DataFrame()
+
+            working = df.copy()
+            column_aliases = {
+                'end_date': ['股东户数统计截止日', '股东户数统计截止日期', '截止日期'],
+                'holder_count': ['股东户数-本次', '股东户数', '本次股东户数'],
+                'previous_holder_count': ['股东户数-上次', '上次股东户数'],
+                'holder_count_change': ['股东户数-增减', '股东户数增减'],
+                'holder_count_change_pct': ['股东户数-增减比例', '股东户数增减比例'],
+                'avg_market_cap_per_holder': ['户均持股市值', '户均持股市值(元)'],
+                'avg_shares_per_holder': ['户均持股数量', '户均持股数量(股)'],
+                'total_market_cap': ['总市值', '总市值(元)'],
+                'total_shares': ['总股本', '总股本(股)'],
+                'notice_date': ['股东户数公告日期', '公告日期'],
+            }
+            rename_map = {}
+            for target, aliases in column_aliases.items():
+                source = cls._first_existing_column(working, aliases)
+                if source is not None:
+                    rename_map[source] = target
+            working = working.rename(columns=rename_map)
+            if 'end_date' not in working.columns:
+                return pd.DataFrame()
+
+            if 'notice_date' not in working.columns:
+                working['notice_date'] = pd.NaT
+
+            numeric_columns = [
+                'holder_count',
+                'previous_holder_count',
+                'holder_count_change',
+                'holder_count_change_pct',
+                'avg_market_cap_per_holder',
+                'avg_shares_per_holder',
+                'total_market_cap',
+                'total_shares',
+            ]
+            for column in numeric_columns:
+                if column not in working.columns:
+                    working[column] = 0
+
+            working['end_date'] = pd.to_datetime(working['end_date'], errors='coerce')
+            working['notice_date'] = pd.to_datetime(working['notice_date'], errors='coerce')
+            for column in numeric_columns:
+                working[column] = pd.to_numeric(working[column], errors='coerce').fillna(0)
+
+            working = working.dropna(subset=['end_date']).sort_values('end_date')
+            working['price'] = working.apply(
+                lambda row: cls._safe_ratio(row['total_market_cap'], row['total_shares']),
+                axis=1,
+            )
+
+            cls._cache_set(cache_key, working, 12 * 3600)
+            return working
+        except Exception as e:
+            logger.warning(f"Failed to fetch shareholder history for {symbol}: {e}")
+            return pd.DataFrame()
 
     @staticmethod
     def _first_existing_column(df, candidates):
@@ -674,6 +776,56 @@ class FundamentalService:
                     cyclical_label,
                 ),
             }
+            shareholder_history = []
+            shareholder_summary = {}
+            shareholder_df = cls.get_shareholder_history(symbol)
+            if shareholder_df is not None and not shareholder_df.empty:
+                latest_shareholder_date = shareholder_df['end_date'].max()
+                cutoff_date = latest_shareholder_date - pd.DateOffset(years=10)
+                shareholder_window = shareholder_df[shareholder_df['end_date'] >= cutoff_date].copy()
+                if len(shareholder_window) < 2:
+                    cutoff_date = latest_shareholder_date - pd.DateOffset(years=5)
+                    shareholder_window = shareholder_df[shareholder_df['end_date'] >= cutoff_date].copy()
+                shareholder_window = shareholder_window.sort_values('end_date')
+                if not shareholder_window.empty:
+                    base_holder_count = (
+                        float(shareholder_window.iloc[0]['holder_count'])
+                        if float(shareholder_window.iloc[0]['holder_count']) > 0 else 0
+                    )
+                    latest_holder_count = float(shareholder_window.iloc[-1]['holder_count'])
+                    window_years = round(
+                        (latest_shareholder_date - shareholder_window.iloc[0]['end_date']).days / 365,
+                        1,
+                    )
+                    holder_count_change_pct = (
+                        cls._safe_ratio(latest_holder_count - base_holder_count, base_holder_count) * 100
+                        if base_holder_count > 0 else 0.0
+                    )
+                    shareholder_history = shareholder_window[
+                        [
+                            'end_date', 'notice_date', 'price', 'holder_count',
+                            'holder_count_change', 'holder_count_change_pct',
+                            'avg_market_cap_per_holder', 'avg_shares_per_holder',
+                        ]
+                    ].copy()
+                    shareholder_history['date'] = shareholder_history['end_date'].dt.strftime('%Y-%m-%d')
+                    shareholder_history['notice_date'] = shareholder_history['notice_date'].dt.strftime('%Y-%m-%d').fillna('')
+                    shareholder_history = shareholder_history[
+                        [
+                            'date', 'notice_date', 'price', 'holder_count',
+                            'holder_count_change', 'holder_count_change_pct',
+                            'avg_market_cap_per_holder', 'avg_shares_per_holder',
+                        ]
+                    ].round(4).to_dict(orient='records')
+                    shareholder_summary = {
+                        'window_years': window_years,
+                        'latest_holder_count': int(latest_holder_count),
+                        'holder_count_change_pct': round(holder_count_change_pct, 2),
+                        'latest_avg_shares_per_holder': round(float(shareholder_window.iloc[-1]['avg_shares_per_holder']), 2),
+                        'latest_avg_market_cap_per_holder': round(float(shareholder_window.iloc[-1]['avg_market_cap_per_holder']), 2),
+                        'latest_price': round(float(shareholder_window.iloc[-1]['price']), 2),
+                        'holder_trend_label': cls._classify_holder_trend(holder_count_change_pct),
+                    }
 
             records = df[
                 [
@@ -695,12 +847,21 @@ class FundamentalService:
                 'cashflow_summary': summary,
                 'capital_allocation_summary': capital_allocation_summary,
                 'stability_summary': stability_summary,
+                'shareholder_history': shareholder_history,
+                'shareholder_summary': shareholder_summary,
             }
-            cls._cache_set(cache_key, payload, 12 * 3600)
+            cache.set(cache_key, payload, 12 * 3600)
             return payload
         except Exception as e:
             logger.error(f"Failed to fetch quality data for {symbol}: {e}")
-            return {'history': [], 'cashflow_summary': {}, 'capital_allocation_summary': {}, 'stability_summary': {}}
+            return {
+                'history': [],
+                'cashflow_summary': {},
+                'capital_allocation_summary': {},
+                'stability_summary': {},
+                'shareholder_history': [],
+                'shareholder_summary': {},
+            }
 
     @classmethod
     def calculate_dividend_at_date(cls, df_divs, date_dt):
@@ -806,8 +967,9 @@ class FundamentalService:
     def get_f_score(cls, symbol):
         """计算 Piotroski F-Score (安全性评分)"""
         cache_key = f"f_score_v7_{symbol}"
-        cached = cls._cache_get(cache_key)
-        if cached: return cached
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
         
         try:
             # 强化版 F-Score 逻辑 (6 项指标)
@@ -877,7 +1039,7 @@ class FundamentalService:
             # 计算总分 (满分按 5 项计算，如果有 CFO 数据则按 6 项)
             final_score = round((score / total_possible) * 10, 1) if total_possible else 0
             result = {"score": min(final_score, 10.0), "details": details}
-            cls._cache_set(cache_key, result, 3600 * 12)
+            cache.set(cache_key, result, 3600 * 12)
             return result
         except Exception as e:
             logger.error(f"F-Score calculation error for {symbol}: {e}")

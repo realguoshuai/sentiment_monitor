@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="quality-view">
     <header class="page-header">
       <div v-if="latestStats" class="stock-info">
@@ -37,201 +37,222 @@
       </div>
     </div>
 
-    <main v-else class="content-grid">
-      <section v-if="cashflowSummary" class="summary-strip card">
-        <div class="summary-card" @mouseenter="showTooltip($event, 'cfo_to_profit')" @mouseleave="hideTooltip">
-          <span class="summary-label">CFO / 净利润 <i class="info-icon-mini">i</i></span>
-          <strong>{{ cashflowSummary.latest_cfo_to_profit_pct.toFixed(1) }}%</strong>
+    <main v-else class="content-grid quality-layout">
+      <section
+        v-if="shareholderHistory.length"
+        class="chart-section shareholder-section card chart-card feature-card wide-card"
+      >
+        <div class="section-header feature-header">
+          <div>
+            <p class="section-kicker">Holder Structure</p>
+            <h2>股价与股东人数对比</h2>
+            <p class="subtitle">优先展示近 10 年窗口；若原始披露不足，则退回到近 5 年。</p>
+          </div>
+          <div v-if="shareholderSummary" class="feature-pill">{{ shareholderSummary.holder_trend_label }}</div>
         </div>
-        <div class="summary-card" @mouseenter="showTooltip($event, 'fcf_to_profit')" @mouseleave="hideTooltip">
-          <span class="summary-label">FCF / 净利润 <i class="info-icon-mini">i</i></span>
-          <strong>{{ cashflowSummary.latest_fcf_to_profit_pct.toFixed(1) }}%</strong>
-        </div>
-        <div class="summary-card" @mouseenter="showTooltip($event, 'fcf_yield')" @mouseleave="hideTooltip">
-          <span class="summary-label">FCF 收益率 <i class="info-icon-mini">i</i></span>
-          <strong>{{ cashflowSummary.latest_fcf_yield_pct.toFixed(1) }}%</strong>
-        </div>
-        <div class="summary-card" @mouseenter="showTooltip($event, 'capex_intensity')" @mouseleave="hideTooltip">
-          <span class="summary-label">资本开支强度 <i class="info-icon-mini">i</i></span>
-          <strong>{{ cashflowSummary.latest_capex_intensity_pct.toFixed(1) }}%</strong>
-        </div>
-        <div class="summary-card">
-          <span class="summary-label">现金流质量</span>
-          <strong>{{ cashflowSummary.cashflow_quality_label }}</strong>
-        </div>
-      </section>
-
-      <section v-if="capitalAllocationSummary" class="summary-strip summary-strip-secondary card">
-        <div class="summary-card" @mouseenter="showTooltip($event, 'roic_proxy')" @mouseleave="hideTooltip">
-          <span class="summary-label">ROIC 代理 <i class="info-icon-mini">i</i></span>
-          <strong>{{ capitalAllocationSummary.latest_roic_proxy_pct.toFixed(1) }}%</strong>
-        </div>
-        <div class="summary-card" @mouseenter="showTooltip($event, 'reinvestment_rate')" @mouseleave="hideTooltip">
-          <span class="summary-label">再投资率 <i class="info-icon-mini">i</i></span>
-          <strong>{{ capitalAllocationSummary.latest_reinvestment_rate_pct.toFixed(1) }}%</strong>
-        </div>
-        <div class="summary-card" @mouseenter="showTooltip($event, 'bvps_growth')" @mouseleave="hideTooltip">
-          <span class="summary-label">BVPS 增长 <i class="info-icon-mini">i</i></span>
-          <strong>{{ capitalAllocationSummary.latest_book_value_per_share_growth_pct.toFixed(1) }}%</strong>
-        </div>
-        <div class="summary-card" @mouseenter="showTooltip($event, 'share_change')" @mouseleave="hideTooltip">
-          <span class="summary-label">股本变动 <i class="info-icon-mini">i</i></span>
-          <strong>{{ capitalAllocationSummary.latest_share_change_pct.toFixed(1) }}%</strong>
-        </div>
-        <div class="summary-card">
-          <span class="summary-label">资本配置</span>
-          <strong>{{ capitalAllocationSummary.capital_allocation_label }}</strong>
-          <span class="summary-meta">{{ capitalAllocationSummary.financing_signal }}</span>
+        <div ref="shareholderChartRef" class="chart-container chart-container-feature"></div>
+        <div class="insight-strip">
+          <div class="insight-chip">
+            <span>最新股价</span>
+            <strong>{{ formatPrice(shareholderSummary?.latest_price) }}</strong>
+          </div>
+          <div class="insight-chip">
+            <span>股东户数</span>
+            <strong>{{ formatCount(shareholderSummary?.latest_holder_count) }}</strong>
+          </div>
+          <div class="insight-chip">
+            <span>户均市值</span>
+            <strong>{{ formatPrice(shareholderSummary?.latest_avg_market_cap_per_holder) }}</strong>
+          </div>
+          <div class="insight-chip">
+            <span>筹码趋势</span>
+            <strong>{{ shareholderSummary?.holder_trend_label }}</strong>
+          </div>
         </div>
       </section>
 
-      <section v-if="stabilitySummary" class="summary-strip summary-strip-tertiary card">
-        <div class="summary-card" @mouseenter="showTooltip($event, 'gross_margin_vol')" @mouseleave="hideTooltip">
-          <span class="summary-label">毛利率波动 <i class="info-icon-mini">i</i></span>
-          <strong>{{ stabilitySummary.gross_margin_volatility_pct.toFixed(1) }}%</strong>
+      <section class="chart-section cashflow-section card feature-card">
+        <div class="section-header feature-header">
+          <div>
+            <p class="section-kicker">Cash Flow</p>
+            <h2>现金流质量矩阵</h2>
+            <p class="subtitle">用 CFO、FCF 和 Capex 看利润有没有兑现成现金，以及扩张是否过重。</p>
+          </div>
+          <div v-if="cashflowSummary" class="feature-pill">{{ cashflowSummary.cashflow_quality_label }}</div>
         </div>
-        <div class="summary-card" @mouseenter="showTooltip($event, 'roe_vol')" @mouseleave="hideTooltip">
-          <span class="summary-label">ROE 波动 <i class="info-icon-mini">i</i></span>
-          <strong>{{ stabilitySummary.roe_volatility_pct.toFixed(1) }}%</strong>
-        </div>
-        <div class="summary-card" @mouseenter="showTooltip($event, 'roic_vol')" @mouseleave="hideTooltip">
-          <span class="summary-label">ROIC 波动 <i class="info-icon-mini">i</i></span>
-          <strong>{{ stabilitySummary.roic_proxy_volatility_pct.toFixed(1) }}%</strong>
-        </div>
-        <div class="summary-card">
-          <span class="summary-label">周期性</span>
-          <strong>{{ stabilitySummary.cyclical_label }}</strong>
-        </div>
-        <div class="summary-card">
-          <span class="summary-label">经营稳定性</span>
-          <strong>{{ stabilitySummary.operating_stability_label }}</strong>
-          <span class="summary-meta">{{ stabilitySummary.moat_label }}</span>
+        <div ref="cashflowChartRef" class="chart-container chart-container-feature"></div>
+        <div v-if="cashflowSummary" class="insight-strip">
+          <div class="insight-chip" @mouseenter="showTooltip($event, 'cfo_to_profit')" @mouseleave="hideTooltip">
+            <span>CFO / 净利润</span>
+            <strong>{{ cashflowSummary.latest_cfo_to_profit_pct.toFixed(1) }}%</strong>
+          </div>
+          <div class="insight-chip" @mouseenter="showTooltip($event, 'fcf_to_profit')" @mouseleave="hideTooltip">
+            <span>FCF / 净利润</span>
+            <strong>{{ cashflowSummary.latest_fcf_to_profit_pct.toFixed(1) }}%</strong>
+          </div>
+          <div class="insight-chip" @mouseenter="showTooltip($event, 'fcf_yield')" @mouseleave="hideTooltip">
+            <span>FCF 收益率</span>
+            <strong>{{ cashflowSummary.latest_fcf_yield_pct.toFixed(1) }}%</strong>
+          </div>
+          <div class="insight-chip" @mouseenter="showTooltip($event, 'capex_intensity')" @mouseleave="hideTooltip">
+            <span>资本开支强度</span>
+            <strong>{{ cashflowSummary.latest_capex_intensity_pct.toFixed(1) }}%</strong>
+          </div>
         </div>
       </section>
 
-      <section class="chart-section dupont-section card">
-        <div class="card-content">
-          <div class="chart-area">
-            <div class="section-header">
-              <h2>杜邦 ROE 归因分析</h2>
-              <p class="subtitle">拆开净利率、周转率与杠杆，看到 ROE 的真实驱动因子。</p>
+      <aside class="signal-panel card">
+        <section v-if="capitalAllocationSummary" class="signal-block">
+          <div class="signal-block-head">
+            <span class="section-kicker">Capital Allocation</span>
+            <strong>{{ capitalAllocationSummary.capital_allocation_label }}</strong>
+          </div>
+          <div class="signal-grid">
+            <div class="signal-card" @mouseenter="showTooltip($event, 'roic_proxy')" @mouseleave="hideTooltip">
+              <span>ROIC 代理</span>
+              <strong>{{ capitalAllocationSummary.latest_roic_proxy_pct.toFixed(1) }}%</strong>
             </div>
-            <div ref="dupontChartRef" class="chart-container"></div>
+            <div class="signal-card" @mouseenter="showTooltip($event, 'reinvestment_rate')" @mouseleave="hideTooltip">
+              <span>再投资率</span>
+              <strong>{{ capitalAllocationSummary.latest_reinvestment_rate_pct.toFixed(1) }}%</strong>
+            </div>
+            <div class="signal-card" @mouseenter="showTooltip($event, 'bvps_growth')" @mouseleave="hideTooltip">
+              <span>BVPS 增长</span>
+              <strong>{{ capitalAllocationSummary.latest_book_value_per_share_growth_pct.toFixed(1) }}%</strong>
+            </div>
+            <div class="signal-card" @mouseenter="showTooltip($event, 'share_change')" @mouseleave="hideTooltip">
+              <span>股本变动</span>
+              <strong>{{ capitalAllocationSummary.latest_share_change_pct.toFixed(1) }}%</strong>
+            </div>
           </div>
-          <div class="insight-area">
-            <h3>AI 视角</h3>
-            <p><strong>看什么：</strong> ROE 是靠经营效率、利润空间，还是靠财务杠杆撑起来。</p>
-            <ul>
-              <li><strong>净利率主导：</strong> 更像品牌力或产品力驱动，定价权通常更强。</li>
-              <li><strong>周转率主导：</strong> 更像效率型公司，关键在运营和渠道能力。</li>
-              <li><strong>杠杆主导：</strong> 需要留意行业下行期的资产负债表压力。</li>
-            </ul>
+          <p class="signal-meta">{{ capitalAllocationSummary.financing_signal }}</p>
+        </section>
+
+        <section v-if="stabilitySummary" class="signal-block">
+          <div class="signal-block-head">
+            <span class="section-kicker">Operating Stability</span>
+            <strong>{{ stabilitySummary.operating_stability_label }}</strong>
           </div>
+          <div class="signal-grid">
+            <div class="signal-card" @mouseenter="showTooltip($event, 'gross_margin_vol')" @mouseleave="hideTooltip">
+              <span>毛利率波动</span>
+              <strong>{{ stabilitySummary.gross_margin_volatility_pct.toFixed(1) }}%</strong>
+            </div>
+            <div class="signal-card" @mouseenter="showTooltip($event, 'roe_vol')" @mouseleave="hideTooltip">
+              <span>ROE 波动</span>
+              <strong>{{ stabilitySummary.roe_volatility_pct.toFixed(1) }}%</strong>
+            </div>
+            <div class="signal-card" @mouseenter="showTooltip($event, 'roic_vol')" @mouseleave="hideTooltip">
+              <span>ROIC 波动</span>
+              <strong>{{ stabilitySummary.roic_proxy_volatility_pct.toFixed(1) }}%</strong>
+            </div>
+            <div class="signal-card">
+              <span>周期性</span>
+              <strong>{{ stabilitySummary.cyclical_label }}</strong>
+            </div>
+          </div>
+          <p class="signal-meta">{{ stabilitySummary.moat_label }}</p>
+        </section>
+
+        <section v-if="shareholderSummary" class="signal-block">
+          <div class="signal-block-head">
+            <span class="section-kicker">Holder Snapshot</span>
+            <strong>{{ shareholderSummary.holder_trend_label }}</strong>
+          </div>
+          <div class="signal-grid">
+            <div class="signal-card">
+              <span>股东户数</span>
+              <strong>{{ formatCount(shareholderSummary.latest_holder_count) }}</strong>
+            </div>
+            <div class="signal-card">
+              <span>区间变化</span>
+              <strong>{{ formatPct(shareholderSummary.holder_count_change_pct) }}</strong>
+            </div>
+            <div class="signal-card">
+              <span>户均持股</span>
+              <strong>{{ formatCount(shareholderSummary.latest_avg_shares_per_holder) }}</strong>
+            </div>
+            <div class="signal-card">
+              <span>观察窗口</span>
+              <strong>{{ shareholderSummary.window_years }} 年</strong>
+            </div>
+          </div>
+        </section>
+      </aside>
+
+      <section class="chart-section dupont-section card chart-card">
+        <div class="section-header">
+          <div>
+            <h2>杜邦 ROE 归因分析</h2>
+            <p class="subtitle">拆开净利率、周转率与杠杆，先看 ROE 的来源，再判断质量。</p>
+          </div>
+        </div>
+        <div ref="dupontChartRef" class="chart-container"></div>
+        <div class="insight-strip">
+          <div class="insight-chip"><span>净利率主导</span><strong>更像定价权</strong></div>
+          <div class="insight-chip"><span>周转率主导</span><strong>更像效率型</strong></div>
+          <div class="insight-chip"><span>杠杆主导</span><strong>关注资产负债表</strong></div>
         </div>
       </section>
 
-      <section class="chart-section cashflow-section card">
-        <div class="card-content">
-          <div class="chart-area">
-            <div class="section-header">
-              <h2>现金流质量矩阵</h2>
-              <p class="subtitle">用 CFO、FCF 和 Capex 看利润兑现能力，以及扩张是否过重。</p>
-            </div>
-            <div ref="cashflowChartRef" class="chart-container"></div>
+      <section class="chart-section moat-section card chart-card">
+        <div class="section-header">
+          <div>
+            <h2>盈利护城河追踪</h2>
+            <p class="subtitle">毛利率和净利率放在同一屏，直接看价格权是否稳定。</p>
           </div>
-          <div class="insight-area">
-            <h3>Cash Flow Lens</h3>
-            <p><strong>看什么：</strong> 利润是否真正转成现金，扣掉资本开支后还剩下多少自由现金流。</p>
-            <ul>
-              <li><strong>CFO / 净利润长期高于 100%：</strong> 盈利兑现质量更强。</li>
-              <li><strong>FCF / 净利润持续为正：</strong> 股东回报更容易持续，不容易靠外部融资续命。</li>
-              <li><strong>Capex 强度快速抬升：</strong> 需要区分是高质量扩张还是被动维持。</li>
-            </ul>
-          </div>
+        </div>
+        <div ref="moatChartRef" class="chart-container"></div>
+        <div class="insight-strip">
+          <div class="insight-chip"><span>宽且稳定</span><strong>品牌或成本优势更扎实</strong></div>
+          <div class="insight-chip"><span>快速收窄</span><strong>警惕竞争或费用失控</strong></div>
         </div>
       </section>
 
-      <section class="chart-section moat-section card">
-        <div class="card-content">
-          <div class="chart-area">
-            <div class="section-header">
-              <h2>盈利护城河追踪</h2>
-              <p class="subtitle">毛利率与净利率的稳定性，决定企业能否长期守住价格权。</p>
-            </div>
-            <div ref="moatChartRef" class="chart-container"></div>
+      <section class="chart-section stability-section card chart-card">
+        <div class="section-header">
+          <div>
+            <h2>经营稳定性与周期波动</h2>
+            <p class="subtitle">收入增速、ROE、ROIC 代理同屏，看是否具备跨周期稳定性。</p>
           </div>
-          <div class="insight-area">
-            <h3>AI 视角</h3>
-            <p><strong>看什么：</strong> 毛利率和净利率之间的剪刀差是否稳定。</p>
-            <ul>
-              <li><strong>宽且稳定：</strong> 通常意味着品牌、渠道或成本优势比较扎实。</li>
-              <li><strong>快速收窄：</strong> 往往对应竞争加剧、原料涨价或费用率失控。</li>
-            </ul>
-          </div>
+        </div>
+        <div ref="stabilityChartRef" class="chart-container"></div>
+        <div class="insight-strip">
+          <div class="insight-chip"><span>收入稳定</span><strong>需求更平滑</strong></div>
+          <div class="insight-chip"><span>回报收敛</span><strong>执行力更容易验证</strong></div>
+          <div class="insight-chip"><span>同向大波动</span><strong>警惕周期主导</strong></div>
         </div>
       </section>
 
-      <section class="chart-section stability-section card">
-        <div class="card-content">
-          <div class="chart-area">
-            <div class="section-header">
-              <h2>经营稳定性与周期波动</h2>
-              <p class="subtitle">用收入增速、ROE 和 ROIC 代理一起看企业是否具备跨周期稳定性。</p>
-            </div>
-            <div ref="stabilityChartRef" class="chart-container"></div>
+      <section class="chart-section payout-section card chart-card">
+        <div class="section-header">
+          <div>
+            <h2>股东回馈矩阵</h2>
+            <p class="subtitle">EPS、DPS 和派息率一起看，判断管理层是分红型还是复投型。</p>
           </div>
-          <div class="insight-area">
-            <h3>Stability Lens</h3>
-            <p><strong>看什么：</strong> 如果收入增速大起大落，而回报率也跟着剧烈波动，通常说明公司更接近周期型盈利。</p>
-            <ul>
-              <li><strong>收入增速稳定：</strong> 需求更平滑，经营节奏和产能配置更容易预测。</li>
-              <li><strong>ROE / ROIC 波动收敛：</strong> 资本回报更可复制，管理层执行力更容易验证。</li>
-              <li><strong>收入和回报同向剧烈摆动：</strong> 要警惕景气周期、原料价格或库存周期主导。</li>
-            </ul>
-          </div>
+        </div>
+        <div ref="payoutChartRef" class="chart-container"></div>
+        <div class="insight-strip">
+          <div class="insight-chip"><span>30% - 70%</span><strong>常见于成熟企业</strong></div>
+          <div class="insight-chip"><span>超过 100%</span><strong>需要核实分配可持续性</strong></div>
         </div>
       </section>
 
-      <section class="chart-section payout-section card">
-        <div class="card-content">
-          <div class="chart-area">
-            <div class="section-header">
-              <h2>股东回馈矩阵</h2>
-              <p class="subtitle">把 EPS、DPS 和派息率放在一起，看管理层如何分配利润。</p>
-            </div>
-            <div ref="payoutChartRef" class="chart-container"></div>
+      <section class="chart-section capital-allocation-section card chart-card wide-card">
+        <div class="section-header">
+          <div>
+            <h2>资本配置与每股价值跟踪</h2>
+            <p class="subtitle">留存、复投、股本变化和每股净资产合在一起，看单股价值是否真正提升。</p>
           </div>
-          <div class="insight-area">
-            <h3>AI 视角</h3>
-            <p><strong>看什么：</strong> 企业赚到的钱，是更多留在体内复投，还是更多分给股东。</p>
-            <ul>
-              <li><strong>30% - 70% 派息率：</strong> 常见于比较稳健的成熟企业。</li>
-              <li><strong>超过 100%：</strong> 往往意味着特殊分红、透支分配或周期错配，需要额外核实。</li>
-            </ul>
-          </div>
+        </div>
+        <div ref="capitalAllocationChartRef" class="chart-container"></div>
+        <div class="insight-strip">
+          <div class="insight-chip"><span>ROIC 与 BVPS 同升</span><strong>留存资本更可能创造价值</strong></div>
+          <div class="insight-chip"><span>股本持续摊薄</span><strong>注意融资或股权支付</strong></div>
+          <div class="insight-chip"><span>高留存低回报</span><strong>钱留在公司但效率不高</strong></div>
         </div>
       </section>
 
-      <section class="chart-section capital-allocation-section card">
-        <div class="card-content">
-          <div class="chart-area">
-            <div class="section-header">
-              <h2>资本配置与每股价值跟踪</h2>
-              <p class="subtitle">把留存、复投、股本变化和每股净资产放在同一张图里看。</p>
-            </div>
-            <div ref="capitalAllocationChartRef" class="chart-container"></div>
-          </div>
-          <div class="insight-area">
-            <h3>Capital Allocation</h3>
-            <p><strong>看什么：</strong> 管理层把利润留在体内之后，是否真的变成了更高的每股价值。</p>
-            <ul>
-              <li><strong>ROIC 代理和 BVPS 增长同向上：</strong> 说明留存资本大概率在创造价值。</li>
-              <li><strong>股本持续摊薄：</strong> 需要警惕再融资或股权支付吃掉单股收益。</li>
-              <li><strong>高留存但低回报：</strong> 说明钱留在公司里了，但未必被高效利用。</li>
-            </ul>
-          </div>
-        </div>
-      </section>
     </main>
 
     <!-- Premium Glassmorphism Tooltip -->
@@ -272,6 +293,8 @@ const qualityData = ref<any[]>([])
 const cashflowSummary = ref<any | null>(null)
 const capitalAllocationSummary = ref<any | null>(null)
 const stabilitySummary = ref<any | null>(null)
+const shareholderHistory = ref<any[]>([])
+const shareholderSummary = ref<any | null>(null)
 
 const tooltip = ref({
   visible: false,
@@ -319,6 +342,7 @@ const moatChartRef = ref<HTMLElement | null>(null)
 const stabilityChartRef = ref<HTMLElement | null>(null)
 const payoutChartRef = ref<HTMLElement | null>(null)
 const capitalAllocationChartRef = ref<HTMLElement | null>(null)
+const shareholderChartRef = ref<HTMLElement | null>(null)
 
 let dupontChart: echarts.ECharts | null = null
 let cashflowChart: echarts.ECharts | null = null
@@ -326,6 +350,7 @@ let moatChart: echarts.ECharts | null = null
 let stabilityChart: echarts.ECharts | null = null
 let payoutChart: echarts.ECharts | null = null
 let capitalAllocationChart: echarts.ECharts | null = null
+let shareholderChart: echarts.ECharts | null = null
 
 const stockName = computed(() => {
   const stock = sentimentStore.sentimentData.find(item => item.stock_symbol === symbol)
@@ -337,6 +362,21 @@ const latestStats = computed(() => {
   return qualityData.value[qualityData.value.length - 1]
 })
 
+const formatPct = (value?: number | null) => {
+  if (value === undefined || value === null || Number.isNaN(Number(value))) return '--'
+  return `${Number(value).toFixed(1)}%`
+}
+
+const formatPrice = (value?: number | null) => {
+  if (value === undefined || value === null || Number.isNaN(Number(value))) return '--'
+  return Number(value).toFixed(2)
+}
+
+const formatCount = (value?: number | null) => {
+  if (value === undefined || value === null || Number.isNaN(Number(value))) return '--'
+  return Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 0 })
+}
+
 const disposeCharts = () => {
   dupontChart?.dispose()
   cashflowChart?.dispose()
@@ -344,12 +384,14 @@ const disposeCharts = () => {
   stabilityChart?.dispose()
   payoutChart?.dispose()
   capitalAllocationChart?.dispose()
+  shareholderChart?.dispose()
   dupontChart = null
   cashflowChart = null
   moatChart = null
   stabilityChart = null
   payoutChart = null
   capitalAllocationChart = null
+  shareholderChart = null
 }
 
 const fetchData = async () => {
@@ -360,6 +402,8 @@ const fetchData = async () => {
     cashflowSummary.value = res.data.cashflow_summary || null
     capitalAllocationSummary.value = res.data.capital_allocation_summary || null
     stabilitySummary.value = res.data.stability_summary || null
+    shareholderHistory.value = res.data.shareholder_history || []
+    shareholderSummary.value = res.data.shareholder_summary || null
     setTimeout(() => {
       initCharts()
     }, 100)
@@ -729,6 +773,60 @@ const initCharts = () => {
       ],
     })
   }
+
+  if (shareholderChartRef.value && shareholderHistory.value.length) {
+    shareholderChart = echarts.init(shareholderChartRef.value)
+    shareholderChart.setOption({
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        valueFormatter: (value: number) => Number(value).toFixed(2),
+      },
+      legend: { bottom: 0, textStyle: { color: '#64748b' } },
+      grid: { top: 40, left: 50, right: 60, bottom: 60 },
+      xAxis: {
+        type: 'category',
+        data: shareholderHistory.value.map(item => item.date),
+        axisLabel: { color: '#94a3b8' },
+      },
+      yAxis: [
+        {
+          type: 'value',
+          name: 'Price',
+          axisLabel: { color: '#94a3b8' },
+          splitLine: { lineStyle: { type: 'dashed', color: '#f1f5f9' } },
+        },
+        {
+          type: 'value',
+          name: 'Holders',
+          axisLabel: {
+            color: '#94a3b8',
+            formatter: (value: number) => `${Math.round(value / 1000)}k`,
+          },
+          splitLine: { show: false },
+        },
+      ],
+      series: [
+        {
+          name: '股价',
+          type: 'line',
+          smooth: true,
+          data: shareholderHistory.value.map(item => item.price),
+          lineStyle: { width: 3 },
+          color: '#2563eb',
+        },
+        {
+          name: '股东户数',
+          type: 'line',
+          yAxisIndex: 1,
+          smooth: true,
+          data: shareholderHistory.value.map(item => item.holder_count),
+          lineStyle: { width: 3 },
+          color: '#f59e0b',
+        },
+      ],
+    })
+  }
 }
 
 const handleResize = () => {
@@ -738,6 +836,7 @@ const handleResize = () => {
   stabilityChart?.resize()
   payoutChart?.resize()
   capitalAllocationChart?.resize()
+  shareholderChart?.resize()
 }
 
 onMounted(() => {
@@ -1147,5 +1246,162 @@ onUnmounted(() => {
   background: #334155;
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.quality-view {
+  background:
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.08), transparent 24%),
+    radial-gradient(circle at top right, rgba(16, 185, 129, 0.08), transparent 20%),
+    linear-gradient(180deg, #f8fbff 0%, #f1f5f9 100%);
+}
+
+.quality-layout {
+  grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.95fr);
+  align-items: start;
+}
+
+.section-kicker {
+  margin: 0 0 10px;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #0f766e;
+}
+
+.feature-card,
+.signal-panel,
+.chart-card {
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  box-shadow: 0 20px 40px -34px rgba(15, 23, 42, 0.3);
+}
+
+.feature-card {
+  grid-column: span 1;
+}
+
+.feature-header {
+  align-items: flex-start;
+}
+
+.feature-pill {
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #166534;
+  font-size: 0.82rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.chart-container-feature {
+  height: 420px;
+}
+
+.signal-panel {
+  position: sticky;
+  top: 24px;
+  display: grid;
+  gap: 14px;
+}
+
+.signal-block {
+  padding: 18px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  border: 1px solid #dbe4f0;
+}
+
+.signal-block-head strong {
+  display: block;
+  margin-top: 8px;
+  color: #0f172a;
+  font-size: 1.05rem;
+}
+
+.signal-grid,
+.insight-strip {
+  display: grid;
+  gap: 12px;
+}
+
+.signal-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 14px;
+}
+
+.signal-card,
+.insight-chip {
+  padding: 14px;
+  border-radius: 16px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.signal-card span,
+.insight-chip span {
+  display: block;
+  font-size: 0.76rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+}
+
+.signal-card strong,
+.insight-chip strong {
+  display: block;
+  margin-top: 8px;
+  color: #0f172a;
+  font-size: 1rem;
+  font-weight: 900;
+}
+
+.signal-meta {
+  margin: 12px 0 0;
+  color: #64748b;
+  font-size: 0.88rem;
+  line-height: 1.6;
+}
+
+.chart-card {
+  display: grid;
+  gap: 16px;
+}
+
+.wide-card {
+  grid-column: span 2;
+}
+
+.insight-strip {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+@media (max-width: 1180px) {
+  .quality-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-panel {
+    position: static;
+  }
+
+  .wide-card {
+    grid-column: span 1;
+  }
+}
+
+@media (max-width: 720px) {
+  .signal-grid,
+  .insight-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .chart-container,
+  .chart-container-feature {
+    height: 340px;
+  }
 }
 </style>

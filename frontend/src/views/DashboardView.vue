@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="h-screen bg-[#0f172a] text-slate-300 font-sans p-4 overflow-hidden flex flex-col">
     <!-- Top Header -->
     <header class="flex justify-between items-center mb-3 shrink-0">

@@ -1,4 +1,4 @@
-from rest_framework import viewsets, status
+﻿from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 from django.core.cache import cache
@@ -241,6 +241,8 @@ def get_quality_analysis(request):
             'cashflow_summary': quality_data.get('cashflow_summary', {}),
             'capital_allocation_summary': quality_data.get('capital_allocation_summary', {}),
             'stability_summary': quality_data.get('stability_summary', {}),
+            'shareholder_history': quality_data.get('shareholder_history', []),
+            'shareholder_summary': quality_data.get('shareholder_summary', {}),
         })
     except Exception as e:
         logger.error(f"Quality Analysis Error for {symbol}: {e}")

@@ -1,4 +1,4 @@
-from statistics import median
+﻿from statistics import median
 from typing import Dict, List, Optional
 
 from django.core.cache import cache
@@ -9,7 +9,7 @@ from .price_service import PriceService
 
 class AnalysisService:
     CACHE_TTL = 12 * 3600
-    CACHE_VERSION = 'v3'
+    CACHE_VERSION = 'v4'
     CONSERVATIVE_REQUIRED_RETURN = 12.0
     BASE_REQUIRED_RETURN = 10.0
     OPTIMISTIC_REQUIRED_RETURN = 8.0
@@ -44,6 +44,7 @@ class AnalysisService:
             'dy': FundamentalService.calculate_percentiles(stock_hist, 'dividend_yield'),
         }
         forward = FundamentalService.get_forward_metrics(fixed_symbol)
+        f_score = FundamentalService.get_f_score(fixed_symbol)
 
         quality_data = {}
         try:
@@ -53,18 +54,24 @@ class AnalysisService:
 
         from .utils import get_valuation_config
         val_config = get_valuation_config(fixed_symbol)
+        valuation_conclusion = cls.build_valuation_conclusion(
+            stock_hist,
+            percentiles,
+            forward,
+            quality_data,
+            val_config=val_config
+        )
 
         return {
             'symbol': fixed_symbol,
             'percentiles': percentiles,
-            'f_score': FundamentalService.get_f_score(fixed_symbol),
+            'f_score': f_score,
             'forward': forward,
-            'valuation_conclusion': cls.build_valuation_conclusion(
-                stock_hist,
-                percentiles,
-                forward,
+            'valuation_conclusion': valuation_conclusion,
+            'investment_thesis': cls.build_investment_thesis(
+                valuation_conclusion,
+                f_score,
                 quality_data,
-                val_config=val_config
             ),
             'history': stock_hist,
         }
@@ -242,6 +249,307 @@ class AnalysisService:
         }
 
     @classmethod
+    def build_investment_thesis(
+        cls,
+        valuation_conclusion: dict,
+        f_score: dict,
+        quality_data: Optional[dict] = None,
+    ) -> dict:
+        quality_data = quality_data or {}
+        cashflow_summary = quality_data.get('cashflow_summary') or {}
+        capital_allocation_summary = quality_data.get('capital_allocation_summary') or {}
+        stability_summary = quality_data.get('stability_summary') or {}
+        shareholder_summary = quality_data.get('shareholder_summary') or {}
+
+        discount_label = valuation_conclusion.get('discount_premium', {}).get('label', '未知')
+        discount_pct = cls._safe_float(valuation_conclusion.get('discount_premium', {}).get('pct'))
+        margin_pct = cls._safe_float(valuation_conclusion.get('margin_of_safety', {}).get('pct'))
+        expected_return_pct = cls._safe_float(
+            valuation_conclusion.get('expected_return', {}).get('total_annual_return_pct')
+        )
+        expected_roe = cls._safe_float(
+            valuation_conclusion.get('assumptions', {}).get('expected_roe')
+        )
+        f_score_value = int(cls._safe_float((f_score or {}).get('score')))
+        cfo_to_profit_pct = cls._safe_float(cashflow_summary.get('latest_cfo_to_profit_pct'))
+        fcf_to_profit_pct = cls._safe_float(cashflow_summary.get('latest_fcf_to_profit_pct'))
+        roic_proxy_pct = cls._safe_float(capital_allocation_summary.get('latest_roic_proxy_pct'))
+        bvps_growth_pct = cls._safe_float(
+            capital_allocation_summary.get('latest_book_value_per_share_growth_pct')
+        )
+        share_change_pct = cls._safe_float(capital_allocation_summary.get('latest_share_change_pct'))
+        roe_volatility_pct = cls._safe_float(stability_summary.get('roe_volatility_pct'))
+        negative_growth_years = int(cls._safe_float(stability_summary.get('negative_growth_years')))
+        revenue_growth_volatility_pct = cls._safe_float(
+            stability_summary.get('revenue_growth_volatility_pct')
+        )
+        holder_count_change_pct = cls._safe_float(shareholder_summary.get('holder_count_change_pct'))
+
+        score = 0
+        if discount_label == '折价':
+            score += 2
+        if margin_pct >= 15:
+            score += 1
+        if expected_return_pct >= 12:
+            score += 1
+        if f_score_value >= 7:
+            score += 1
+        if cfo_to_profit_pct >= 100:
+            score += 1
+        if fcf_to_profit_pct >= 60:
+            score += 1
+        if roic_proxy_pct >= 12 and bvps_growth_pct >= 8:
+            score += 1
+        if roe_volatility_pct <= 8 and negative_growth_years <= 1:
+            score += 1
+        if share_change_pct <= 1.5:
+            score += 1
+
+        max_score = 10
+        confidence_score = int(round(score / max_score * 100))
+        stance, stance_color = cls._classify_thesis_stance(
+            score,
+            margin_pct,
+            expected_return_pct,
+            f_score_value,
+        )
+
+        buy_case = [
+            cls._build_valuation_buy_case(discount_label, discount_pct, margin_pct, expected_return_pct),
+            cls._build_cashflow_buy_case(cfo_to_profit_pct, fcf_to_profit_pct),
+            cls._build_quality_buy_case(
+                roic_proxy_pct,
+                bvps_growth_pct,
+                roe_volatility_pct,
+                holder_count_change_pct,
+            ),
+        ]
+
+        key_assumptions = [
+            cls._build_assumption_item(
+                label='盈利能力维持',
+                detail=f'前瞻 ROE 需要大致维持在 {cls._round(expected_roe)}% 附近，且 F-Score 不明显下滑。',
+                status=cls._assumption_status(
+                    expected_roe >= 12 and f_score_value >= 7,
+                    expected_roe >= 10 and f_score_value >= 6,
+                ),
+            ),
+            cls._build_assumption_item(
+                label='现金流继续兑现',
+                detail=f'CFO/净利润 {cls._round(cfo_to_profit_pct)}%，FCF/净利润 {cls._round(fcf_to_profit_pct)}%，需要继续保持为正且不过度透支资本开支。',
+                status=cls._assumption_status(
+                    cfo_to_profit_pct >= 100 and fcf_to_profit_pct >= 60,
+                    cfo_to_profit_pct >= 80 and fcf_to_profit_pct >= 30,
+                ),
+            ),
+            cls._build_assumption_item(
+                label='资本配置不伤害单股价值',
+                detail=f'ROIC 代理 {cls._round(roic_proxy_pct)}%，BVPS 增长 {cls._round(bvps_growth_pct)}%，同时避免明显股本摊薄。',
+                status=cls._assumption_status(
+                    roic_proxy_pct >= 12 and bvps_growth_pct >= 8 and share_change_pct <= 1.5,
+                    roic_proxy_pct >= 8 and bvps_growth_pct >= 3 and share_change_pct <= 3,
+                ),
+            ),
+            cls._build_assumption_item(
+                label='经营稳定性延续',
+                detail=f'ROE 波动 {cls._round(roe_volatility_pct)}%，近窗口负增长年份 {negative_growth_years} 年，筹码变化 {cls._round(holder_count_change_pct)}%。',
+                status=cls._assumption_status(
+                    roe_volatility_pct <= 8 and negative_growth_years <= 1 and holder_count_change_pct <= 10,
+                    roe_volatility_pct <= 12 and negative_growth_years <= 2 and holder_count_change_pct <= 20,
+                ),
+            ),
+        ]
+
+        risk_checklist = [
+            cls._build_risk_item(
+                label='估值回归不及预期',
+                detail=f'当前安全边际 {cls._round(margin_pct)}%，若盈利兑现弱于预期，估值回归可能落空。',
+                level=cls._risk_level(margin_pct >= 15 and discount_label == '折价', margin_pct >= 5),
+            ),
+            cls._build_risk_item(
+                label='现金流弱于账面利润',
+                detail='重点盯 CFO/净利润 与 FCF/净利润，避免利润增长但自由现金流跟不上的情况。',
+                level=cls._risk_level(
+                    cfo_to_profit_pct >= 100 and fcf_to_profit_pct >= 60,
+                    cfo_to_profit_pct >= 80 and fcf_to_profit_pct >= 30,
+                ),
+            ),
+            cls._build_risk_item(
+                label='周期波动压缩回报',
+                detail=f'收入增速波动 {cls._round(revenue_growth_volatility_pct)}%，负增长年份 {negative_growth_years} 年，需要持续核查需求与景气周期。',
+                level=cls._risk_level(
+                    negative_growth_years == 0 and revenue_growth_volatility_pct < 10,
+                    negative_growth_years <= 2 and revenue_growth_volatility_pct < 18,
+                ),
+            ),
+            cls._build_risk_item(
+                label='摊薄或筹码分散',
+                detail=f'股本变动 {cls._round(share_change_pct)}%，股东人数区间变化 {cls._round(holder_count_change_pct)}%。',
+                level=cls._risk_level(
+                    share_change_pct <= 0 and holder_count_change_pct <= 5,
+                    share_change_pct <= 3 and holder_count_change_pct <= 15,
+                ),
+            ),
+        ]
+
+        review_triggers = [
+            f'下次季报后复核前瞻 ROE 是否仍接近 {cls._round(expected_roe)}%',
+            f'复核 CFO/净利润是否维持在 {max(cls._round(min(cfo_to_profit_pct, 120)), 80)}% 左右以上',
+            '复核自由现金流是否继续为正，资本开支强度是否显著抬升',
+            '复核股本变化与股东人数公告，确认没有再融资摊薄和筹码明显分散',
+        ]
+
+        return {
+            'stance': stance,
+            'stance_color': stance_color,
+            'confidence_score': confidence_score,
+            'headline': cls._build_thesis_headline(
+                discount_label,
+                expected_return_pct,
+                f_score_value,
+                cfo_to_profit_pct,
+                roic_proxy_pct,
+            ),
+            'scorecard': {
+                'valuation': valuation_conclusion.get('summary', '未知'),
+                'quality': f'F-Score {f_score_value}/10',
+                'cashflow': cashflow_summary.get('cashflow_quality_label', '待验证'),
+                'stability': stability_summary.get('operating_stability_label', '待验证'),
+            },
+            'buy_case': buy_case,
+            'key_assumptions': key_assumptions,
+            'risk_checklist': risk_checklist,
+            'review_triggers': review_triggers,
+        }
+
+    @staticmethod
+    def _classify_thesis_stance(
+        score: int,
+        margin_pct: float,
+        expected_return_pct: float,
+        f_score_value: int,
+    ) -> tuple:
+        if score >= 8 and margin_pct >= 15 and expected_return_pct >= 12 and f_score_value >= 7:
+            return '可以进入买点跟踪', 'emerald'
+        if score >= 6 and expected_return_pct >= 10 and f_score_value >= 6:
+            return '值得继续跟踪', 'amber'
+        if score >= 4:
+            return '需要更多验证', 'slate'
+        return '暂不建立 Thesis', 'rose'
+
+    @staticmethod
+    def _assumption_status(passed: bool, watch: bool) -> str:
+        if passed:
+            return 'on_track'
+        if watch:
+            return 'watch'
+        return 'at_risk'
+
+    @classmethod
+    def _build_assumption_item(cls, label: str, detail: str, status: str) -> dict:
+        return {
+            'label': label,
+            'detail': detail,
+            'status': status,
+            'status_label': {
+                'on_track': '成立中',
+                'watch': '需跟踪',
+                'at_risk': '有压力',
+            }.get(status, '待验证'),
+        }
+
+    @staticmethod
+    def _risk_level(passed: bool, watch: bool) -> str:
+        if passed:
+            return 'low'
+        if watch:
+            return 'medium'
+        return 'high'
+
+    @classmethod
+    def _build_risk_item(cls, label: str, detail: str, level: str) -> dict:
+        return {
+            'label': label,
+            'detail': detail,
+            'level': level,
+            'level_label': {
+                'low': '低',
+                'medium': '中',
+                'high': '高',
+            }.get(level, '中'),
+        }
+
+    @classmethod
+    def _build_valuation_buy_case(
+        cls,
+        discount_label: str,
+        discount_pct: float,
+        margin_pct: float,
+        expected_return_pct: float,
+    ) -> str:
+        if discount_label == '折价':
+            return (
+                f'当前价格相对综合合理价值仍有 {cls._round(discount_pct)}% 折价，'
+                f'对应安全边际 {cls._round(margin_pct)}%，3 年视角年化回报预期约 {cls._round(expected_return_pct)}%。'
+            )
+        return (
+            f'当前估值已接近合理区间，继续观察是否出现更好的价格与安全边际，'
+            f'当前 3 年视角年化回报预期约 {cls._round(expected_return_pct)}%。'
+        )
+
+    @classmethod
+    def _build_cashflow_buy_case(cls, cfo_to_profit_pct: float, fcf_to_profit_pct: float) -> str:
+        if cfo_to_profit_pct >= 100 and fcf_to_profit_pct >= 60:
+            return (
+                f'利润兑现成现金的质量较好，CFO/净利润 {cls._round(cfo_to_profit_pct)}%，'
+                f'FCF/净利润 {cls._round(fcf_to_profit_pct)}%，具备兑现为股东回报的基础。'
+            )
+        return (
+            f'现金流对利润的支撑一般，当前 CFO/净利润 {cls._round(cfo_to_profit_pct)}%，'
+            f'FCF/净利润 {cls._round(fcf_to_profit_pct)}%，需要继续验证利润含金量。'
+        )
+
+    @classmethod
+    def _build_quality_buy_case(
+        cls,
+        roic_proxy_pct: float,
+        bvps_growth_pct: float,
+        roe_volatility_pct: float,
+        holder_count_change_pct: float,
+    ) -> str:
+        concentration_text = (
+            '筹码趋于集中'
+            if holder_count_change_pct < 0
+            else '筹码趋于分散'
+            if holder_count_change_pct > 0
+            else '筹码基本稳定'
+        )
+        return (
+            f'资本配置与稳定性层面，ROIC 代理 {cls._round(roic_proxy_pct)}%，'
+            f'BVPS 增长 {cls._round(bvps_growth_pct)}%，ROE 波动 {cls._round(roe_volatility_pct)}%，{concentration_text}。'
+        )
+
+    @classmethod
+    def _build_thesis_headline(
+        cls,
+        discount_label: str,
+        expected_return_pct: float,
+        f_score_value: int,
+        cfo_to_profit_pct: float,
+        roic_proxy_pct: float,
+    ) -> str:
+        price_text = '折价窗口仍在' if discount_label == '折价' else '估值已接近公允'
+        quality_text = f'F-Score {f_score_value}/10'
+        cash_text = (
+            '现金流兑现偏强'
+            if cfo_to_profit_pct >= 100
+            else '现金流仍需验证'
+        )
+        return (
+            f'{price_text}，3 年预期回报约 {cls._round(expected_return_pct)}%，'
+            f'{quality_text}，ROIC 代理 {cls._round(roic_proxy_pct)}%，{cash_text}。'
+        )
+    @classmethod
     def _build_multi_model_details(
         cls,
         current_price: float,
@@ -285,8 +593,8 @@ class AnalysisService:
         if current_price <= 0 or current_pb <= 0 or expected_roe <= 0:
             return cls._build_unavailable_model(
                 key='roe_anchor',
-                label='ROE-PB 锚点',
-                reason='缺少当前 PB 或前瞻 ROE',
+                label='ROE-PB 閿氱偣',
+                reason='缂哄皯褰撳墠 PB 鎴栧墠鐬?ROE',
             )
 
         book_value_per_share = current_price / current_pb
@@ -653,14 +961,14 @@ class AnalysisService:
     @staticmethod
     def _classify_valuation(price_low: float, price_base: float, price_high: float, current_price: float) -> str:
         if current_price <= price_low * 0.9:
-            return '显著低估'
+            return '鏄捐憲浣庝及'
         if current_price < price_low:
-            return '低估'
+            return '浣庝及'
         if current_price <= price_high:
-            return '合理'
+            return '鍚堢悊'
         if current_price <= price_high * 1.15:
-            return '偏贵'
-        return '高估'
+            return '鍋忚吹'
+        return '楂樹及'
 
     @staticmethod
     def _classify_summary_color(price_low: float, price_base: float, price_high: float, current_price: float) -> str:
@@ -715,3 +1023,5 @@ class AnalysisService:
                 cls.get_analysis(symbol, period)
             except Exception:
                 continue
+
+

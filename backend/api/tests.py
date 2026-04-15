@@ -6,6 +6,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from .analysis_service import AnalysisService
+from .cache_manager import CacheManager
 from .fundamental_service import FundamentalService
 from .history_backtest_service import HistoryBacktestService
 from .models import Announcement, SentimentData, Stock
@@ -105,7 +106,26 @@ class SentimentApiTests(APITestCase):
                 {'year': 2023, 'fcf': 120.0, 'retention_ratio_pct': 70.0, 'implied_share_count': 200.0},
                 {'year': 2024, 'fcf': 140.0, 'retention_ratio_pct': 70.0, 'implied_share_count': 200.0},
                 {'year': 2025, 'fcf': 160.0, 'retention_ratio_pct': 70.0, 'implied_share_count': 200.0},
-            ]
+            ],
+            'cashflow_summary': {
+                'latest_cfo_to_profit_pct': 110.0,
+                'latest_fcf_to_profit_pct': 78.0,
+                'cashflow_quality_label': 'strong',
+            },
+            'capital_allocation_summary': {
+                'latest_roic_proxy_pct': 14.5,
+                'latest_book_value_per_share_growth_pct': 12.0,
+                'latest_share_change_pct': 0.0,
+            },
+            'stability_summary': {
+                'operating_stability_label': 'stable',
+                'roe_volatility_pct': 5.0,
+                'negative_growth_years': 0,
+                'revenue_growth_volatility_pct': 8.0,
+            },
+            'shareholder_summary': {
+                'holder_count_change_pct': -6.0,
+            },
         }
 
         payload = AnalysisService.build_analysis_payload('SZ000001')
@@ -129,12 +149,21 @@ class SentimentApiTests(APITestCase):
         owner_model = conclusion['multi_model_valuation']['models'][-1]
         self.assertEqual(owner_model['status'], 'available')
         self.assertGreater(owner_model['fair_value_range']['price_base'], 15)
+        thesis = payload['investment_thesis']
+        self.assertTrue(thesis['stance'])
+        self.assertGreaterEqual(thesis['confidence_score'], 60)
+        self.assertEqual(len(thesis['buy_case']), 3)
+        self.assertGreaterEqual(len(thesis['key_assumptions']), 4)
+        self.assertGreaterEqual(len(thesis['risk_checklist']), 4)
+        self.assertGreaterEqual(len(thesis['review_triggers']), 4)
+        self.assertIn('valuation', thesis['scorecard'])
 
+    @patch('api.fundamental_service.FundamentalService.get_shareholder_history')
     @patch('api.price_service.PriceService.get_realtime_price')
     @patch('api.fundamental_service.FundamentalService.get_historical_dividends')
     @patch('api.fundamental_service.ak.stock_cash_flow_sheet_by_yearly_em')
     @patch('api.fundamental_service.ak.stock_balance_sheet_by_report_em')
-    @patch('api.fundamental_service.ak.stock_profit_sheet_by_quarterly_em')
+    @patch('api.fundamental_service.ak.stock_profit_sheet_by_report_em')
     def test_quality_data_includes_cashflow_metrics(
         self,
         mock_profit,
@@ -142,10 +171,11 @@ class SentimentApiTests(APITestCase):
         mock_cashflow_yearly,
         mock_dividends,
         mock_realtime,
+        mock_shareholder_history,
     ):
         mock_profit.return_value = pd.DataFrame([
-            {'REPORT_DATE': '2024-12-31', 'TOTAL_OPERATE_INCOME': 1000, 'PARENT_NETPROFIT': 100, 'OPERATE_COST': 600, 'BASIC_EPS': 1.0},
-            {'REPORT_DATE': '2025-12-31', 'TOTAL_OPERATE_INCOME': 1200, 'PARENT_NETPROFIT': 150, 'OPERATE_COST': 700, 'BASIC_EPS': 1.5},
+            {'REPORT_DATE': '2024-12-31', 'NOTICE_DATE': '2025-03-20', 'TOTAL_OPERATE_INCOME': 1000, 'PARENT_NETPROFIT': 100, 'OPERATE_COST': 600, 'BASIC_EPS': 1.0},
+            {'REPORT_DATE': '2025-12-31', 'NOTICE_DATE': '2026-03-20', 'TOTAL_OPERATE_INCOME': 1200, 'PARENT_NETPROFIT': 150, 'OPERATE_COST': 700, 'BASIC_EPS': 1.5},
         ])
         mock_balance.return_value = pd.DataFrame([
             {
@@ -174,6 +204,10 @@ class SentimentApiTests(APITestCase):
             {'ann_date': pd.Timestamp('2026-06-01'), 'cash_div': 0.8},
         ])
         mock_realtime.return_value = {'SZ000002': {'market_cap': 2000}}
+        mock_shareholder_history.return_value = pd.DataFrame([
+            {'end_date': pd.Timestamp('2021-12-31'), 'notice_date': pd.Timestamp('2022-01-20'), 'price': 8.0, 'holder_count': 120000, 'holder_count_change': 0, 'holder_count_change_pct': 0.0, 'avg_market_cap_per_holder': 200000, 'avg_shares_per_holder': 25000},
+            {'end_date': pd.Timestamp('2025-12-31'), 'notice_date': pd.Timestamp('2026-01-20'), 'price': 12.0, 'holder_count': 100000, 'holder_count_change': -5000, 'holder_count_change_pct': -4.8, 'avg_market_cap_per_holder': 260000, 'avg_shares_per_holder': 30000},
+        ])
 
         payload = FundamentalService.get_quality_data('SZ000002')
 
@@ -187,12 +221,15 @@ class SentimentApiTests(APITestCase):
         self.assertAlmostEqual(latest['capex_intensity_pct'], 4.1667, places=3)
         self.assertIn('cashflow_quality_label', payload['cashflow_summary'])
         self.assertAlmostEqual(payload['cashflow_summary']['latest_fcf_yield_pct'], 6.0, places=2)
+        self.assertEqual(payload['shareholder_summary']['latest_holder_count'], 100000)
+        self.assertEqual(payload['shareholder_summary']['holder_trend_label'], '筹码集中')
 
+    @patch('api.fundamental_service.FundamentalService.get_shareholder_history')
     @patch('api.price_service.PriceService.get_realtime_price')
     @patch('api.fundamental_service.FundamentalService.get_historical_dividends')
     @patch('api.fundamental_service.ak.stock_cash_flow_sheet_by_yearly_em')
     @patch('api.fundamental_service.ak.stock_balance_sheet_by_report_em')
-    @patch('api.fundamental_service.ak.stock_profit_sheet_by_quarterly_em')
+    @patch('api.fundamental_service.ak.stock_profit_sheet_by_report_em')
     def test_quality_data_includes_capital_allocation_metrics(
         self,
         mock_profit,
@@ -200,10 +237,11 @@ class SentimentApiTests(APITestCase):
         mock_cashflow_yearly,
         mock_dividends,
         mock_realtime,
+        mock_shareholder_history,
     ):
         mock_profit.return_value = pd.DataFrame([
-            {'REPORT_DATE': '2024-12-31', 'TOTAL_OPERATE_INCOME': 1000, 'PARENT_NETPROFIT': 100, 'OPERATE_COST': 600, 'BASIC_EPS': 1.0},
-            {'REPORT_DATE': '2025-12-31', 'TOTAL_OPERATE_INCOME': 1200, 'PARENT_NETPROFIT': 150, 'OPERATE_COST': 700, 'BASIC_EPS': 1.5},
+            {'REPORT_DATE': '2024-12-31', 'NOTICE_DATE': '2025-03-20', 'TOTAL_OPERATE_INCOME': 1000, 'PARENT_NETPROFIT': 100, 'OPERATE_COST': 600, 'BASIC_EPS': 1.0},
+            {'REPORT_DATE': '2025-12-31', 'NOTICE_DATE': '2026-03-20', 'TOTAL_OPERATE_INCOME': 1200, 'PARENT_NETPROFIT': 150, 'OPERATE_COST': 700, 'BASIC_EPS': 1.5},
         ])
         mock_balance.return_value = pd.DataFrame([
             {
@@ -232,6 +270,10 @@ class SentimentApiTests(APITestCase):
             {'ann_date': pd.Timestamp('2026-06-01'), 'cash_div': 0.8},
         ])
         mock_realtime.return_value = {'SZ000001': {'market_cap': 2000}}
+        mock_shareholder_history.return_value = pd.DataFrame([
+            {'end_date': pd.Timestamp('2021-12-31'), 'notice_date': pd.Timestamp('2022-01-20'), 'price': 8.0, 'holder_count': 120000, 'holder_count_change': 0, 'holder_count_change_pct': 0.0, 'avg_market_cap_per_holder': 200000, 'avg_shares_per_holder': 25000},
+            {'end_date': pd.Timestamp('2025-12-31'), 'notice_date': pd.Timestamp('2026-01-20'), 'price': 12.0, 'holder_count': 100000, 'holder_count_change': -5000, 'holder_count_change_pct': -4.8, 'avg_market_cap_per_holder': 260000, 'avg_shares_per_holder': 30000},
+        ])
 
         payload = FundamentalService.get_quality_data('SZ000001')
 
@@ -246,11 +288,12 @@ class SentimentApiTests(APITestCase):
         self.assertAlmostEqual(payload['capital_allocation_summary']['latest_roic_proxy_pct'], 16.3, places=1)
         self.assertAlmostEqual(payload['capital_allocation_summary']['latest_book_value_per_share_growth_pct'], 12.5, places=2)
 
+    @patch('api.fundamental_service.FundamentalService.get_shareholder_history')
     @patch('api.price_service.PriceService.get_realtime_price')
     @patch('api.fundamental_service.FundamentalService.get_historical_dividends')
     @patch('api.fundamental_service.ak.stock_cash_flow_sheet_by_yearly_em')
     @patch('api.fundamental_service.ak.stock_balance_sheet_by_report_em')
-    @patch('api.fundamental_service.ak.stock_profit_sheet_by_quarterly_em')
+    @patch('api.fundamental_service.ak.stock_profit_sheet_by_report_em')
     def test_quality_data_includes_stability_metrics(
         self,
         mock_profit,
@@ -258,13 +301,14 @@ class SentimentApiTests(APITestCase):
         mock_cashflow_yearly,
         mock_dividends,
         mock_realtime,
+        mock_shareholder_history,
     ):
         mock_profit.return_value = pd.DataFrame([
-            {'REPORT_DATE': '2021-12-31', 'TOTAL_OPERATE_INCOME': 1000, 'PARENT_NETPROFIT': 150, 'OPERATE_COST': 500, 'BASIC_EPS': 1.50},
-            {'REPORT_DATE': '2022-12-31', 'TOTAL_OPERATE_INCOME': 1250, 'PARENT_NETPROFIT': 175, 'OPERATE_COST': 700, 'BASIC_EPS': 1.75},
-            {'REPORT_DATE': '2023-12-31', 'TOTAL_OPERATE_INCOME': 900, 'PARENT_NETPROFIT': 72, 'OPERATE_COST': 610, 'BASIC_EPS': 0.72},
-            {'REPORT_DATE': '2024-12-31', 'TOTAL_OPERATE_INCOME': 1350, 'PARENT_NETPROFIT': 189, 'OPERATE_COST': 730, 'BASIC_EPS': 1.89},
-            {'REPORT_DATE': '2025-12-31', 'TOTAL_OPERATE_INCOME': 980, 'PARENT_NETPROFIT': 88, 'OPERATE_COST': 675, 'BASIC_EPS': 0.88},
+            {'REPORT_DATE': '2021-12-31', 'NOTICE_DATE': '2022-03-20', 'TOTAL_OPERATE_INCOME': 1000, 'PARENT_NETPROFIT': 150, 'OPERATE_COST': 500, 'BASIC_EPS': 1.50},
+            {'REPORT_DATE': '2022-12-31', 'NOTICE_DATE': '2023-03-20', 'TOTAL_OPERATE_INCOME': 1250, 'PARENT_NETPROFIT': 175, 'OPERATE_COST': 700, 'BASIC_EPS': 1.75},
+            {'REPORT_DATE': '2023-12-31', 'NOTICE_DATE': '2024-03-20', 'TOTAL_OPERATE_INCOME': 900, 'PARENT_NETPROFIT': 72, 'OPERATE_COST': 610, 'BASIC_EPS': 0.72},
+            {'REPORT_DATE': '2024-12-31', 'NOTICE_DATE': '2025-03-20', 'TOTAL_OPERATE_INCOME': 1350, 'PARENT_NETPROFIT': 189, 'OPERATE_COST': 730, 'BASIC_EPS': 1.89},
+            {'REPORT_DATE': '2025-12-31', 'NOTICE_DATE': '2026-03-20', 'TOTAL_OPERATE_INCOME': 980, 'PARENT_NETPROFIT': 88, 'OPERATE_COST': 675, 'BASIC_EPS': 0.88},
         ])
         mock_balance.return_value = pd.DataFrame([
             {'REPORT_DATE': '2021-12-31', 'TOTAL_ASSETS': 1600, 'TOTAL_PARENT_EQUITY': 800, 'MONETARYFUNDS': 100, 'SHORT_LOAN': 40, 'LONG_LOAN': 100},
@@ -288,6 +332,10 @@ class SentimentApiTests(APITestCase):
             {'ann_date': pd.Timestamp('2026-06-01'), 'cash_div': 0.3},
         ])
         mock_realtime.return_value = {'SZ000003': {'market_cap': 2600}}
+        mock_shareholder_history.return_value = pd.DataFrame([
+            {'end_date': pd.Timestamp('2019-12-31'), 'notice_date': pd.Timestamp('2020-01-20'), 'price': 15.0, 'holder_count': 90000, 'holder_count_change': 0, 'holder_count_change_pct': 0.0, 'avg_market_cap_per_holder': 220000, 'avg_shares_per_holder': 15000},
+            {'end_date': pd.Timestamp('2025-12-31'), 'notice_date': pd.Timestamp('2026-01-20'), 'price': 9.5, 'holder_count': 150000, 'holder_count_change': 12000, 'holder_count_change_pct': 8.7, 'avg_market_cap_per_holder': 150000, 'avg_shares_per_holder': 11000},
+        ])
 
         payload = FundamentalService.get_quality_data('SZ000003')
 
@@ -298,6 +346,7 @@ class SentimentApiTests(APITestCase):
         self.assertIn('cyclical_label', payload['stability_summary'])
         self.assertIn('moat_label', payload['stability_summary'])
         self.assertIn('operating_stability_label', payload['stability_summary'])
+        self.assertEqual(len(payload['shareholder_history']), 2)
 
     @patch('api.views.FundamentalService.get_quality_data')
     def test_quality_endpoint_returns_cashflow_summary(self, mock_get_quality_data):
@@ -341,6 +390,22 @@ class SentimentApiTests(APITestCase):
         self.assertEqual(response.data['quality_history'][0]['revenue_growth_pct'], -12.4)
         self.assertEqual(response.data['stability_summary']['cyclical_label'], 'strong_cycle')
 
+    @patch('api.views.FundamentalService.get_quality_data')
+    def test_quality_endpoint_returns_shareholder_history(self, mock_get_quality_data):
+        mock_get_quality_data.return_value = {
+            'history': [],
+            'cashflow_summary': {},
+            'capital_allocation_summary': {},
+            'stability_summary': {},
+            'shareholder_history': [{'date': '2025-12-31', 'price': 12.3, 'holder_count': 100000}],
+            'shareholder_summary': {'latest_holder_count': 100000, 'holder_trend_label': '筹码集中'},
+        }
+
+        response = self.client.get('/api/sentiment/quality/?symbol=SZ000001')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['shareholder_history'][0]['holder_count'], 100000)
+        self.assertEqual(response.data['shareholder_summary']['holder_trend_label'], '筹码集中')
     @patch('api.views.HistoryBacktestService.get_history_backtest')
     def test_history_backtest_endpoint(self, mock_history_backtest):
         mock_history_backtest.return_value = {
@@ -418,6 +483,26 @@ class SentimentApiTests(APITestCase):
         self.assertEqual(result['SZ000001'][0]['price'], 10.0)
         mock_build_single.assert_not_called()
 
+    def test_cache_manager_restores_shareholder_date_columns(self):
+        key = 'shareholder-history-cache-test'
+        df = pd.DataFrame([
+            {
+                'end_date': pd.Timestamp('2025-12-31'),
+                'notice_date': pd.Timestamp('2026-01-20'),
+                'holder_count': 100000,
+            }
+        ])
+
+        stored = CacheManager.set_df(key, df, ttl=60)
+        restored = CacheManager.get_df(key)
+
+        self.assertTrue(stored)
+        self.assertIsNotNone(restored)
+        self.assertTrue(pd.api.types.is_datetime64_any_dtype(restored['end_date']))
+        self.assertTrue(pd.api.types.is_datetime64_any_dtype(restored['notice_date']))
+        self.assertEqual(restored.iloc[0]['end_date'], pd.Timestamp('2025-12-31'))
+        self.assertEqual(restored.iloc[0]['notice_date'], pd.Timestamp('2026-01-20'))
+
     @patch('api.views.cache.delete')
     @patch('api.views.cache.set')
     @patch('api.views.cache.add', side_effect=[True, False])
@@ -439,3 +524,5 @@ class SentimentApiTests(APITestCase):
         self.assertGreaterEqual(mock_set.call_count, 1)
         mock_delete.assert_not_called()
         self.assertEqual(mock_start.call_count, 1)
+
+
