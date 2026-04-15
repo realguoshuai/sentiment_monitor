@@ -228,12 +228,13 @@ def search_stocks(request):
 def get_quality_analysis(request):
     """基本面质量与杜邦分析接口"""
     symbol = request.GET.get('symbol', '').strip().upper()
+    include_shareholder = request.GET.get('include_shareholder', '1').lower() not in {'0', 'false', 'no'}
     if not symbol:
         return Response({'error': 'No symbol provided'}, status=400)
     
     try:
         from .fundamental_service import FundamentalService
-        quality_data = FundamentalService.get_quality_data(symbol)
+        quality_data = FundamentalService.get_quality_data(symbol, include_shareholder=include_shareholder)
         
         return Response({
             'symbol': symbol,
@@ -246,6 +247,26 @@ def get_quality_analysis(request):
         })
     except Exception as e:
         logger.error(f"Quality Analysis Error for {symbol}: {e}")
+        return Response({'error': str(e)}, status=500)
+
+
+@api_view(['GET'])
+def get_quality_shareholder_structure(request):
+    """股东人数、融资与外资持仓对照接口"""
+    symbol = request.GET.get('symbol', '').strip().upper()
+    if not symbol:
+        return Response({'error': 'No symbol provided'}, status=400)
+
+    try:
+        from .fundamental_service import FundamentalService
+        shareholder_data = FundamentalService.get_shareholder_structure_data(symbol)
+        return Response({
+            'symbol': symbol,
+            'shareholder_history': shareholder_data.get('shareholder_history', []),
+            'shareholder_summary': shareholder_data.get('shareholder_summary', {}),
+        })
+    except Exception as e:
+        logger.error(f"Shareholder Structure Error for {symbol}: {e}")
         return Response({'error': str(e)}, status=500)
 
 

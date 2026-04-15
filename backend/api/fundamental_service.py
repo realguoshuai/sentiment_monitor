@@ -5,6 +5,7 @@ import logging
 import time
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime
 
@@ -22,12 +23,33 @@ class FundamentalService:
         return CacheManager.get_df(key)
 
     @staticmethod
+    def _cache_get_value(key):
+        try:
+            return cache.get(key)
+        except Exception as e:
+            logger.warning(f"Payload cache retrieval failed for {key}: {e}")
+            try:
+                cache.delete(key)
+            except Exception:
+                pass
+            return None
+
+    @staticmethod
     def _cache_set(key, value, ttl):
         """委托给 CacheManager (保留接口兼容性)"""
         if isinstance(value, pd.DataFrame):
             CacheManager.set_df(key, value, ttl)
         else:
+            FundamentalService._cache_set_value(key, value, ttl)
+
+    @staticmethod
+    def _cache_set_value(key, value, ttl):
+        try:
             cache.set(key, value, ttl)
+            return True
+        except Exception as e:
+            logger.warning(f"Payload cache storage failed for {key}: {e}")
+            return False
 
     @classmethod
     def _clear_cache(cls, key):
@@ -45,7 +67,12 @@ class FundamentalService:
             f"dividends_v8_{symbol}",
             f"cashflow_yearly_v1_{symbol}",
             f"shareholder_history_v1_{symbol}",
-            f"quality_v10_{symbol}",
+            f"shareholder_overlay_v2_{symbol}",
+            f"shareholder_overlay_v3_{symbol}",
+            f"quality_core_v1_{symbol}",
+            f"northbound_history_v1_{symbol}",
+            f"margin_history_v1_{symbol}",
+            f"quality_v11_{symbol}",
             f"f_score_v7_{symbol}",
         ]
         for key in cache_keys:
@@ -120,8 +147,8 @@ class FundamentalService:
             
             # 强化填充：对净资产进行前向填充
             df_fund = df_fund.sort_values('REPORT_DATE')
-            df_fund['TOTAL_PARENT_EQUITY'] = df_fund['TOTAL_PARENT_EQUITY'].replace(0, pd.NA).ffill().fillna(0)
-            df_fund['ttm_profit'] = df_fund['ttm_profit'].replace(0, pd.NA).ffill().fillna(0)
+            df_fund['TOTAL_PARENT_EQUITY'] = df_fund['TOTAL_PARENT_EQUITY'].mask(df_fund['TOTAL_PARENT_EQUITY'] == 0).ffill().fillna(0)
+            df_fund['ttm_profit'] = df_fund['ttm_profit'].mask(df_fund['ttm_profit'] == 0).ffill().fillna(0)
             
             # 最终清洗：确保 NOTICE_DATE 严格递增且用于 merge_asof
             df_fund = df_fund.dropna(subset=['NOTICE_DATE'])
@@ -346,6 +373,263 @@ class FundamentalService:
             logger.warning(f"Failed to fetch shareholder history for {symbol}: {e}")
             return pd.DataFrame()
 
+    @classmethod
+    def get_northbound_holding_history(cls, symbol):
+        symbol = cls._fix_symbol(symbol)
+        cache_key = f"northbound_history_v1_{symbol}"
+        cached_df = cls._cache_get(cache_key)
+        if cached_df is not None:
+            return cached_df
+
+        try:
+            with cls._without_proxy_env():
+                df = ak.stock_hsgt_individual_em(symbol=symbol[2:])
+            if df is None or df.empty:
+                return pd.DataFrame()
+
+            working = df.copy().rename(
+                columns={
+                    '持股日期': 'trade_date',
+                    '当日收盘价': 'foreign_close_price',
+                    '持股数量': 'foreign_hold_shares',
+                    '持股市值': 'foreign_hold_market_cap',
+                    '持股数量占A股百分比': 'foreign_hold_ratio_pct',
+                    '今日增持股数': 'foreign_net_shares',
+                    '今日增持资金': 'foreign_net_amount',
+                    '今日持股市值变化': 'foreign_market_cap_change',
+                }
+            )
+            if 'trade_date' not in working.columns:
+                return pd.DataFrame()
+
+            working['trade_date'] = pd.to_datetime(working['trade_date'], errors='coerce')
+            numeric_columns = [
+                'foreign_close_price',
+                'foreign_hold_shares',
+                'foreign_hold_market_cap',
+                'foreign_hold_ratio_pct',
+                'foreign_net_shares',
+                'foreign_net_amount',
+                'foreign_market_cap_change',
+            ]
+            for column in numeric_columns:
+                if column not in working.columns:
+                    working[column] = 0.0
+                working[column] = pd.to_numeric(working[column], errors='coerce').fillna(0)
+
+            working = working.dropna(subset=['trade_date']).sort_values('trade_date')
+            working = working[
+                [
+                    'trade_date',
+                    'foreign_close_price',
+                    'foreign_hold_shares',
+                    'foreign_hold_market_cap',
+                    'foreign_hold_ratio_pct',
+                    'foreign_net_shares',
+                    'foreign_net_amount',
+                    'foreign_market_cap_change',
+                ]
+            ].drop_duplicates('trade_date', keep='last')
+            cls._cache_set(cache_key, working, 12 * 3600)
+            return working
+        except Exception as e:
+            logger.warning(f"Failed to fetch northbound holding history for {symbol}: {e}")
+            return pd.DataFrame()
+
+    @classmethod
+    def get_margin_history_aligned(cls, symbol, target_dates):
+        symbol = cls._fix_symbol(symbol)
+        target_index = pd.DataFrame({
+            'date_dt': pd.to_datetime(pd.Series(target_dates), errors='coerce').dt.normalize()
+        }).dropna().drop_duplicates().sort_values('date_dt')
+        if target_index.empty:
+            return pd.DataFrame(columns=['date_dt', 'margin_trade_date', 'financing_balance', 'financing_buy_amount'])
+
+        cache_key = f"margin_history_v1_{symbol}"
+        cached_df = cls._cache_get(cache_key)
+        if cached_df is not None and not cached_df.empty:
+            cached_dates = set(pd.to_datetime(cached_df['date_dt'], errors='coerce').dt.normalize().dropna())
+            target_dates_set = set(target_index['date_dt'])
+            if target_dates_set.issubset(cached_dates):
+                return cached_df
+
+        market = symbol[:2]
+        if market not in {'SH', 'SZ'}:
+            return target_index.assign(
+                margin_trade_date=pd.NaT,
+                financing_balance=pd.NA,
+                financing_buy_amount=pd.NA,
+            )
+
+        pure_code = symbol[2:]
+        candidate_trade_dates = sorted({
+            (pd.to_datetime(target_date) - pd.Timedelta(days=offset)).strftime('%Y%m%d')
+            for target_date in target_index['date_dt']
+            for offset in range(0, 8)
+        })
+        snapshots_by_trade_date = {}
+        with ThreadPoolExecutor(max_workers=min(4, max(len(candidate_trade_dates), 1))) as executor:
+            future_map = {
+                executor.submit(cls._get_margin_daily_detail, market, trade_date): trade_date
+                for trade_date in candidate_trade_dates
+            }
+            for future in as_completed(future_map):
+                trade_date = future_map[future]
+                daily_df = future.result()
+                if daily_df is None or daily_df.empty:
+                    continue
+                code_column = '标的证券代码' if market == 'SH' else '证券代码'
+                if code_column not in daily_df.columns:
+                    continue
+                working = daily_df.copy()
+                working[code_column] = working[code_column].astype(str).str.zfill(6)
+                matched = working[working[code_column] == pure_code]
+                if matched.empty:
+                    continue
+                row = matched.iloc[0]
+                snapshots_by_trade_date[trade_date] = {
+                    'margin_trade_date': pd.to_datetime(trade_date),
+                    'financing_balance': float(pd.to_numeric(row.get('融资余额', 0), errors='coerce') or 0),
+                    'financing_buy_amount': float(pd.to_numeric(row.get('融资买入额', 0), errors='coerce') or 0),
+                }
+
+        aligned_rows = []
+        for target_date in target_index['date_dt']:
+            fallback = {
+                'date_dt': pd.to_datetime(target_date).normalize(),
+                'margin_trade_date': pd.NaT,
+                'financing_balance': pd.NA,
+                'financing_buy_amount': pd.NA,
+            }
+            for offset in range(0, 8):
+                trade_date = (pd.to_datetime(target_date) - pd.Timedelta(days=offset)).strftime('%Y%m%d')
+                snapshot = snapshots_by_trade_date.get(trade_date)
+                if snapshot:
+                    aligned_rows.append({
+                        'date_dt': pd.to_datetime(target_date).normalize(),
+                        **snapshot,
+                    })
+                    break
+            else:
+                aligned_rows.append(fallback)
+
+        result = pd.DataFrame(aligned_rows)
+        if result.empty:
+            result = target_index.assign(
+                margin_trade_date=pd.NaT,
+                financing_balance=pd.NA,
+                financing_buy_amount=pd.NA,
+            )
+        cls._cache_set(cache_key, result, 12 * 3600)
+        return result
+
+    @classmethod
+    def _get_margin_daily_detail(cls, market, trade_date):
+        fetcher = ak.stock_margin_detail_sse if market == 'SH' else ak.stock_margin_detail_szse
+        daily_key = f"margin_daily_v1_{market}_{trade_date}"
+        daily_df = cls._cache_get(daily_key)
+        if daily_df is not None:
+            return daily_df
+
+        try:
+            with cls._without_proxy_env():
+                daily_df = fetcher(date=trade_date)
+            if daily_df is None:
+                daily_df = pd.DataFrame()
+            cls._cache_set(daily_key, daily_df, 12 * 3600)
+            return daily_df
+        except Exception:
+            return pd.DataFrame()
+
+    @classmethod
+    def get_shareholder_structure_data(cls, symbol):
+        symbol = cls._fix_symbol(symbol)
+        cache_key = f"shareholder_overlay_v3_{symbol}"
+        cached_data = cls._cache_get_value(cache_key)
+        if cached_data is not None:
+            return cached_data
+
+        shareholder_history = []
+        shareholder_summary = {}
+        shareholder_df = cls.get_shareholder_history(symbol)
+        if shareholder_df is None or shareholder_df.empty:
+            payload = {
+                'shareholder_history': shareholder_history,
+                'shareholder_summary': shareholder_summary,
+            }
+            cls._cache_set_value(cache_key, payload, 12 * 3600)
+            return payload
+
+        latest_shareholder_date = shareholder_df['end_date'].max()
+        cutoff_date = latest_shareholder_date - pd.DateOffset(years=10)
+        shareholder_window = shareholder_df[shareholder_df['end_date'] >= cutoff_date].copy()
+        if len(shareholder_window) < 2:
+            cutoff_date = latest_shareholder_date - pd.DateOffset(years=5)
+            shareholder_window = shareholder_df[shareholder_df['end_date'] >= cutoff_date].copy()
+        shareholder_window = shareholder_window.sort_values('end_date')
+        if shareholder_window.empty:
+            payload = {
+                'shareholder_history': shareholder_history,
+                'shareholder_summary': shareholder_summary,
+            }
+            cls._cache_set_value(cache_key, payload, 12 * 3600)
+            return payload
+
+        shareholder_window = shareholder_window.copy()
+        shareholder_window['date_dt'] = shareholder_window['end_date'].dt.normalize()
+        base_holder_count = (
+            float(shareholder_window.iloc[0]['holder_count'])
+            if float(shareholder_window.iloc[0]['holder_count']) > 0 else 0
+        )
+        latest_holder_count = float(shareholder_window.iloc[-1]['holder_count'])
+        window_years = round(
+            (latest_shareholder_date - shareholder_window.iloc[0]['end_date']).days / 365,
+            1,
+        )
+        holder_count_change_pct = (
+            cls._safe_ratio(latest_holder_count - base_holder_count, base_holder_count) * 100
+            if base_holder_count > 0 else 0.0
+        )
+
+        shareholder_history = shareholder_window[
+            [
+                'end_date', 'notice_date', 'price', 'holder_count',
+                'holder_count_change', 'holder_count_change_pct',
+                'avg_market_cap_per_holder', 'avg_shares_per_holder',
+            ]
+        ].copy()
+        shareholder_history['date'] = shareholder_history['end_date'].dt.strftime('%Y-%m-%d')
+        shareholder_history['notice_date'] = shareholder_history['notice_date'].dt.strftime('%Y-%m-%d').fillna('')
+        shareholder_history = shareholder_history[
+            [
+                'date', 'notice_date', 'price', 'holder_count',
+                'holder_count_change', 'holder_count_change_pct',
+                'avg_market_cap_per_holder', 'avg_shares_per_holder',
+            ]
+        ]
+        shareholder_history = shareholder_history.where(pd.notnull(shareholder_history), None)
+        shareholder_history = shareholder_history.round(4).to_dict(orient='records')
+
+        latest_shareholder_row = shareholder_window.iloc[-1]
+        shareholder_summary = {
+            'window_years': window_years,
+            'latest_stat_date': latest_shareholder_row['end_date'].strftime('%Y-%m-%d') if pd.notnull(latest_shareholder_row.get('end_date')) else '',
+            'latest_holder_count': int(latest_holder_count),
+            'holder_count_change_pct': round(holder_count_change_pct, 2),
+            'latest_avg_shares_per_holder': round(float(shareholder_window.iloc[-1]['avg_shares_per_holder']), 2),
+            'latest_avg_market_cap_per_holder': round(float(shareholder_window.iloc[-1]['avg_market_cap_per_holder']), 2),
+            'latest_price': round(float(shareholder_window.iloc[-1]['price']), 2),
+            'holder_trend_label': cls._classify_holder_trend(holder_count_change_pct),
+            'alignment_note': '仅展示股东统计截止日与对应价格，不叠加融资或外资口径',
+        }
+
+        payload = {
+            'shareholder_history': shareholder_history,
+            'shareholder_summary': shareholder_summary,
+        }
+        cls._cache_set_value(cache_key, payload, 12 * 3600)
+        return payload
+
     @staticmethod
     def _first_existing_column(df, candidates):
         for column in candidates:
@@ -553,19 +837,59 @@ class FundamentalService:
         return '中性'
 
     @classmethod
-    def get_quality_data(cls, symbol):
+    def get_quality_data(cls, symbol, include_shareholder=True):
         """获取近10年高质量基本面数据 (杜邦因子+护城河+派息+现金流质量)"""
         symbol = cls._fix_symbol(symbol)
-        cache_key = f"quality_v10_{symbol}"
-        # 直接使用 cache.get 避免 _cache_get 的自动 DataFrame 转换
-        cached_data = cache.get(cache_key)
+        cache_key = f"quality_v11_{symbol}" if include_shareholder else f"quality_core_v1_{symbol}"
+        cached_data = cls._cache_get_value(cache_key)
         if cached_data is not None:
             return cached_data
 
         try:
             # 1. 获取利润表数据 (使用报告期接口，确保 12/31 是全年累积数据)
             df_profit = ak.stock_profit_sheet_by_report_em(symbol=symbol)
+            notice_col = cls._first_existing_column(df_profit, ['NOTICE_DATE', '公告日期', '公告日'])
+            revenue_col = cls._first_existing_column(
+                df_profit,
+                ['TOTAL_OPERATE_INCOME', 'OPERATE_INCOME', '营业总收入', '营业收入']
+            )
+            profit_col = cls._first_existing_column(
+                df_profit,
+                ['PARENT_NETPROFIT', '归属于母公司所有者的净利润', '归母净利润', '净利润']
+            )
+            cost_col = cls._first_existing_column(
+                df_profit,
+                ['OPERATE_COST', '营业成本']
+            )
+            eps_col = cls._first_existing_column(
+                df_profit,
+                ['BASIC_EPS', '基本每股收益']
+            )
+            rename_map = {}
+            if notice_col and notice_col != 'NOTICE_DATE':
+                rename_map[notice_col] = 'NOTICE_DATE'
+            if revenue_col and revenue_col != 'TOTAL_OPERATE_INCOME':
+                rename_map[revenue_col] = 'TOTAL_OPERATE_INCOME'
+            if profit_col and profit_col != 'PARENT_NETPROFIT':
+                rename_map[profit_col] = 'PARENT_NETPROFIT'
+            if cost_col and cost_col != 'OPERATE_COST':
+                rename_map[cost_col] = 'OPERATE_COST'
+            if eps_col and eps_col != 'BASIC_EPS':
+                rename_map[eps_col] = 'BASIC_EPS'
+            if rename_map:
+                df_profit = df_profit.rename(columns=rename_map)
+            if 'NOTICE_DATE' not in df_profit.columns:
+                df_profit['NOTICE_DATE'] = df_profit['REPORT_DATE']
+            if 'OPERATE_COST' not in df_profit.columns:
+                df_profit['OPERATE_COST'] = 0
+            if 'BASIC_EPS' not in df_profit.columns:
+                df_profit['BASIC_EPS'] = 0
+            required_profit_columns = {'REPORT_DATE', 'TOTAL_OPERATE_INCOME', 'PARENT_NETPROFIT'}
+            missing_profit_columns = required_profit_columns - set(df_profit.columns)
+            if missing_profit_columns:
+                raise KeyError(f"Missing required profit columns: {sorted(missing_profit_columns)}")
             df_profit['REPORT_DATE'] = pd.to_datetime(df_profit['REPORT_DATE'])
+            df_profit['NOTICE_DATE'] = pd.to_datetime(df_profit['NOTICE_DATE'], errors='coerce')
             # 仅提取年报数据
             df_profit = df_profit[df_profit['REPORT_DATE'].dt.month == 12]
             # 强化去重：处理可能存在的重报或重复数据，保留最新的一条
@@ -642,7 +966,7 @@ class FundamentalService:
             df['dps'] = df.apply(lambda r: div_by_year.get(r['REPORT_DATE'].year, 0), axis=1)
             df['payout_ratio'] = df.apply(get_payout_ratio, axis=1)
             df['revenue_growth_pct'] = (
-                df['TOTAL_OPERATE_INCOME'].replace(0, pd.NA).pct_change().fillna(0) * 100
+                df['TOTAL_OPERATE_INCOME'].mask(df['TOTAL_OPERATE_INCOME'] == 0).pct_change().fillna(0) * 100
             )
             df['retention_ratio_pct'] = 100 - df['payout_ratio']
             df['reinvestment_rate_pct'] = df.apply(
@@ -658,13 +982,13 @@ class FundamentalService:
                 axis=1,
             )
             df['share_change_pct'] = (
-                df['implied_share_count'].replace(0, pd.NA).pct_change().fillna(0) * 100
+                df['implied_share_count'].mask(df['implied_share_count'] == 0).pct_change().fillna(0) * 100
             )
             df['book_value_per_share_growth_pct'] = (
-                df['book_value_per_share'].replace(0, pd.NA).pct_change().fillna(0) * 100
+                df['book_value_per_share'].mask(df['book_value_per_share'] == 0).pct_change().fillna(0) * 100
             )
             df['equity_growth_pct'] = (
-                df['TOTAL_PARENT_EQUITY'].replace(0, pd.NA).pct_change().fillna(0) * 100
+                df['TOTAL_PARENT_EQUITY'].mask(df['TOTAL_PARENT_EQUITY'] == 0).pct_change().fillna(0) * 100
             )
             previous_invested_capital = df['invested_capital'].shift(1)
             df['avg_invested_capital'] = df.apply(
@@ -776,57 +1100,6 @@ class FundamentalService:
                     cyclical_label,
                 ),
             }
-            shareholder_history = []
-            shareholder_summary = {}
-            shareholder_df = cls.get_shareholder_history(symbol)
-            if shareholder_df is not None and not shareholder_df.empty:
-                latest_shareholder_date = shareholder_df['end_date'].max()
-                cutoff_date = latest_shareholder_date - pd.DateOffset(years=10)
-                shareholder_window = shareholder_df[shareholder_df['end_date'] >= cutoff_date].copy()
-                if len(shareholder_window) < 2:
-                    cutoff_date = latest_shareholder_date - pd.DateOffset(years=5)
-                    shareholder_window = shareholder_df[shareholder_df['end_date'] >= cutoff_date].copy()
-                shareholder_window = shareholder_window.sort_values('end_date')
-                if not shareholder_window.empty:
-                    base_holder_count = (
-                        float(shareholder_window.iloc[0]['holder_count'])
-                        if float(shareholder_window.iloc[0]['holder_count']) > 0 else 0
-                    )
-                    latest_holder_count = float(shareholder_window.iloc[-1]['holder_count'])
-                    window_years = round(
-                        (latest_shareholder_date - shareholder_window.iloc[0]['end_date']).days / 365,
-                        1,
-                    )
-                    holder_count_change_pct = (
-                        cls._safe_ratio(latest_holder_count - base_holder_count, base_holder_count) * 100
-                        if base_holder_count > 0 else 0.0
-                    )
-                    shareholder_history = shareholder_window[
-                        [
-                            'end_date', 'notice_date', 'price', 'holder_count',
-                            'holder_count_change', 'holder_count_change_pct',
-                            'avg_market_cap_per_holder', 'avg_shares_per_holder',
-                        ]
-                    ].copy()
-                    shareholder_history['date'] = shareholder_history['end_date'].dt.strftime('%Y-%m-%d')
-                    shareholder_history['notice_date'] = shareholder_history['notice_date'].dt.strftime('%Y-%m-%d').fillna('')
-                    shareholder_history = shareholder_history[
-                        [
-                            'date', 'notice_date', 'price', 'holder_count',
-                            'holder_count_change', 'holder_count_change_pct',
-                            'avg_market_cap_per_holder', 'avg_shares_per_holder',
-                        ]
-                    ].round(4).to_dict(orient='records')
-                    shareholder_summary = {
-                        'window_years': window_years,
-                        'latest_holder_count': int(latest_holder_count),
-                        'holder_count_change_pct': round(holder_count_change_pct, 2),
-                        'latest_avg_shares_per_holder': round(float(shareholder_window.iloc[-1]['avg_shares_per_holder']), 2),
-                        'latest_avg_market_cap_per_holder': round(float(shareholder_window.iloc[-1]['avg_market_cap_per_holder']), 2),
-                        'latest_price': round(float(shareholder_window.iloc[-1]['price']), 2),
-                        'holder_trend_label': cls._classify_holder_trend(holder_count_change_pct),
-                    }
-
             records = df[
                 [
                     'date', 'year', 'TOTAL_OPERATE_INCOME', 'PARENT_NETPROFIT',
@@ -847,10 +1120,12 @@ class FundamentalService:
                 'cashflow_summary': summary,
                 'capital_allocation_summary': capital_allocation_summary,
                 'stability_summary': stability_summary,
-                'shareholder_history': shareholder_history,
-                'shareholder_summary': shareholder_summary,
+                'shareholder_history': [],
+                'shareholder_summary': {},
             }
-            cache.set(cache_key, payload, 12 * 3600)
+            if include_shareholder:
+                payload.update(cls.get_shareholder_structure_data(symbol))
+            cls._cache_set_value(cache_key, payload, 12 * 3600)
             return payload
         except Exception as e:
             logger.error(f"Failed to fetch quality data for {symbol}: {e}")
@@ -967,7 +1242,7 @@ class FundamentalService:
     def get_f_score(cls, symbol):
         """计算 Piotroski F-Score (安全性评分)"""
         cache_key = f"f_score_v7_{symbol}"
-        cached = cache.get(cache_key)
+        cached = cls._cache_get_value(cache_key)
         if cached:
             return cached
         
@@ -1039,7 +1314,7 @@ class FundamentalService:
             # 计算总分 (满分按 5 项计算，如果有 CFO 数据则按 6 项)
             final_score = round((score / total_possible) * 10, 1) if total_possible else 0
             result = {"score": min(final_score, 10.0), "details": details}
-            cache.set(cache_key, result, 3600 * 12)
+            cls._cache_set_value(cache_key, result, 3600 * 12)
             return result
         except Exception as e:
             logger.error(f"F-Score calculation error for {symbol}: {e}")

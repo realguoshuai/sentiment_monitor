@@ -22,10 +22,6 @@
         </div>
       </div>
       <div class="header-actions">
-        <div class="refresh-box" :class="{ 'is-refreshing': isRefreshing }" @click="handleRefresh">
-          <i class="refresh-icon">↻</i>
-          <span>{{ isRefreshing ? '刷新中...' : '强制刷新' }}</span>
-        </div>
         <button @click="$router.back()" class="btn-back">返回</button>
       </div>
     </header>
@@ -38,22 +34,36 @@
     </div>
 
     <main v-else class="content-grid quality-layout">
-      <section
-        v-if="shareholderHistory.length"
-        class="chart-section shareholder-section card chart-card feature-card wide-card"
-      >
+      <section class="chart-section shareholder-section card chart-card feature-card wide-card">
         <div class="section-header feature-header">
           <div>
             <p class="section-kicker">Holder Structure</p>
             <h2>股价与股东人数对比</h2>
-            <p class="subtitle">优先展示近 10 年窗口；若原始披露不足，则退回到近 5 年。</p>
+            <p class="subtitle">优先展示近 10 年窗口；图中仅保留股东户数与统计日股价。</p>
           </div>
-          <div v-if="shareholderSummary" class="feature-pill">{{ shareholderSummary.holder_trend_label }}</div>
+          <div v-if="shareholderSummary?.holder_trend_label" class="feature-pill">{{ shareholderSummary.holder_trend_label }}</div>
+          <div v-else-if="shareholderLoading" class="feature-pill feature-pill-muted">对齐中</div>
+          <div v-else-if="shareholderError" class="feature-pill feature-pill-warning">加载失败</div>
+          <div v-else class="feature-pill feature-pill-muted">暂无数据</div>
         </div>
-        <div ref="shareholderChartRef" class="chart-container chart-container-feature"></div>
-        <div class="insight-strip">
+        <div v-if="shareholderLoading && !shareholderHistory.length" class="deferred-card">
+          <div class="deferred-spinner"></div>
+          <p>正在同步股东人数统计口径…</p>
+          <span>核心财务图表已优先加载，这块会随后补齐。</span>
+        </div>
+        <div v-else-if="!shareholderHistory.length" class="deferred-card deferred-card-empty">
+          <p>{{ shareholderError || '暂未取到可用的股东人数历史，可能是源数据缺失或当前窗口没有可对齐记录。' }}</p>
+          <span>下面的现金流、资本配置和稳定性分析已正常加载，不受影响。</span>
+        </div>
+        <template v-else>
+          <div ref="shareholderChartRef" class="chart-container chart-container-feature"></div>
+          <div class="insight-strip">
           <div class="insight-chip">
-            <span>最新股价</span>
+            <span>最后统计日</span>
+            <strong>{{ latestShareholderDate }}</strong>
+          </div>
+          <div class="insight-chip">
+            <span>统计日股价</span>
             <strong>{{ formatPrice(shareholderSummary?.latest_price) }}</strong>
           </div>
           <div class="insight-chip">
@@ -61,14 +71,11 @@
             <strong>{{ formatCount(shareholderSummary?.latest_holder_count) }}</strong>
           </div>
           <div class="insight-chip">
-            <span>户均市值</span>
-            <strong>{{ formatPrice(shareholderSummary?.latest_avg_market_cap_per_holder) }}</strong>
+            <span>区间变化</span>
+            <strong>{{ formatPct(shareholderSummary?.holder_count_change_pct) }}</strong>
           </div>
-          <div class="insight-chip">
-            <span>筹码趋势</span>
-            <strong>{{ shareholderSummary?.holder_trend_label }}</strong>
           </div>
-        </div>
+        </template>
       </section>
 
       <section class="chart-section cashflow-section card feature-card">
@@ -177,6 +184,9 @@
               <strong>{{ shareholderSummary.window_years }} 年</strong>
             </div>
           </div>
+          <p class="signal-meta">
+            {{ shareholderSummary.alignment_note }}
+          </p>
         </section>
       </aside>
 
@@ -288,13 +298,14 @@ const route = useRoute()
 const sentimentStore = useSentimentStore()
 const symbol = route.params.symbol as string
 const loading = ref(true)
-const isRefreshing = ref(false)
+const shareholderLoading = ref(true)
 const qualityData = ref<any[]>([])
 const cashflowSummary = ref<any | null>(null)
 const capitalAllocationSummary = ref<any | null>(null)
 const stabilitySummary = ref<any | null>(null)
 const shareholderHistory = ref<any[]>([])
 const shareholderSummary = ref<any | null>(null)
+const shareholderError = ref('')
 
 const tooltip = ref({
   visible: false,
@@ -362,6 +373,11 @@ const latestStats = computed(() => {
   return qualityData.value[qualityData.value.length - 1]
 })
 
+const latestShareholderDate = computed(() => {
+  if (!shareholderHistory.value.length) return '--'
+  return shareholderHistory.value[shareholderHistory.value.length - 1]?.date || '--'
+})
+
 const formatPct = (value?: number | null) => {
   if (value === undefined || value === null || Number.isNaN(Number(value))) return '--'
   return `${Number(value).toFixed(1)}%`
@@ -375,6 +391,30 @@ const formatPrice = (value?: number | null) => {
 const formatCount = (value?: number | null) => {
   if (value === undefined || value === null || Number.isNaN(Number(value))) return '--'
   return Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 0 })
+}
+
+const formatAmount = (value?: number | null) => {
+  if (value === undefined || value === null || Number.isNaN(Number(value))) return '--'
+  const numeric = Number(value)
+  const absValue = Math.abs(numeric)
+  if (absValue >= 1e8) return `${(numeric / 1e8).toFixed(2)}亿`
+  if (absValue >= 1e4) return `${(numeric / 1e4).toFixed(1)}万`
+  return numeric.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
+}
+
+const formatCompactNumber = (value?: number | null) => {
+  if (value === undefined || value === null || Number.isNaN(Number(value))) return '--'
+  const numeric = Number(value)
+  const absValue = Math.abs(numeric)
+  if (absValue >= 1e8) return `${(numeric / 1e8).toFixed(1)}亿`
+  if (absValue >= 1e4) return `${(numeric / 1e4).toFixed(0)}万`
+  if (absValue >= 1e3) return `${(numeric / 1e3).toFixed(0)}k`
+  return `${Math.round(numeric)}`
+}
+
+const toFiniteOrNull = (value: unknown) => {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : null
 }
 
 const disposeCharts = () => {
@@ -394,16 +434,26 @@ const disposeCharts = () => {
   shareholderChart = null
 }
 
+const applyShareholderPayload = (payload: any) => {
+  shareholderHistory.value = payload?.shareholder_history || []
+  shareholderSummary.value = payload?.shareholder_summary || null
+  setTimeout(() => {
+    initCharts()
+  }, 100)
+}
+
 const fetchData = async () => {
   loading.value = true
+  shareholderLoading.value = true
+  shareholderError.value = ''
+  let coreLoaded = false
   try {
-    const res = await stockApi.getQualityAnalysis(symbol)
+    const res = await stockApi.getQualityAnalysis(symbol, false)
     qualityData.value = res.data.quality_history || []
     cashflowSummary.value = res.data.cashflow_summary || null
     capitalAllocationSummary.value = res.data.capital_allocation_summary || null
     stabilitySummary.value = res.data.stability_summary || null
-    shareholderHistory.value = res.data.shareholder_history || []
-    shareholderSummary.value = res.data.shareholder_summary || null
+    coreLoaded = true
     setTimeout(() => {
       initCharts()
     }, 100)
@@ -412,30 +462,36 @@ const fetchData = async () => {
   } finally {
     loading.value = false
   }
+
+  if (coreLoaded) {
+    void fetchShareholderStructure()
+  } else {
+    shareholderLoading.value = false
+  }
 }
 
-const handleRefresh = async () => {
-  if (isRefreshing.value) return
-  
-  if (!confirm('强制刷新将清理该股票的所有离线快照并重新爬取原始财报数据，可能耗时 5-10 秒。确定继续？')) {
-    return
-  }
-
-  isRefreshing.value = true
+const fetchShareholderStructure = async () => {
+  shareholderLoading.value = true
+  shareholderError.value = ''
   try {
-    // 1. 调用后端清理接口
-    await stockApi.refreshQualityAnalysis(symbol)
-    
-    // 2. 重新拉取数据 (触发全量冷启动抓取)
-    await fetchData()
-    
-    // 提示成功 (如果有全局 message 组件可以调用)
-    console.log('Cache purged and data re-fetched.')
+    const res = await stockApi.getQualityShareholderStructure(symbol)
+    applyShareholderPayload(res.data)
   } catch (err) {
-    console.error('Refresh failed:', err)
-    alert('刷新失败，请检查网络或后端日志')
+    console.error('Failed to fetch shareholder structure endpoint, falling back to full quality payload:', err)
+    try {
+      const fallback = await stockApi.getQualityAnalysis(symbol, true)
+      applyShareholderPayload(fallback.data)
+      if (!shareholderHistory.value.length) {
+        shareholderError.value = '股东结构数据暂无可用记录。'
+      }
+    } catch (fallbackErr) {
+      shareholderHistory.value = []
+      shareholderSummary.value = null
+      shareholderError.value = '股东结构数据拉取失败，已保留核心财务视图。'
+      console.error('Failed to fetch shareholder structure fallback payload:', fallbackErr)
+    }
   } finally {
-    isRefreshing.value = false
+    shareholderLoading.value = false
   }
 }
 
@@ -775,57 +831,88 @@ const initCharts = () => {
   }
 
   if (shareholderChartRef.value && shareholderHistory.value.length) {
+    const dates = shareholderHistory.value.map(item => item.date)
+    const priceSeries = shareholderHistory.value.map(item => toFiniteOrNull(item.price))
+    const holderSeries = shareholderHistory.value.map(item => toFiniteOrNull(item.holder_count))
+    const tooltipFormatter = (params: any[]) => {
+      const dataIndex = params?.[0]?.dataIndex ?? 0
+      const point = shareholderHistory.value[dataIndex] || {}
+      const lines = [
+        `<div style="font-weight:800;margin-bottom:8px;">${point.date || '--'}</div>`,
+        `<div style="color:#94a3b8;margin-bottom:8px;">股东统计日 ${point.date || '--'}</div>`,
+      ]
+      if (point.notice_date) {
+        lines.push(`<div style="color:#94a3b8;margin-bottom:8px;">公告日 ${point.notice_date}</div>`)
+      } else {
+        lines.push('<div style="margin-bottom:8px;"></div>')
+      }
+
+      params.forEach((item: any) => {
+        const value = item.value
+        let formatted = '--'
+        if (item.seriesName === '股价') formatted = formatPrice(value)
+        if (item.seriesName === '股东户数') formatted = formatCount(value)
+        lines.push(
+          `<div style="display:flex;justify-content:space-between;gap:20px;margin:4px 0;">
+            <span>${item.marker}${item.seriesName}</span>
+            <strong>${formatted}</strong>
+          </div>`
+        )
+      })
+
+      return `<div style="min-width:220px;">${lines.join('')}</div>`
+    }
+
     shareholderChart = echarts.init(shareholderChartRef.value)
-    shareholderChart.setOption({
-      backgroundColor: 'transparent',
-      tooltip: {
-        trigger: 'axis',
-        valueFormatter: (value: number) => Number(value).toFixed(2),
-      },
-      legend: { bottom: 0, textStyle: { color: '#64748b' } },
-      grid: { top: 40, left: 50, right: 60, bottom: 60 },
-      xAxis: {
-        type: 'category',
-        data: shareholderHistory.value.map(item => item.date),
-        axisLabel: { color: '#94a3b8' },
-      },
-      yAxis: [
-        {
-          type: 'value',
-          name: 'Price',
+    shareholderChart.setOption(
+      {
+        backgroundColor: 'transparent',
+        tooltip: {
+          trigger: 'axis',
+          formatter: tooltipFormatter,
+        },
+        legend: { bottom: 0, textStyle: { color: '#64748b' } },
+        grid: { top: 40, left: 50, right: 60, bottom: 60 },
+        xAxis: {
+          type: 'category',
+          data: dates,
           axisLabel: { color: '#94a3b8' },
-          splitLine: { lineStyle: { type: 'dashed', color: '#f1f5f9' } },
         },
-        {
-          type: 'value',
-          name: 'Holders',
-          axisLabel: {
-            color: '#94a3b8',
-            formatter: (value: number) => `${Math.round(value / 1000)}k`,
+        yAxis: [
+          {
+            type: 'value',
+            name: '股价',
+            axisLabel: { color: '#94a3b8' },
+            splitLine: { lineStyle: { type: 'dashed', color: '#f1f5f9' } },
           },
-          splitLine: { show: false },
-        },
-      ],
-      series: [
-        {
-          name: '股价',
-          type: 'line',
-          smooth: true,
-          data: shareholderHistory.value.map(item => item.price),
-          lineStyle: { width: 3 },
-          color: '#2563eb',
-        },
-        {
-          name: '股东户数',
-          type: 'line',
-          yAxisIndex: 1,
-          smooth: true,
-          data: shareholderHistory.value.map(item => item.holder_count),
-          lineStyle: { width: 3 },
-          color: '#f59e0b',
-        },
-      ],
-    })
+          {
+            type: 'value',
+            name: '股东户数',
+            axisLabel: { color: '#94a3b8', formatter: (value: number) => formatCompactNumber(value) },
+            splitLine: { show: false },
+          },
+        ],
+        series: [
+          {
+            name: '股价',
+            type: 'line',
+            smooth: true,
+            data: priceSeries,
+            lineStyle: { width: 3 },
+            color: '#2563eb',
+          },
+          {
+            name: '股东户数',
+            type: 'line',
+            yAxisIndex: 1,
+            smooth: true,
+            data: holderSeries,
+            lineStyle: { width: 3 },
+            color: '#f59e0b',
+          },
+        ],
+      }
+    )
   }
 }
 
@@ -1179,56 +1266,9 @@ onUnmounted(() => {
   transform: translateY(-5px);
 }
 
-/* Refresh Button Styles */
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 16px;
-}
-
-.refresh-box {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
-  background: rgba(255, 255, 255, 0.6);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
-  font-size: 0.9rem;
-  color: #64748b;
-  font-weight: 500;
-}
-
-.refresh-box:hover {
-  background: #fff;
-  color: #3b82f6;
-  border-color: #3b82f6;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.1);
-}
-
-.refresh-icon {
-  font-size: 1.2rem;
-  font-style: normal;
-  display: inline-block;
-  transition: transform 0.3s;
-}
-
-.is-refreshing {
-  pointer-events: none;
-  opacity: 0.7;
-  color: #3b82f6;
-}
-
-.is-refreshing .refresh-icon {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
 }
 
 .btn-back {
@@ -1296,8 +1336,62 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
+.feature-pill-muted {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.feature-pill-warning {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
 .chart-container-feature {
-  height: 420px;
+  height: 500px;
+}
+
+.deferred-card {
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border-radius: 20px;
+  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+  border: 1px dashed #cbd5e1;
+  color: #475569;
+  text-align: center;
+}
+
+.deferred-card p {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.deferred-card span {
+  font-size: 0.88rem;
+  color: #64748b;
+}
+
+.deferred-card-empty {
+  gap: 12px;
+}
+
+.deferred-card-empty p,
+.deferred-card-empty span {
+  max-width: 560px;
+}
+
+.deferred-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #dbeafe;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
 }
 
 .signal-panel {

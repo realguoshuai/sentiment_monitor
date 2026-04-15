@@ -16,8 +16,8 @@ DEBUG = os.environ.get('DJANGO_DEBUG', 'True') == 'True'
 
 
 # 从环境变量读取，默认为 '127.0.0.1,localhost'
-ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost').split(',')
-# ALLOWED_HOSTS = ['*']
+# ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost').split(',')
+ALLOWED_HOSTS = ['*']
 
 # Application definition
 INSTALLED_APPS = [

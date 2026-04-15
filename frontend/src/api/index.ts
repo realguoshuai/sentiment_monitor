@@ -23,7 +23,7 @@ const getBaseURL = () => {
 }
 
 const api = axios.create({
-  baseURL: getBaseURL(),
+  baseURL: '/api',
   timeout: 15000, // 深度分析耗时较长，增加超时时间
   headers: {
     'Content-Type': 'application/json',
@@ -134,8 +134,13 @@ export const stockApi = {
   searchStocks: (q: string) => api.get<any[]>('/sentiment/search/', { params: { q } }),
   getAnalysis: (symbol: string) => api.get<any>(`/sentiment/analysis/?symbol=${symbol}`),
   getHistoryBacktest: (symbol: string) => api.get<any>(`/sentiment/history-backtest/?symbol=${symbol}`),
-  getQualityAnalysis: (symbol: string) => api.get<any>(`/sentiment/quality/?symbol=${symbol}`),
-  refreshQualityAnalysis: (symbol: string) => api.post<any>('/sentiment/quality/refresh/', { symbol }),
+  getQualityAnalysis: (symbol: string, includeShareholder: boolean = true) =>
+    api.get<any>(
+      `/sentiment/quality/?symbol=${symbol}&include_shareholder=${includeShareholder ? 1 : 0}`,
+      { timeout: 45000 },
+    ),
+  getQualityShareholderStructure: (symbol: string) =>
+    api.get<any>(`/sentiment/quality/shareholder-structure/?symbol=${symbol}`, { timeout: 45000 }),
 }
 
 export default api
