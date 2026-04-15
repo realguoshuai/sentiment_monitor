@@ -1,262 +1,276 @@
-# 价值投资分析终端 V3.0 — Institutional-Grade Financial Terminal
+# Sentiment Monitor
 
-> 实时股价行情 · 深度个股估值 · 价差对冲横评 · 零滚动金融工作站
+面向 A 股的研究终端，聚合了实时行情、舆情采集、估值分析、历史回测和财务溯源能力。
 
-## 系统概述
+当前版本已经从“舆情看板”扩展为一套可直接用于个股研究的分析工作台：
 
-本系统是一个面向 A 股市场的**全栈价值投资与价差对冲分析平台**。系统集成了实时股价行情（腾讯财经 API）、多维度舆情与估值分析、智能派息周期推演、以及专业级的价差对冲图表终端，旨在为投资者提供"一屏纵览"的高密度信息仪表盘。
+- 首页看板：监控股票列表、实时价格、最新舆情数据
+- 个股详情页：单股舆情明细、公告、研报、新闻
+- 对比分析页：多标的实时/历史估值与价格对冲对比
+- 深度分析页：10 年分位、F-Score、估值结论层、多模型估值、Investment Thesis
+- 历史回测页：历史区间回放、收益分析、信号相关性
+- 财务溯源页：现金流质量、资本配置、经营稳定性、股价与股东人数对比
 
-## 核心特性 (V3.0 爆改)
+## 项目展示
 
-| 模块 | 功能描述 | 状态 |
-|------|----------|------|
-| 🧬 **Safe-Cache 2.0** | 彻底抛弃 Pickle 二进制，采用 **JSON-Safe 序列化**，免疫 Pandas/Numpy 版本冲突 | 🚀 新增 |
-| 📊 **1Y 周频对冲** | 替换了稀疏的月线，提供过去 52 周的高密度周线对冲矩阵，捕捉中线买卖点 | 🚀 升级 |
-| 📍 **智能极值标注** | 自动识别并标注价差曲线的 **Max (最高)** / **Min (最低)** / **Latest (最新)** | ✅ 优化 |
-| ⚡ **启动预热 + 服务端缓存** | Django 启动后异步预热监控股票的快照、10Y 历史估值、深度分析结果；深度分析接口默认走服务端缓存 | ✅ 新增 |
-| ⚡ **亚秒级增量叠加** | 深度分析对比采用前端内存缓存 + 后端缓存复用，二次加载接近 **0ms 延迟**，无全屏遮罩 | ✅ 优化 |
-| 💰 **ROI/ROE 矩阵** | $ROI = ROE / PB$ 动态估值算法，支持洋河股份等标的的 $20\%$ ROE 保底逻辑 | ✅ |
-| 🧠 **舆情情感矩阵** | 基于 akshare 抓取东财、研报、巨潮资讯，实现多维度情感量化 | ✅ |
+| 首页看板 | 对比分析 | 深度分析 |
+| --- | --- | --- |
+| ![首页看板](QQ图片20260327161107.png) | ![对比分析](QQ图片20260327161155.png) | ![深度分析](QQ图片20260327161212.png) |
+
+## 主要能力
+
+### 1. 实时行情与舆情
+
+- 监控股票池支持增删改查
+- 批量获取实时价格、PE、PB、股息率、市值
+- 聚合新闻、研报、公告，并沉淀情绪分数和热度分数
+
+### 2. 深度分析
+
+- 10 年历史分位矩阵：PE / PB / ROI / 股息率
+- F-Score 安全性排雷
+- 估值结论层
+  - 合理价值区间
+  - 折价 / 溢价
+  - 安全边际
+  - 预期年化回报拆解
+- 多模型估值
+  - ROE-PB 锚点
+  - 盈利能力估值
+  - 股东自由现金流估值
+- Investment Thesis 跟踪
+  - 买入理由
+  - 核心假设
+  - 风险清单
+  - 财报后复核项
+
+### 3. 财务溯源
+
+- 股价与股东人数对比
+  - 优先展示近 10 年窗口
+  - 当前图表只保留“股东统计日股价 + 股东户数”，不再叠加融资和外资口径
+- 现金流质量矩阵
+  - CFO
+  - FCF
+  - CFO / 净利润
+  - FCF / 净利润
+  - Capex 强度
+  - FCF 收益率
+- 资本配置分析
+  - ROIC 代理
+  - 再投资率
+  - 留存率
+  - 股本变动
+  - BVPS 增长
+- 经营稳定性分析
+  - 收入增速波动
+  - 毛利率 / 净利率波动
+  - ROE / ROIC 代理波动
+  - 周期性标签
+  - 护城河与经营稳定性标签
+- 杜邦 ROE 拆解、盈利护城河追踪、股东回馈矩阵
+
+### 4. 历史回测
+
+- 个股历史估值回放
+- 收益拆解
+- 信号相关性分析
 
 ## 技术栈
 
-| 层次 | 技术 |
-|------|------|
-| **后端** | Django 4.x + Django REST Framework + SQLite |
-| **前端** | Vue 3 + TypeScript + Tailwind CSS + Pinia + Vue Router + ECharts |
-| **行情数据** | 腾讯财经 API（实时行情 / 分时 / 日 K 线） |
-| **舆情数据采集** | akshare（东方财富新闻 / 券商研报 / 巨潮公告） |
+| 层 | 技术 |
+| --- | --- |
+| 后端 | Django 4.x, Django REST Framework, SQLite |
+| 前端 | Vue 3, TypeScript, Vite, Pinia, Vue Router, ECharts, Tailwind CSS |
+| 数据源 | 腾讯财经接口、AkShare |
+| 缓存 | Django file-based cache + DataFrame 文件缓存 |
 
 ## 项目结构
 
-```
+```text
 sentiment_monitor/
-├── backend/                    # Django 后端
-│   ├── api/
-│   │   ├── models.py           # Stock / SentimentData 数据模型
-│   │   ├── views.py            # REST API 视图（含对比分析/深度分析接口）
-│   │   ├── price_service.py    # 腾讯财经行情引擎（实时/分时/K线，含单股历史缓存）
-│   │   ├── analysis_service.py # 深度分析缓存与预热服务
-│   │   ├── serializers.py      # DRF 序列化器
-│   │   └── urls.py             # API 路由
-│   ├── collector/              # 数据采集模块
-│   │   ├── sources/
-│   │   │   ├── eastmoney.py    # 东方财富数据源
-│   │   │   └── cninfo.py       # 巨潮资讯数据源
-│   │   └── collector.py        # 采集主程序
-│   ├── sentiment_monitor/      # Django 项目配置
-│   ├── db.sqlite3              # SQLite 数据库
-│   └── requirements.txt
-│
-├── frontend/                   # Vue 3 前端
-│   ├── src/
-│   │   ├── views/
-│   │   │   ├── DashboardView.vue      # 零滚动仪表盘（Dark Theme）
-│   │   │   ├── StockDetailView.vue    # 股票详情页（Light Theme）
-│   │   │   └── ComparisonView.vue     # 价差对冲终端（Light Theme）
-│   │   ├── components/
-│   │   │   ├── StockCard.vue          # 资产行情卡片
-│   │   │   ├── SentimentChart.vue     # 情感趋势图表
-│   │   │   ├── HotScoreChart.vue      # 热度排行图表
-│   │   │   ├── ContentTabs.vue        # 内容标签切换
-│   │   │   └── NewsItem.vue           # 资讯列表项
-│   │   ├── stores/             # Pinia 状态管理
-│   │   ├── api/                # Axios API 封装
-│   │   └── router/             # Vue Router 路由
-│   └── package.json
-│
-├── start.bat                   # 一键启动脚本
-└── README.md
+├─ backend/
+│  ├─ api/                    # 核心业务服务、REST API、缓存管理、测试
+│  ├─ collector/              # 舆情采集逻辑
+│  ├─ scripts/                # 诊断、迁移、验证等非运行时脚本
+│  ├─ sentiment_monitor/      # Django 项目配置
+│  ├─ cache_data/             # 文件缓存目录
+│  ├─ manage.py
+│  └─ requirements.txt
+├─ frontend/
+│  ├─ src/
+│  │  ├─ api/                 # Axios 封装
+│  │  ├─ components/          # 页面组件
+│  │  ├─ router/              # 前端路由
+│  │  ├─ stores/              # Pinia 状态
+│  │  └─ views/               # Dashboard / Detail / Compare / Analysis / History / Quality
+│  ├─ package.json
+│  └─ vite.config.ts
+├─ legacy/                    # 历史文件或旧实现
+├─ start.bat                  # Windows 一键启动脚本
+└─ README.md
 ```
-## 页面展示
 
-![价差对冲终端 1Y周线](QQ图片20260327161155.png)
-![深度分析矩阵 10年期](QQ图片20260327161212.png)
-![ROI 价值仪表盘](QQ图片20260327161107.png)
-## 环境要求
+## 页面与路由
 
-- Windows 10+
-- Python 3.12
-- Node.js 18+
+| 页面 | 路由 | 说明 |
+| --- | --- | --- |
+| 首页看板 | `/` | 股票池、实时价格、舆情总览 |
+| 个股详情 | `/stock/:symbol` | 单股舆情明细 |
+| 对比分析 | `/compare` | 多标的实时/历史对比 |
+| 深度分析 | `/analysis/:symbol` | 分位、F-Score、估值结论层、多模型估值、Thesis |
+| 历史回测 | `/analysis/:symbol/history` | 历史回放与收益分析 |
+| 财务溯源 | `/quality/:symbol` | 现金流、资本配置、稳定性、股东人数 |
 
-## 快速开始
+## 核心接口
 
-### 方式一：一键启动
+### 股票与采集
 
-```bash
-# 双击或命令行运行
+- `GET /api/stocks/`
+- `POST /api/stocks/`
+- `DELETE /api/stocks/{symbol}/`
+- `POST /api/collect/`
+
+### 舆情与行情
+
+- `GET /api/sentiment/latest/`
+- `GET /api/sentiment/today/`
+- `GET /api/sentiment/realtime_prices/`
+- `GET /api/sentiment/search/?q=...`
+- `GET /api/sentiment/comparison_realtime/?symbols=...&type=last|minute`
+- `GET /api/sentiment/comparison_historical/?symbols=...&limit=30&period=day`
+
+### 研究分析
+
+- `GET /api/sentiment/analysis/?symbol=SZ000001`
+- `GET /api/sentiment/history-backtest/?symbol=SZ000001`
+- `GET /api/sentiment/quality/?symbol=SZ000001&include_shareholder=1`
+- `GET /api/sentiment/quality/shareholder-structure/?symbol=SZ000001`
+- `POST /api/sentiment/quality/refresh/`
+
+## 启动方式
+
+### 方式 1：Windows 一键启动
+
+```powershell
 start.bat
 ```
 
-### 方式二：手动部署
+脚本会：
 
-#### 1. 后端部署
+- 启动 Django / Uvicorn 后端，默认 `127.0.0.1:8000`
+- 启动 Vite 前端，默认 `localhost:5173`
+- 自动打开浏览器
 
-```bash
+### 方式 2：手动启动
+
+#### 1. 后端
+
+```powershell
 cd backend
-
-# 创建并激活虚拟环境
 python -m venv venv
-venv\Scripts\activate
-
-# 安装依赖
+.\venv\Scripts\activate
 pip install -r requirements.txt
-
-# 数据库迁移
 python manage.py migrate
-
-# 启动后端服务
 python manage.py runserver
 ```
 
-后端服务：http://127.0.0.1:8000
+如果你希望和 `start.bat` 保持一致，也可以用：
 
-#### 2. 初始化监控股票
-
-```bash
-python manage.py shell
-
-from api.models import Stock
-Stock.objects.create(name='东阿阿胶', symbol='SZ000423', keywords=['东阿阿胶', '阿胶', '滋补'])
-Stock.objects.create(name='洋河股份', symbol='SZ002304', keywords=['洋河', '白酒', '蓝色经典'])
-Stock.objects.create(name='五粮液', symbol='SZ000858', keywords=['五粮液', '白酒', '高端消费'])
-Stock.objects.create(name='贵州茅台', symbol='SH600519', keywords=['茅台', '白酒', '高端消费'])
-exit()
+```powershell
+uvicorn sentiment_monitor.asgi:application --host 127.0.0.1 --port 8000
 ```
 
-#### 3. 运行数据采集
+#### 2. 前端
 
-```bash
-python collector/collector.py
-```
-
-#### 4. 前端部署
-
-```bash
+```powershell
 cd frontend
 npm install
 npm run dev
 ```
 
-前端地址：http://localhost:5173
+前端默认地址：
 
-## API 接口文档
+- `http://localhost:5173`
 
-### 舆情数据
+后端默认地址：
 
-| 接口 | 方法 | 说明 |
-|------|------|------|
-| `/api/sentiment/latest/` | GET | 获取最新舆情数据（含新闻/研报/公告） |
-| `/api/sentiment/today/` | GET | 获取今日舆情数据 |
-| `/api/sentiment/realtime_prices/` | GET | 获取所有监控股票实时价格 |
+- `http://127.0.0.1:8000`
 
-### 对比分析
+## 前后端联调说明
 
-| 接口 | 方法 | 说明 |
-|------|------|------|
-| `/api/sentiment/comparison_realtime/?symbols=SZ000423,SZ002304&type=last` | GET | 实时最新价对比 |
-| `/api/sentiment/comparison_realtime/?symbols=SZ000423,SZ002304&type=minute` | GET | 当日分时数据对比 |
-| `/api/sentiment/comparison_historical/?symbols=SZ000423,SZ002304&limit=30` | GET | 历史 K 线价差（默认 30 天，支持服务端历史缓存复用） |
+前端 API 现在统一走相对路径 `'/api'`。
 
-### 深度分析
+- 开发环境下，Vite 通过 `vite.config.ts` 里的代理把 `/api` 转发到 `http://127.0.0.1:8000`
+- 部署环境下，建议由同域名反向代理直接把 `/api` 转给 Django
 
-| 接口 | 方法 | 说明 |
-|------|------|------|
-| `/api/sentiment/analysis/?symbol=SZ000423` | GET | 个股深度分析（分位 / F-Score / Forward / History，默认优先命中缓存） |
+这意味着前端代码里不再需要手动拼接主机名或端口。
 
-### 股票管理
+## 缓存与性能
 
-| 接口 | 方法 | 说明 |
-|------|------|------|
-| `/api/stocks/` | GET | 获取监控股票列表 |
-| `/api/stocks/` | POST | 新增监控股票 |
-| `/api/collect/` | POST | 手动触发数据采集 |
+项目当前已经对几个慢路径做了缓存拆分：
+
+- 深度分析：`analysis_v4_*`，默认缓存 12 小时
+- 财务溯源主数据：`quality_v11_*` / `quality_core_v1_*`
+- 股东结构图：`shareholder_overlay_v3_*`
+- 财报与现金流序列、分红、股东户数等都有单独缓存键
+
+当前策略的重点是：
+
+- 核心财务数据先返回
+- 股东结构图单独异步拉取
+- 首次冷启动或缓存失效时，AkShare 数据源仍可能较慢
 
 ## 数据源说明
 
-### 行情数据（腾讯财经 API）
+### 腾讯财经接口
 
-| 功能 | 接口 | 说明 |
-|------|------|------|
-| 实时行情 | `qt.gtimg.cn` | 批量获取最新价、涨跌幅 |
-| 分时数据 | `ifzq.gtimg.cn/minute/query` | 当日逐分钟成交价格 |
-| 历史 K 线 | `web.ifzq.gtimg.cn/fqkline` | 前复权日 K 线数据 |
+- 实时价格
+- 分时数据
+- 历史 K 线
 
-### 舆情数据（akshare）
+### AkShare
 
-| 数据源 | akshare 接口 | 说明 |
-|--------|-------------|------|
-| 东方财富新闻 | `stock_news_em` | 个股相关新闻资讯 |
-| 机构研报 | `stock_institute_recommend_detail` | 券商研报推荐 |
-| 巨潮资讯公告 | `stock_zh_a_disclosure_report_cninfo` | 上市公司公告 |
+- A 股快照搜索
+- 新闻、研报、公告
+- 财务报表
+- 分红数据
+- 股东户数
 
-## UI 设计说明
+## 测试与构建
 
-### 首页仪表盘（Dark Theme）
-- **设计理念**：专业交易终端风格，高数据密度
-- **布局**：`h-screen` 弹性布局，零滚动设计
-- **配色**：`#0f172a` 基底 + `#1a2332` 卡片 + 高对比荧光数据色
+后端测试：
 
-### 详情页 & 对比终端（Light Theme）
-- **设计理念**：清爽阅读体验，适合长时间数据分析
-- **配色**：`bg-slate-50` 底色 + `bg-white` 卡片 + 深色文字确保可读性
-- **图表**：ECharts 浅色主题配置，高对比坐标轴与数据标签
-
-## 数据管理
-
-- 系统自动保留最近 30 天数据
-- 每次采集自动覆盖当日数据
-- 数据存储于 `backend/db.sqlite3`
-- Django 启动后会异步预热监控股票的行情快照、10Y 历史估值、深度分析缓存
-- 对比分析历史数据支持“单股票服务端缓存 + 组合结果缓存 + 前端内存缓存”
-- 深度分析接口支持服务端缓存，首次冷启动后后续请求直接复用
-
-## TODO
-
-- 估值结论层：合理价值区间、折价/溢价百分比、安全边际、预期收益拆解
-- 现金流质量：自由现金流、FCF/净利润、CFO/净利润趋势、资本开支强度、FCF 收益率
-- 资本配置分析：分红、回购、再融资、ROIC 与再投资率、每股价值增长跟踪
-- 护城河与经营稳定性：毛利率/净利率稳定性、ROE/ROIC 波动率、周期性行业识别
-- 多模型估值：DCF、Owner Earnings、EPV、分行业估值模板
-- 投资 Thesis 跟踪：买入理由、核心假设、风险清单、季报后自动复核
-- 组合层能力：仓位建议、行业暴露、组合整体 ROE / 股息率 / 安全边际
-
-## 版本历史
-
-| 版本 | 关键变更 |
-|------|---------|
-| **V3.1** | **缓存与启动预热增强**：新增启动阶段异步预热监控股票缓存；深度分析接口下沉到服务端缓存；对比分析历史数据改为单股票缓存复用，切换组合响应更快。 |
-| **V3.0** | **深度性能与视觉重构**：引入 1Y 周线对冲；新增图表 Max/Min/Latest 标注；实现深度分析增量缓存（加载速度提升 90%）；全面上线 Safe-Cache 2.0 解决环境兼容报错。 |
-| V2.5 | 价值评价体系升级：引入 ROI 指标，优化财报跨期推算逻辑。 |
-| V1.0 - V2.0 | 基础架构搭建，完成从文件存储到 REST API 的迁移。 |
-
-## 常见问题
-
-### Q: 如何添加新的监控股票？
-```bash
-python manage.py shell
-from api.models import Stock
-Stock.objects.create(name='股票名称', symbol='股票代码', keywords=['关键词'])
+```powershell
+cd backend
+python manage.py test api.tests
 ```
 
-### Q: 数据采集失败？
-- 检查网络连接
-- akshare 接口可能因数据源限制暂时不可用
-- 查看 `collector.py` 中的错误输出
+前端构建：
 
-### Q: 前端无法连接后端？
-- 确保 Django 服务运行在 http://127.0.0.1:8000
-- 检查是否有防火墙阻挡
+```powershell
+cd frontend
+npm run build
+```
 
-### Q: 对比分析图表无数据？
-- 确认后端服务已启动
-- 检查腾讯财经 API 是否可访问（需要可访问外网）
-- 非交易时间分时数据可能为空（历史数据不受影响）
+当前已验证通过：
 
-### Q: 为什么第一次打开对比分析 / 深度分析还是会慢？
-- 系统虽然会在启动后后台预热，但如果刚启动不久、股票刚新增、或缓存过期，首次请求仍可能触发一次冷加载
-- 冷加载完成后，后续相同股票的深度分析和历史估值序列会优先命中缓存，响应会明显更快
+- `python manage.py test api.tests`
+- `npm run build`
 
----
+## 已知事项
 
-*Built with ❤️ using Django + Vue 3 + ECharts*
+- 财务溯源页首次打开某只股票时，AkShare 相关数据源可能较慢
+- Windows 下文件缓存偶发权限告警时，接口会降级为“缓存写失败但继续返回结果”
+- 前端构建目前仍有一个 Vite 告警：主 chunk 超过 `500 kB`，不影响功能
+
+## 开发建议
+
+- 功能相关代码优先放在 `backend/api/` 和 `frontend/src/`
+- 诊断、迁移、一次性脚本统一收纳到 `backend/scripts/`
+- 新增页面时，优先在 `frontend/src/router/index.ts` 中补路由，再扩展 `frontend/src/api/index.ts`
+- 新增慢查询或慢抓取路径时，优先考虑拆分缓存而不是把整页请求继续做大
+
+## 许可证
+
+当前仓库未单独声明开源许可证，如需对外发布，请补充 LICENSE。
