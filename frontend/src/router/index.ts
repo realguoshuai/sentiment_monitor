@@ -1,6 +1,4 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import DashboardView from '@/views/DashboardView.vue'
-import StockDetailView from '@/views/StockDetailView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -8,18 +6,23 @@ const router = createRouter({
     {
       path: '/',
       name: 'dashboard',
-      component: DashboardView
+      component: () => import('@/views/DashboardView.vue')
     },
     {
       path: '/stock/:symbol',
       name: 'stock-detail',
-      component: StockDetailView,
+      component: () => import('@/views/StockDetailView.vue'),
       props: true
     },
     {
       path: '/compare',
       name: 'compare',
       component: () => import('@/views/ComparisonView.vue')
+    },
+    {
+      path: '/screener',
+      name: 'screener',
+      component: () => import('@/views/ScreenerView.vue')
     },
     {
       path: '/analysis/:symbol',

@@ -8,6 +8,8 @@ class Stock(models.Model):
     symbol = models.CharField(max_length=20, unique=True, verbose_name='股票代码')
     keywords = models.TextField(default='[]', verbose_name='关键词')
     extra_links = models.TextField(default='[]', verbose_name='额外链接')
+    industry = models.CharField(max_length=80, blank=True, default='', verbose_name='行业')
+    peer_symbols = models.TextField(default='[]', verbose_name='同行股票代码')
     created_at = models.DateTimeField(auto_now_add=True)
     valuation_config = models.TextField(default='{}', verbose_name='估值配置')
     
@@ -29,6 +31,17 @@ class Stock(models.Model):
     def set_keywords(self, keywords_list):
         """设置关键词列表"""
         self.keywords = json.dumps(keywords_list)
+
+    def get_peer_symbols(self):
+        """获取同行股票代码列表"""
+        try:
+            return json.loads(self.peer_symbols)
+        except Exception:
+            return []
+
+    def set_peer_symbols(self, peer_symbols_list):
+        """设置同行股票代码列表"""
+        self.peer_symbols = json.dumps(peer_symbols_list)
 
     def get_valuation_config(self):
         """获取估值配置"""
@@ -141,3 +154,33 @@ class FundamentalSnapshot(models.Model):
 
     def __str__(self):
         return f"{self.symbol} - {self.date}"
+
+
+class StockScreenerSnapshot(models.Model):
+    """A 股选股快照 (最新一轮筛选所需指标的本地落库)"""
+    snapshot_date = models.DateField(verbose_name='快照日期', db_index=True)
+    symbol = models.CharField(max_length=20, verbose_name='股票代码', db_index=True)
+    name = models.CharField(max_length=50, verbose_name='股票名称')
+    industry = models.CharField(max_length=80, blank=True, default='', verbose_name='行业')
+    price = models.FloatField(default=0, verbose_name='价格')
+    market_cap = models.FloatField(default=0, verbose_name='总市值')
+    pe = models.FloatField(default=0, verbose_name='市盈率')
+    pb = models.FloatField(default=0, verbose_name='市净率')
+    dividend_yield = models.FloatField(default=0, verbose_name='股息率')
+    roe_proxy_pct = models.FloatField(default=0, verbose_name='ROE 代理')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = '选股快照'
+        verbose_name_plural = '选股快照'
+        unique_together = ['snapshot_date', 'symbol']
+        ordering = ['symbol']
+        indexes = [
+            models.Index(fields=['snapshot_date', 'pb']),
+            models.Index(fields=['snapshot_date', 'pe']),
+            models.Index(fields=['snapshot_date', 'roe_proxy_pct']),
+            models.Index(fields=['snapshot_date', 'dividend_yield']),
+        ]
+
+    def __str__(self):
+        return f"{self.snapshot_date} {self.symbol}"

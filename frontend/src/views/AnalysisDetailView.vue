@@ -60,6 +60,10 @@
               <span class="step-text">{{ step }}</span>
             </div>
           </div>
+          <div class="loading-quote">
+            <p>“{{ loadingQuote.text }}”</p>
+            <span>{{ loadingQuote.author }}</span>
+          </div>
           <div class="engine-tag">QUANT ENGINE V4.0</div>
         </div>
       </div>
@@ -277,6 +281,40 @@
               </div>
             </div>
           </div>
+          <div class="normalized-panel" v-if="normalizedEarnings?.enabled">
+            <div class="normalized-header">
+              <div>
+                <span class="valuation-card-title">归一化口径</span>
+                <strong>先看利润是否偏离中枢，再决定该信哪种盈利口径。</strong>
+              </div>
+              <span class="normalized-badge" :class="getNormalizedTone(normalizedEarnings.cycle_position_label)">
+                {{ normalizedEarnings.cycle_position_label }}
+              </span>
+            </div>
+            <div class="normalized-grid">
+              <article class="normalized-card">
+                <span>当前 EPS</span>
+                <strong>{{ formatPrice(normalizedEarnings.current_eps) }}</strong>
+                <p>近 {{ normalizedEarnings.window_years }} 年归一 EPS {{ formatPrice(normalizedEarnings.normalized_eps) }}</p>
+              </article>
+              <article class="normalized-card">
+                <span>EPS 偏离中枢</span>
+                <strong>{{ formatSignedPct(normalizedEarnings.eps_deviation_pct) }}</strong>
+                <p>盈利能力估值当前采用 {{ normalizedEarnings.basis_label }}</p>
+              </article>
+              <article class="normalized-card">
+                <span>FCF / 股</span>
+                <strong>{{ formatPrice(normalizedEarnings.current_fcf_per_share) }}</strong>
+                <p>归一口径 {{ formatPrice(normalizedEarnings.normalized_fcf_per_share) }}</p>
+              </article>
+              <article class="normalized-card">
+                <span>净利率</span>
+                <strong>{{ formatPct(normalizedEarnings.current_net_margin_pct) }}</strong>
+                <p>归一口径 {{ formatPct(normalizedEarnings.normalized_net_margin_pct) }}</p>
+              </article>
+            </div>
+            <p class="normalized-note">{{ normalizedEarnings.explanation }}</p>
+          </div>
           <div class="model-grid" v-if="valuationModels.length">
             <article
               v-for="model in valuationModels"
@@ -288,6 +326,7 @@
                 <div>
                   <span class="valuation-card-title">{{ model.label }}</span>
                   <p class="model-desc">{{ model.description || model.reason }}</p>
+                  <p v-if="model.basis_label" class="model-basis">{{ model.basis_label }}</p>
                 </div>
                 <span class="model-badge" :class="model.status === 'available' ? 'badge-ready' : 'badge-muted'">
                   {{ model.status === 'available' ? Number(model.effective_weight_pct || 0).toFixed(0) + '% 权重' : '待补数' }}
@@ -317,6 +356,93 @@
           </div>
         </section>
       </div>
+
+      <section class="section peer-section" v-if="peerComparison">
+        <div class="peer-header">
+          <div>
+            <p class="section-kicker">Peer Anchor</p>
+            <h2>行业与同行对比</h2>
+            <p class="subtitle">先看同行中位数，再判断当前这家公司到底是“便宜”还是“基本面更弱”。</p>
+          </div>
+          <div class="peer-badge-stack">
+            <span class="peer-badge" v-if="peerComparison.industry">行业 {{ peerComparison.industry }}</span>
+            <span class="peer-badge" v-if="peerComparison.source_label">{{ peerComparison.source_label }}</span>
+            <span class="peer-badge">{{ peerComparison.peer_count }} 家同行</span>
+          </div>
+        </div>
+
+        <template v-if="peerComparison.enabled && peerRelativeView && peerMedians">
+          <div class="peer-overview-grid">
+            <article class="peer-metric-card">
+              <span class="valuation-card-title">PB 相对同行</span>
+              <strong :class="getPeerGapTone(peerRelativeView.pb_vs_peer_median_pct, true)">
+                {{ formatSignedPct(peerRelativeView.pb_vs_peer_median_pct) }}
+              </strong>
+              <p>同行中位 {{ formatMetric(peerMedians.pb, 'pb') }}x</p>
+            </article>
+            <article class="peer-metric-card">
+              <span class="valuation-card-title">PE 相对同行</span>
+              <strong :class="getPeerGapTone(peerRelativeView.pe_vs_peer_median_pct, true)">
+                {{ formatSignedPct(peerRelativeView.pe_vs_peer_median_pct) }}
+              </strong>
+              <p>同行中位 {{ formatMetric(peerMedians.pe, 'pe') }}x</p>
+            </article>
+            <article class="peer-metric-card">
+              <span class="valuation-card-title">前瞻 ROE</span>
+              <strong :class="getPeerGapTone(peerRelativeView.expected_roe_vs_peer_median_pct)">
+                {{ formatSignedPct(peerRelativeView.expected_roe_vs_peer_median_pct) }}
+              </strong>
+              <p>同行中位 {{ formatPct(peerMedians.expected_roe) }}</p>
+            </article>
+            <article class="peer-metric-card">
+              <span class="valuation-card-title">股息率</span>
+              <strong :class="getPeerGapTone(peerRelativeView.dividend_yield_vs_peer_median_pct)">
+                {{ formatSignedDiff(peerRelativeView.dividend_yield_vs_peer_median_pct) }}
+              </strong>
+              <p>同行中位 {{ formatPct(peerMedians.dividend_yield) }} | 展示为差值</p>
+            </article>
+          </div>
+
+          <div class="peer-summary-strip">
+            {{ peerComparison.summary }}
+          </div>
+
+          <div class="peer-table-shell">
+            <table class="peer-table">
+              <thead>
+                <tr>
+                  <th>公司</th>
+                  <th>价格</th>
+                  <th>PE</th>
+                  <th>PB</th>
+                  <th>股息率</th>
+                  <th>前瞻 ROE</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in peerRows" :key="row.symbol" :class="{ 'row-target': row.is_target }">
+                  <td>
+                    <div class="peer-name-cell">
+                      <strong>{{ row.name }}</strong>
+                      <span>{{ row.symbol }}</span>
+                    </div>
+                  </td>
+                  <td>{{ formatPrice(row.price) }}</td>
+                  <td>{{ formatMetric(row.pe, 'pe') }}</td>
+                  <td>{{ formatMetric(row.pb, 'pb') }}</td>
+                  <td>{{ formatPct(row.dividend_yield) }}</td>
+                  <td>{{ formatPct(row.expected_roe) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+
+        <div v-else class="peer-empty-state">
+          <strong>同行锚点还没配置好</strong>
+          <p>{{ peerComparison.reason || '先在标的管理里补上行业或同行代码，这里才会生成横向估值矩阵。' }}</p>
+        </div>
+      </section>
 
       <section class="section thesis-section" v-if="investmentThesis">
         <div class="thesis-header">
@@ -415,9 +541,10 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue';
 import { useRoute } from 'vue-router';
-import * as echarts from 'echarts';
+import { echarts, type ECharts } from '@/lib/echarts';
 import { stockApi } from '@/api';
 import { useSentimentStore } from '@/stores/sentiment';
+import { useInvestorLoadingQuotes } from '@/composables/useInvestorLoadingQuotes';
 
 interface PercentileMetric {
   current: number;
@@ -451,6 +578,19 @@ interface InvestmentThesis {
     level_label: string;
   }>;
   review_triggers: string[];
+}
+
+interface PeerComparisonRow {
+  symbol: string;
+  name: string;
+  industry: string;
+  is_target: boolean;
+  price: number;
+  market_cap: number;
+  pe: number;
+  pb: number;
+  dividend_yield: number;
+  expected_roe: number;
 }
 
 interface AnalysisPayload {
@@ -513,6 +653,23 @@ interface AnalysisPayload {
       dy_percentile_zone: string;
       model_alignment_label: string;
     };
+    normalized_earnings?: {
+      enabled: boolean;
+      selected_basis: string;
+      basis_label: string;
+      window_years: number;
+      cycle_position_label: string;
+      current_eps: number;
+      normalized_eps: number;
+      eps_deviation_pct: number;
+      current_fcf_per_share: number;
+      normalized_fcf_per_share: number;
+      fcf_deviation_pct: number;
+      current_net_margin_pct: number;
+      normalized_net_margin_pct: number;
+      margin_deviation_pct: number;
+      explanation: string;
+    };
     multi_model_valuation?: {
       approach: string;
       available_model_count: number;
@@ -547,9 +704,32 @@ interface AnalysisPayload {
           vs: string;
         };
         description: string;
+        basis_label?: string;
         highlights: string[];
       }>;
     };
+  };
+  peer_comparison?: {
+    enabled: boolean;
+    industry: string;
+    peer_count: number;
+    source_label: string;
+    reason: string;
+    summary: string;
+    medians: {
+      price: number;
+      pe: number;
+      pb: number;
+      dividend_yield: number;
+      expected_roe: number;
+    };
+    relative_view: {
+      pe_vs_peer_median_pct: number;
+      pb_vs_peer_median_pct: number;
+      dividend_yield_vs_peer_median_pct: number;
+      expected_roe_vs_peer_median_pct: number;
+    };
+    rows: PeerComparisonRow[];
   };
   investment_thesis?: InvestmentThesis;
 }
@@ -559,6 +739,7 @@ const sentimentStore = useSentimentStore();
 const symbol = route.params.symbol as string;
 
 const loading = ref(true);
+const { loadingQuote } = useInvestorLoadingQuotes(loading);
 const loadingCompare = ref(false);
 const analysisData = ref<AnalysisPayload | null>(null);
 const historicalCache = ref<Record<string, AnalysisPayload>>({});
@@ -567,7 +748,7 @@ const stockData = ref<{ symbol: string } | null>(null);
 const activeMetric = ref('pe');
 const compareSymbols = ref<string[]>([]);
 const chartRef = ref<HTMLElement | null>(null);
-let chartInstance: echarts.ECharts | null = null;
+let chartInstance: ECharts | null = null;
 
 const calcParams = ref({
   expectedRoe: 15,
@@ -598,6 +779,11 @@ const multiModelValuation = computed(() => valuationConclusion.value?.multi_mode
 const valuationBlend = computed(() => multiModelValuation.value?.blended_range ?? null);
 const valuationModels = computed(() => multiModelValuation.value?.models ?? []);
 const valuationModelCount = computed(() => multiModelValuation.value?.available_model_count ?? 0);
+const normalizedEarnings = computed(() => valuationConclusion.value?.normalized_earnings ?? null);
+const peerComparison = computed(() => analysisData.value?.peer_comparison ?? null);
+const peerRows = computed(() => peerComparison.value?.rows ?? []);
+const peerMedians = computed(() => peerComparison.value?.medians ?? null);
+const peerRelativeView = computed(() => peerComparison.value?.relative_view ?? null);
 const investmentThesis = computed(() => analysisData.value?.investment_thesis ?? null);
 const valuationSummaryClass = computed(() => `summary-${valuationConclusion.value?.summary_color || 'slate'}`);
 const manualFairPb = computed(() => {
@@ -746,9 +932,36 @@ const formatPct = (value?: number) => {
   return `${Number(value).toFixed(1)}%`;
 };
 
+const formatSignedPct = (value?: number) => {
+  if (value === undefined || value === null || Number.isNaN(value)) return '--';
+  const numeric = Number(value);
+  const prefix = numeric > 0 ? '+' : '';
+  return `${prefix}${numeric.toFixed(1)}%`;
+};
+
+const formatSignedDiff = (value?: number) => {
+  if (value === undefined || value === null || Number.isNaN(value)) return '--';
+  const numeric = Number(value);
+  const prefix = numeric > 0 ? '+' : '';
+  return `${prefix}${numeric.toFixed(1)}%`;
+};
+
 const formatPrice = (value?: number) => {
   if (value === undefined || value === null || Number.isNaN(value) || value <= 0) return '--';
   return Number(value).toFixed(2);
+};
+
+const getPeerGapTone = (value?: number, reverse = false) => {
+  const numeric = Number(value ?? 0);
+  if (numeric === 0) return 'gap-neutral';
+  const isPositive = reverse ? numeric < 0 : numeric > 0;
+  return isPositive ? 'gap-positive' : 'gap-negative';
+};
+
+const getNormalizedTone = (label?: string) => {
+  if (label === '低于中枢') return 'normalized-positive';
+  if (label === '高于中枢') return 'normalized-warning';
+  return 'normalized-neutral';
 };
 
 const formatMetric = (value?: number, metric = 'pe') => {
@@ -1201,6 +1414,258 @@ onUnmounted(() => {
   gap: 16px;
 }
 
+.normalized-panel {
+  margin-top: 16px;
+  padding: 20px;
+  border-radius: 20px;
+  border: 1px solid #dbe4f0;
+  background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%);
+  display: grid;
+  gap: 16px;
+}
+
+.normalized-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.normalized-header strong {
+  display: block;
+  margin-top: 8px;
+  color: #0f172a;
+  font-size: 1rem;
+}
+
+.normalized-badge {
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.normalized-badge.normalized-positive {
+  background: #dcfce7;
+  border-color: #86efac;
+  color: #166534;
+}
+
+.normalized-badge.normalized-warning {
+  background: #fff7ed;
+  border-color: #fdba74;
+  color: #c2410c;
+}
+
+.normalized-badge.normalized-neutral {
+  background: #e2e8f0;
+  border-color: #cbd5e1;
+  color: #475569;
+}
+
+.normalized-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.normalized-card {
+  padding: 16px;
+  border-radius: 16px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+}
+
+.normalized-card span {
+  display: block;
+  font-size: 0.76rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+
+.normalized-card strong {
+  display: block;
+  margin-top: 10px;
+  color: #0f172a;
+  font-size: 1.35rem;
+  font-weight: 900;
+  font-family: 'Monaco', monospace;
+}
+
+.normalized-card p {
+  margin: 8px 0 0;
+  color: #64748b;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.normalized-note {
+  margin: 0;
+  color: #475569;
+  line-height: 1.7;
+}
+
+.peer-section {
+  display: grid;
+  gap: 18px;
+}
+
+.peer-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.peer-badge-stack {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.peer-badge {
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 0.78rem;
+  font-weight: 700;
+  border: 1px solid #bfdbfe;
+}
+
+.peer-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.peer-metric-card {
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid #dbe4f0;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+
+.peer-metric-card strong {
+  display: block;
+  margin-top: 14px;
+  font-size: 1.5rem;
+  font-weight: 900;
+}
+
+.peer-metric-card p {
+  margin: 8px 0 0;
+  color: #64748b;
+  font-size: 0.84rem;
+}
+
+.peer-summary-strip {
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: linear-gradient(90deg, #ecfeff 0%, #f8fafc 100%);
+  border: 1px solid #bae6fd;
+  color: #0f172a;
+  line-height: 1.7;
+}
+
+.peer-table-shell {
+  overflow-x: auto;
+  border-radius: 18px;
+  border: 1px solid #dbe4f0;
+  background: #ffffff;
+}
+
+.peer-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.peer-table th,
+.peer-table td {
+  padding: 14px 16px;
+  text-align: left;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 0.88rem;
+  color: #334155;
+}
+
+.peer-table th {
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.peer-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.row-target {
+  background: #eff6ff;
+}
+
+.peer-name-cell {
+  display: grid;
+  gap: 4px;
+}
+
+.peer-name-cell strong {
+  color: #0f172a;
+}
+
+.peer-name-cell span {
+  color: #64748b;
+  font-size: 0.78rem;
+  font-family: 'Monaco', monospace;
+}
+
+.model-basis {
+  margin: 8px 0 0;
+  color: #2563eb;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.peer-empty-state {
+  padding: 22px;
+  border-radius: 20px;
+  border: 1px dashed #cbd5e1;
+  background: #f8fafc;
+  display: grid;
+  gap: 8px;
+}
+
+.peer-empty-state strong {
+  color: #0f172a;
+  font-size: 1rem;
+}
+
+.peer-empty-state p {
+  margin: 0;
+  color: #64748b;
+  line-height: 1.7;
+}
+
+.gap-positive {
+  color: #047857;
+}
+
+.gap-negative {
+  color: #b91c1c;
+}
+
+.gap-neutral {
+  color: #0f172a;
+}
+
 .model-card {
   background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
   border: 1px solid #dbe4f0;
@@ -1380,6 +1845,33 @@ onUnmounted(() => {
   animation: spin 1s linear infinite;
 }
 
+.loading-quote {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(239, 246, 255, 0.96) 0%, rgba(248, 250, 252, 0.98) 100%);
+  border: 1px solid rgba(59, 130, 246, 0.18);
+  text-align: center;
+}
+
+.loading-quote p {
+  margin: 0;
+  color: #0f172a;
+  font-size: 0.94rem;
+  font-weight: 700;
+  line-height: 1.7;
+}
+
+.loading-quote span {
+  display: block;
+  margin-top: 8px;
+  color: #2563eb;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 800;
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
@@ -1433,7 +1925,8 @@ onUnmounted(() => {
   }
   .valuation-grid,
   .valuation-grid-secondary,
-  .model-grid {
+  .model-grid,
+  .peer-overview-grid {
     grid-template-columns: 1fr;
   }
   .page-header {
@@ -1773,10 +2266,24 @@ onUnmounted(() => {
 
 @media (max-width: 1180px) {
   .chart-layout,
+  .peer-header,
+  .normalized-grid,
   .thesis-grid,
   .thesis-scoreboard,
   .trigger-grid {
     grid-template-columns: 1fr;
+  }
+
+  .peer-header {
+    display: grid;
+  }
+
+  .peer-badge-stack {
+    justify-content: flex-start;
+  }
+
+  .normalized-header {
+    display: grid;
   }
 
   .btn-back {

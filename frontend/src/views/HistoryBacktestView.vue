@@ -39,6 +39,10 @@
       <div v-if="loading" class="py-24 text-center">
         <div class="w-12 h-12 mx-auto border-4 border-slate-200 border-t-indigo-500 rounded-full animate-spin"></div>
         <p class="mt-4 text-slate-500 font-bold">正在计算历史回撤统计...</p>
+        <div class="mt-5 max-w-xl mx-auto rounded-2xl border border-slate-200 bg-white/80 px-5 py-4 shadow-sm">
+          <p class="text-slate-700 font-bold leading-7">“{{ loadingQuote.text }}”</p>
+          <p class="mt-2 text-[11px] tracking-[0.22em] uppercase text-slate-400 font-black">{{ loadingQuote.author }}</p>
+        </div>
       </div>
 
       <div v-else-if="error" class="bg-red-50 border border-red-200 rounded-2xl px-6 py-5 text-red-700">
@@ -274,9 +278,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import * as echarts from 'echarts'
+import { echarts, type ECharts } from '@/lib/echarts'
 import { stockApi } from '@/api'
 import { useSentimentStore } from '@/stores/sentiment'
+import { useInvestorLoadingQuotes } from '@/composables/useInvestorLoadingQuotes'
 
 const route = useRoute()
 const router = useRouter()
@@ -286,8 +291,9 @@ const symbol = route.params.symbol as string
 const loading = ref(true)
 const error = ref('')
 const data = ref<any>(null)
+const { loadingQuote } = useInvestorLoadingQuotes(loading)
 const bucketChartRef = ref<HTMLElement | null>(null)
-let bucketChart: echarts.ECharts | null = null
+let bucketChart: ECharts | null = null
 
 const stockName = computed(() => {
   return store.sentimentData.find(item => item.stock_symbol === symbol)?.stock_name || symbol

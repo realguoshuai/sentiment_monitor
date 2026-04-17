@@ -1,7 +1,12 @@
 ﻿from unittest.mock import patch
 
+import os
+from datetime import date
 import pandas as pd
+import requests
+from django.core.cache import cache
 from django.test import override_settings
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -9,8 +14,10 @@ from .analysis_service import AnalysisService
 from .cache_manager import CacheManager
 from .fundamental_service import FundamentalService
 from .history_backtest_service import HistoryBacktestService
-from .models import Announcement, SentimentData, Stock
+from .models import Announcement, SentimentData, Stock, StockScreenerSnapshot
 from .price_service import PriceService
+from .screener_service import ScreenerService
+from .utils import format_symbol
 
 
 @override_settings(CACHES={
@@ -21,6 +28,7 @@ from .price_service import PriceService
 })
 class SentimentApiTests(APITestCase):
     def setUp(self):
+        cache.clear()
         self.stock = Stock.objects.create(
             name='Sample Corp',
             symbol='SZ000001',
@@ -72,6 +80,7 @@ class SentimentApiTests(APITestCase):
             'f_score': {'score': 8, 'details': []},
             'forward': {'expected_roe': 12},
             'valuation_conclusion': {'summary': '合理'},
+            'peer_comparison': {'enabled': False, 'rows': []},
             'history': [],
         }
 
@@ -81,6 +90,64 @@ class SentimentApiTests(APITestCase):
         self.assertEqual(first.status_code, status.HTTP_200_OK)
         self.assertEqual(second.status_code, status.HTTP_200_OK)
         self.assertEqual(mock_build.call_count, 1)
+
+    @patch('api.fundamental_service.requests.sessions.Session.request')
+    def test_akshare_wrapper_injects_default_timeout(self, mock_request):
+        observed = {}
+
+        def fake_request(*args, **kwargs):
+            observed['timeout'] = kwargs.get('timeout')
+            return {'ok': True}
+
+        mock_request.side_effect = fake_request
+
+        def fake_fetcher():
+            return requests.Session().get('https://example.com/fake-endpoint')
+
+        result = FundamentalService._call_akshare(fake_fetcher)
+
+        self.assertEqual(result, {'ok': True})
+        self.assertEqual(observed['timeout'], FundamentalService.AKSHARE_TIMEOUT)
+
+    def test_stock_create_and_update_support_industry_and_peer_symbols(self):
+        create_response = self.client.post(
+            '/api/stocks/',
+            {
+                'name': 'Kweichow Moutai',
+                'symbol': '600519',
+                'keywords': ['茅台'],
+                'industry': '白酒',
+                'peer_symbols': ['000858', '603369'],
+            },
+            format='json',
+        )
+
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(create_response.data['symbol'], 'SH600519')
+        self.assertEqual(create_response.data['industry'], '白酒')
+        self.assertEqual(create_response.data['peer_symbols'], ['SZ000858', 'SH603369'])
+
+        created = Stock.objects.get(symbol='SH600519')
+        self.assertEqual(created.get_keywords(), ['茅台'])
+        self.assertEqual(created.get_peer_symbols(), ['SZ000858', 'SH603369'])
+
+        update_response = self.client.patch(
+            '/api/stocks/SH600519/',
+            {
+                'industry': '高端白酒',
+                'peer_symbols': ['000568'],
+            },
+            format='json',
+        )
+
+        self.assertEqual(update_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(update_response.data['industry'], '高端白酒')
+        self.assertEqual(update_response.data['peer_symbols'], ['SZ000568'])
+
+        created.refresh_from_db()
+        self.assertEqual(created.industry, '高端白酒')
+        self.assertEqual(created.get_keywords(), ['茅台'])
+        self.assertEqual(created.get_peer_symbols(), ['SZ000568'])
 
     @patch('api.analysis_service.FundamentalService.get_quality_data')
     @patch('api.analysis_service.FundamentalService.get_forward_metrics')
@@ -103,9 +170,30 @@ class SentimentApiTests(APITestCase):
         mock_get_forward_metrics.return_value = {'expected_roe': 15.0, 'avg_roe_5y': 15.0}
         mock_get_quality_data.return_value = {
             'history': [
-                {'year': 2023, 'fcf': 120.0, 'retention_ratio_pct': 70.0, 'implied_share_count': 200.0},
-                {'year': 2024, 'fcf': 140.0, 'retention_ratio_pct': 70.0, 'implied_share_count': 200.0},
-                {'year': 2025, 'fcf': 160.0, 'retention_ratio_pct': 70.0, 'implied_share_count': 200.0},
+                {
+                    'year': 2023,
+                    'fcf': 120.0,
+                    'retention_ratio_pct': 70.0,
+                    'implied_share_count': 200.0,
+                    'BASIC_EPS': 0.8,
+                    'net_margin': 11.0,
+                },
+                {
+                    'year': 2024,
+                    'fcf': 140.0,
+                    'retention_ratio_pct': 70.0,
+                    'implied_share_count': 200.0,
+                    'BASIC_EPS': 1.0,
+                    'net_margin': 12.0,
+                },
+                {
+                    'year': 2025,
+                    'fcf': 160.0,
+                    'retention_ratio_pct': 70.0,
+                    'implied_share_count': 200.0,
+                    'BASIC_EPS': 1.3,
+                    'net_margin': 15.0,
+                },
             ],
             'cashflow_summary': {
                 'latest_cfo_to_profit_pct': 110.0,
@@ -123,12 +211,21 @@ class SentimentApiTests(APITestCase):
                 'negative_growth_years': 0,
                 'revenue_growth_volatility_pct': 8.0,
             },
+            'balance_sheet_summary': {
+                'latest_debt_to_equity_pct': 28.0,
+                'latest_short_debt_coverage_pct': 180.0,
+                'latest_receivable_inventory_prepay_to_revenue_pct': 24.0,
+                'latest_goodwill_to_equity_pct': 5.0,
+                'balance_sheet_label': '低风险',
+            },
             'shareholder_summary': {
                 'holder_count_change_pct': -6.0,
             },
         }
 
         payload = AnalysisService.build_analysis_payload('SZ000001')
+
+        mock_get_quality_data.assert_called_once_with('SZ000001', include_shareholder=False)
 
         conclusion = payload['valuation_conclusion']
         self.assertEqual(conclusion['discount_premium']['label'], '折价')
@@ -141,11 +238,18 @@ class SentimentApiTests(APITestCase):
             conclusion['expected_return']['dividend_yield_pct'],
         )
         self.assertTrue(conclusion['signals']['model_alignment_label'])
+        self.assertTrue(conclusion['normalized_earnings']['enabled'])
+        self.assertEqual(conclusion['normalized_earnings']['basis_label'], '归一化 EPS')
+        self.assertEqual(conclusion['normalized_earnings']['cycle_position_label'], '接近中枢')
         self.assertEqual(conclusion['multi_model_valuation']['available_model_count'], 3)
         self.assertEqual(
             [model['key'] for model in conclusion['multi_model_valuation']['models']],
             ['roe_anchor', 'earnings_power', 'owner_earnings'],
         )
+        earnings_model = conclusion['multi_model_valuation']['models'][1]
+        self.assertEqual(earnings_model['basis_label'], '归一化 EPS')
+        self.assertAlmostEqual(earnings_model['assumptions']['normalized_eps'], 1.0, places=2)
+        self.assertAlmostEqual(earnings_model['fair_value_range']['price_base'], 10.0, places=2)
         owner_model = conclusion['multi_model_valuation']['models'][-1]
         self.assertEqual(owner_model['status'], 'available')
         self.assertGreater(owner_model['fair_value_range']['price_base'], 15)
@@ -156,7 +260,80 @@ class SentimentApiTests(APITestCase):
         self.assertGreaterEqual(len(thesis['key_assumptions']), 4)
         self.assertGreaterEqual(len(thesis['risk_checklist']), 4)
         self.assertGreaterEqual(len(thesis['review_triggers']), 4)
+        self.assertTrue(any(item['label'] == '资产负债表拖累' for item in thesis['risk_checklist']))
         self.assertIn('valuation', thesis['scorecard'])
+        self.assertIn('peer_comparison', payload)
+        self.assertFalse(payload['peer_comparison']['enabled'])
+
+    @patch('api.analysis_service.FundamentalService.get_forward_metrics')
+    @patch('api.analysis_service.PriceService.get_realtime_price')
+    def test_peer_comparison_combines_explicit_and_industry_peers(
+        self,
+        mock_get_realtime_price,
+        mock_get_forward_metrics,
+    ):
+        self.stock.industry = '银行'
+        self.stock.set_peer_symbols(['SH600036'])
+        self.stock.save(update_fields=['industry', 'peer_symbols'])
+        Stock.objects.create(
+            name='Peer Bank',
+            symbol='SZ000002',
+            keywords='["peer"]',
+            industry='银行',
+        )
+
+        mock_get_realtime_price.return_value = {
+            'SZ000001': {'price': 10.0, 'pe': 8.0, 'pb': 0.90, 'dividend_yield': 5.0},
+            'SH600036': {'price': 42.0, 'pe': 9.5, 'pb': 1.20, 'dividend_yield': 3.2},
+            'SZ000002': {'price': 12.0, 'pe': 11.0, 'pb': 1.40, 'dividend_yield': 2.6},
+        }
+
+        def forward_side_effect(symbol):
+            return {
+                'SZ000001': {'expected_roe': 14.0, 'avg_roe_5y': 14.0},
+                'SH600036': {'expected_roe': 13.0, 'avg_roe_5y': 13.0},
+                'SZ000002': {'expected_roe': 11.0, 'avg_roe_5y': 11.0},
+            }[symbol]
+
+        mock_get_forward_metrics.side_effect = forward_side_effect
+
+        payload = AnalysisService.build_peer_comparison(
+            'SZ000001',
+            forward={'expected_roe': 14.0, 'avg_roe_5y': 14.0},
+            history=[{'price': 10.0, 'pe': 8.0, 'pb': 0.9, 'dividend_yield': 5.0}],
+        )
+
+        self.assertTrue(payload['enabled'])
+        self.assertEqual(payload['peer_count'], 2)
+        self.assertEqual(payload['source_label'], '显式同行 + 同行业监控')
+        self.assertEqual(payload['rows'][0]['symbol'], 'SZ000001')
+        self.assertTrue(payload['rows'][0]['is_target'])
+        self.assertAlmostEqual(payload['medians']['pb'], 1.3, places=2)
+        self.assertLess(payload['relative_view']['pb_vs_peer_median_pct'], 0)
+        self.assertAlmostEqual(payload['relative_view']['dividend_yield_vs_peer_median_pct'], 2.1, places=2)
+        self.assertIn('同行中位 PE', payload['summary'])
+
+    def test_normalized_earnings_marks_profit_above_mid_cycle(self):
+        normalized = AnalysisService._build_normalized_earnings_view(
+            current_price=18.0,
+            current_pe=10.0,
+            quality_data={
+                'history': [
+                    {'year': 2021, 'BASIC_EPS': 0.9, 'fcf': 90.0, 'net_margin': 9.0, 'implied_share_count': 100.0},
+                    {'year': 2022, 'BASIC_EPS': 1.0, 'fcf': 110.0, 'net_margin': 10.0, 'implied_share_count': 100.0},
+                    {'year': 2023, 'BASIC_EPS': 1.1, 'fcf': 120.0, 'net_margin': 11.0, 'implied_share_count': 100.0},
+                    {'year': 2024, 'BASIC_EPS': 1.0, 'fcf': 115.0, 'net_margin': 10.0, 'implied_share_count': 100.0},
+                    {'year': 2025, 'BASIC_EPS': 1.0, 'fcf': 125.0, 'net_margin': 10.0, 'implied_share_count': 100.0},
+                ]
+            },
+        )
+
+        self.assertTrue(normalized['enabled'])
+        self.assertEqual(normalized['selected_basis'], 'normalized')
+        self.assertEqual(normalized['cycle_position_label'], '高于中枢')
+        self.assertAlmostEqual(normalized['normalized_eps'], 1.0, places=2)
+        self.assertAlmostEqual(normalized['current_eps'], 1.8, places=2)
+        self.assertGreater(normalized['eps_deviation_pct'], 70)
 
     @patch('api.fundamental_service.FundamentalService.get_northbound_holding_history')
     @patch('api.fundamental_service.FundamentalService.get_margin_history_aligned')
@@ -189,6 +366,10 @@ class SentimentApiTests(APITestCase):
                 'MONETARYFUNDS': 120,
                 'SHORT_LOAN': 50,
                 'LONG_LOAN': 150,
+                'ACCOUNTS_RECE': 180,
+                'INVENTORY': 140,
+                'PREPAYMENT': 30,
+                'GOODWILL': 60,
             },
             {
                 'REPORT_DATE': '2025-12-31',
@@ -197,6 +378,10 @@ class SentimentApiTests(APITestCase):
                 'MONETARYFUNDS': 140,
                 'SHORT_LOAN': 40,
                 'LONG_LOAN': 160,
+                'ACCOUNTS_RECE': 210,
+                'INVENTORY': 170,
+                'PREPAYMENT': 35,
+                'GOODWILL': 55,
             },
         ])
         mock_cashflow_yearly.return_value = pd.DataFrame([
@@ -231,8 +416,15 @@ class SentimentApiTests(APITestCase):
         self.assertAlmostEqual(latest['cfo_to_profit_pct'], 113.3333, places=3)
         self.assertAlmostEqual(latest['fcf_to_profit_pct'], 80.0, places=3)
         self.assertAlmostEqual(latest['capex_intensity_pct'], 4.1667, places=3)
+        self.assertAlmostEqual(latest['debt_to_equity_pct'], 22.2222, places=3)
+        self.assertAlmostEqual(latest['short_debt_coverage_pct'], 350.0, places=2)
+        self.assertAlmostEqual(latest['receivable_inventory_prepay_to_revenue_pct'], 34.5833, places=3)
+        self.assertAlmostEqual(latest['goodwill_to_equity_pct'], 6.1111, places=3)
         self.assertIn('cashflow_quality_label', payload['cashflow_summary'])
         self.assertAlmostEqual(payload['cashflow_summary']['latest_fcf_yield_pct'], 6.0, places=2)
+        self.assertEqual(payload['balance_sheet_summary']['balance_sheet_label'], '低风险')
+        self.assertEqual(payload['balance_sheet_summary']['liquidity_label'], '现金覆盖')
+        self.assertEqual(payload['balance_sheet_summary']['asset_quality_label'], '轻')
         self.assertEqual(payload['shareholder_summary']['latest_holder_count'], 100000)
         self.assertEqual(payload['shareholder_summary']['holder_trend_label'], '筹码集中')
         self.assertEqual(payload['shareholder_summary']['latest_stat_date'], '2025-12-31')
@@ -555,6 +747,22 @@ class SentimentApiTests(APITestCase):
         self.assertEqual(response.data['stability_summary']['cyclical_label'], 'strong_cycle')
 
     @patch('api.views.FundamentalService.get_quality_data')
+    def test_quality_endpoint_returns_balance_sheet_summary(self, mock_get_quality_data):
+        mock_get_quality_data.return_value = {
+            'history': [{'year': 2025, 'debt_to_equity_pct': 42.0}],
+            'cashflow_summary': {},
+            'capital_allocation_summary': {},
+            'stability_summary': {},
+            'balance_sheet_summary': {'balance_sheet_label': '中风险', 'latest_debt_to_equity_pct': 42.0},
+        }
+
+        response = self.client.get('/api/sentiment/quality/?symbol=SZ000001')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['quality_history'][0]['debt_to_equity_pct'], 42.0)
+        self.assertEqual(response.data['balance_sheet_summary']['balance_sheet_label'], '中风险')
+
+    @patch('api.views.FundamentalService.get_quality_data')
     def test_quality_endpoint_returns_shareholder_history(self, mock_get_quality_data):
         mock_get_quality_data.return_value = {
             'history': [],
@@ -598,7 +806,384 @@ class SentimentApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         mock_get_quality_data.assert_called_once_with('SZ000001', include_shareholder=False)
-        self.assertEqual(response.data['shareholder_history'], [])
+
+    @patch('api.screener_service.ScreenerService._get_latest_dividend_yield_map')
+    @patch('api.screener_service.ScreenerService._get_latest_roe_map')
+    @patch('api.screener_service.PriceService.get_realtime_price')
+    @patch('api.screener_service.ak.stock_zh_a_spot_em')
+    def test_screener_refresh_builds_snapshot(
+        self,
+        mock_spot_em,
+        mock_get_realtime_price,
+        mock_get_latest_roe_map,
+        mock_get_latest_dividend_yield_map,
+    ):
+        mock_spot_em.return_value = pd.DataFrame([
+            {'代码': '600000', '名称': '浦发银行', '最新价': 10.0, '总市值': 300000000000, '市盈率-动态': 5.0, '市净率': 0.5},
+            {'代码': '000001', '名称': '平安银行', '最新价': 12.0, '总市值': 220000000000, '市盈率-动态': 6.0, '市净率': 0.72},
+        ])
+        mock_get_realtime_price.return_value = {
+            'SH600000': {'dividend_yield': 6.2},
+            'SZ000001': {'dividend_yield': 4.8},
+        }
+        mock_get_latest_roe_map.return_value = {
+            'SH600000': {'roe_pct': 8.8, 'report_date': '20251231', 'industry': '银行'},
+            'SZ000001': {'roe_pct': 10.6, 'report_date': '20251231', 'industry': '银行'},
+        }
+        mock_get_latest_dividend_yield_map.return_value = {
+            'SH600000': {'cash_div_total': 0.62, 'basis_year': 2025},
+            'SZ000001': {'cash_div_total': 0.576, 'basis_year': 2025},
+        }
+
+        summary = ScreenerService.refresh_snapshot()
+
+        self.assertTrue(summary['updated'])
+        self.assertEqual(summary['count'], 2)
+        self.assertEqual(StockScreenerSnapshot.objects.count(), 2)
+        sh_row = StockScreenerSnapshot.objects.get(symbol='SH600000')
+        self.assertAlmostEqual(sh_row.roe_proxy_pct, 8.8, places=2)
+        self.assertAlmostEqual(sh_row.dividend_yield, 6.2, places=2)
+        self.assertEqual(sh_row.industry, '银行')
+
+    @patch('api.screener_service.ScreenerService._get_latest_dividend_yield_map')
+    @patch('api.screener_service.ScreenerService._get_latest_roe_map')
+    @patch('api.screener_service.PriceService.get_realtime_price')
+    @patch('api.screener_service.ak.stock_zh_a_spot_em')
+    def test_screener_refresh_preserves_negative_roe_values(
+        self,
+        mock_spot_em,
+        mock_get_realtime_price,
+        mock_get_latest_roe_map,
+        mock_get_latest_dividend_yield_map,
+    ):
+        mock_spot_em.return_value = pd.DataFrame([
+            {'代码': '300001', '名称': '特锐德', '最新价': 20.0, '总市值': 20000000000, '市盈率-动态': -20.0, '市净率': 2.0},
+        ])
+        mock_get_realtime_price.return_value = {
+            'SZ300001': {'dividend_yield': 0.8},
+        }
+        mock_get_latest_roe_map.return_value = {
+            'SZ300001': {'roe_pct': -10.0, 'report_date': '20251231', 'industry': '电网设备'},
+        }
+        mock_get_latest_dividend_yield_map.return_value = {
+            'SZ300001': {'cash_div_total': 0.16, 'basis_year': 2025},
+        }
+
+        ScreenerService.refresh_snapshot()
+
+        row = StockScreenerSnapshot.objects.get(symbol='SZ300001')
+        self.assertAlmostEqual(row.roe_proxy_pct, -10.0, places=2)
+
+    def test_price_service_cache_supports_plain_payload(self):
+        payload = {
+            '600000': {'最新价': 10.0, '总市值': 300000000000, '市盈率-动态': 5.0, '市净率': 0.5},
+        }
+
+        PriceService._cache_set('a_share_spot_snapshot_for_valuation', payload, 60)
+
+        cached = PriceService._cache_get('a_share_spot_snapshot_for_valuation')
+
+        self.assertEqual(cached, payload)
+
+    def test_format_symbol_supports_snapshot_prefixes_and_bj(self):
+        self.assertEqual(format_symbol('sh600000'), 'SH600000')
+        self.assertEqual(format_symbol('sz000001'), 'SZ000001')
+        self.assertEqual(format_symbol('bj920000'), 'BJ920000')
+        self.assertEqual(format_symbol('920000'), 'BJ920000')
+
+    @patch('api.screener_service.ScreenerService._annual_report_dates', return_value=['20251231', '20241231'])
+    @patch('api.screener_service.cache.set', side_effect=PermissionError('cache locked'))
+    @patch('api.screener_service.cache.get', return_value=None)
+    @patch('api.screener_service.FundamentalService._call_akshare')
+    def test_screener_roe_fetch_still_returns_map_when_cache_write_fails(
+        self,
+        mock_call_akshare,
+        mock_cache_get,
+        mock_cache_set,
+        mock_report_dates,
+    ):
+        mock_call_akshare.side_effect = [
+            pd.DataFrame([
+                {'股票代码': '600000', '净资产收益率': 8.8, '所处行业': '银行'},
+                {'股票代码': '000001', '净资产收益率': 10.6, '所处行业': '银行'},
+            ]),
+            pd.DataFrame([
+                {'股票代码': '000001', '净资产收益率': 9.9, '所处行业': '银行'},
+                {'股票代码': '000002', '净资产收益率': 12.1, '所处行业': '银行'},
+            ]),
+        ]
+
+        roe_map = ScreenerService._get_latest_roe_map()
+
+        self.assertEqual(roe_map['SH600000']['roe_pct'], 8.8)
+        self.assertEqual(roe_map['SZ000001']['industry'], '银行')
+        self.assertEqual(roe_map['SZ000001']['report_date'], '20251231')
+        self.assertEqual(roe_map['SZ000002']['roe_pct'], 12.1)
+        mock_cache_get.assert_called_once()
+        mock_cache_set.assert_called_once()
+
+    @patch('api.screener_service.timezone.localdate', return_value=date(2026, 4, 17))
+    @patch('api.screener_service.ScreenerService._recent_report_dates', return_value=['20251231', '20250930', '20250630', '20241231'])
+    @patch('api.screener_service.cache.set', side_effect=PermissionError('cache locked'))
+    @patch('api.screener_service.cache.get', return_value=None)
+    @patch('api.screener_service.FundamentalService._call_akshare')
+    def test_screener_dividend_map_uses_smoothed_cash_guidance_for_current_price_yield(
+        self,
+        mock_call_akshare,
+        mock_cache_get,
+        mock_cache_set,
+        mock_report_dates,
+        mock_localdate,
+    ):
+        mock_call_akshare.side_effect = [
+            pd.DataFrame([
+                {'代码': '600000', '现金分红-现金分红比例': 14.31, '预案公告日': pd.Timestamp('2026-03-20')},
+                {'代码': '000001', '现金分红-现金分红比例': 10.0, '预案公告日': pd.Timestamp('2026-03-25')},
+            ]),
+            pd.DataFrame([
+                {'代码': '300001', '现金分红-现金分红比例': 6.0, '股权登记日': pd.Timestamp('2025-12-18')},
+            ]),
+            pd.DataFrame([
+                {'代码': '600000', '现金分红-现金分红比例': 12.70, '股权登记日': pd.Timestamp('2025-09-02')},
+            ]),
+            pd.DataFrame([
+                {'代码': '600000', '现金分红-现金分红比例': 12.73, '股权登记日': pd.Timestamp('2025-06-04')},
+                {'代码': '000001', '现金分红-现金分红比例': 20.0, '股权登记日': pd.Timestamp('2025-08-28')},
+            ]),
+        ]
+
+        dividend_map = ScreenerService._get_latest_dividend_yield_map()
+
+        self.assertAlmostEqual(dividend_map['SH600000']['cash_div_total'], 2.543, places=3)
+        self.assertEqual(dividend_map['SH600000']['basis_year'], 2025)
+        self.assertAlmostEqual(dividend_map['SZ000001']['cash_div_total'], 2.0, places=2)
+        self.assertEqual(dividend_map['SZ000001']['basis_year'], 2025)
+        self.assertAlmostEqual(dividend_map['SZ300001']['cash_div_total'], 0.6, places=2)
+        self.assertEqual(dividend_map['SZ300001']['basis_year'], 2025)
+        mock_cache_get.assert_called()
+        mock_cache_set.assert_called_once()
+
+    @patch.dict('os.environ', {'NO_PROXY': '.eastmoney.com,.gtimg.cn,127.0.0.1,localhost'}, clear=False)
+    @patch('api.screener_service.ScreenerService._get_latest_dividend_yield_map')
+    @patch('api.screener_service.ScreenerService._get_latest_roe_map')
+    @patch('api.screener_service.PriceService.get_realtime_price')
+    @patch('api.screener_service.ak.stock_zh_a_spot')
+    @patch('api.screener_service.ak.stock_zh_a_spot_em')
+    def test_screener_refresh_uses_sina_backup_when_eastmoney_fails(
+        self,
+        mock_spot_em,
+        mock_spot_sina,
+        mock_get_realtime_price,
+        mock_get_latest_roe_map,
+        mock_get_latest_dividend_yield_map,
+    ):
+        mock_spot_em.side_effect = requests.exceptions.ConnectionError('eastmoney down')
+        mock_spot_sina.return_value = pd.DataFrame([
+            {'代码': 'sh600000', '名称': '浦发银行', '最新价': 10.0},
+            {'代码': 'sz000001', '名称': '平安银行', '最新价': 12.0},
+            {'代码': 'bj920000', '名称': '安徽凤凰', '最新价': 15.9},
+        ])
+        mock_get_realtime_price.return_value = {
+            'SH600000': {'name': '浦发银行', 'market_cap': 300000000000, 'pe': 5.0, 'pb': 0.5, 'dividend_yield': 6.2},
+            'SZ000001': {'name': '平安银行', 'market_cap': 220000000000, 'pe': 6.0, 'pb': 0.72, 'dividend_yield': 4.8},
+            'BJ920000': {'name': '安徽凤凰', 'market_cap': 1458000000, 'pe': 21.46, 'pb': 2.2, 'dividend_yield': 0.86},
+        }
+        mock_get_latest_roe_map.return_value = {
+            'SH600000': {'roe_pct': 8.8, 'report_date': '20251231', 'industry': '银行'},
+            'SZ000001': {'roe_pct': 10.6, 'report_date': '20251231', 'industry': '银行'},
+            'BJ920000': {'roe_pct': 12.4, 'report_date': '20251231', 'industry': '汽车零部件'},
+        }
+        mock_get_latest_dividend_yield_map.return_value = {
+            'SH600000': {'cash_div_total': 0.62, 'basis_year': 2025},
+            'SZ000001': {'cash_div_total': 0.576, 'basis_year': 2025},
+            'BJ920000': {'cash_div_total': 0.13674, 'basis_year': 2025},
+        }
+
+        summary = ScreenerService.refresh_snapshot()
+
+        self.assertTrue(summary['updated'])
+        self.assertEqual(summary['source'], 'upstream')
+        self.assertIn('.sina.com.cn', os.environ['NO_PROXY'])
+        self.assertEqual(summary['count'], 3)
+        self.assertAlmostEqual(StockScreenerSnapshot.objects.get(symbol='SZ000001').pb, 0.72, places=2)
+        bj_row = StockScreenerSnapshot.objects.get(symbol='BJ920000')
+        self.assertAlmostEqual(bj_row.pb, 2.2, places=2)
+        self.assertAlmostEqual(bj_row.roe_proxy_pct, 12.4, places=2)
+
+    @patch('api.screener_service.ScreenerService._get_latest_dividend_yield_map')
+    @patch('api.screener_service.ScreenerService._get_latest_roe_map')
+    @patch('api.screener_service.PriceService.get_realtime_price')
+    @patch('api.screener_service.ak.stock_zh_a_spot')
+    @patch('api.screener_service.ak.stock_zh_a_spot_em')
+    def test_screener_refresh_uses_cached_snapshot_when_upstream_fails(
+        self,
+        mock_spot_em,
+        mock_spot_sina,
+        mock_get_realtime_price,
+        mock_get_latest_roe_map,
+        mock_get_latest_dividend_yield_map,
+    ):
+        mock_spot_em.side_effect = requests.exceptions.ConnectionError('upstream down')
+        mock_spot_sina.side_effect = requests.exceptions.ConnectionError('sina down')
+        cache.set(
+            'a_share_spot_snapshot_for_valuation',
+            {
+                '600000': {'最新价': 10.0, '总市值': 300000000000, '市盈率-动态': 5.0, '市净率': 0.5},
+                '000001': {'最新价': 12.0, '总市值': 220000000000, '市盈率-动态': 6.0, '市净率': 0.72},
+            },
+            60,
+        )
+        mock_get_realtime_price.return_value = {
+            'SH600000': {'name': '浦发银行', 'dividend_yield': 6.2},
+            'SZ000001': {'name': '平安银行', 'dividend_yield': 4.8},
+        }
+        mock_get_latest_roe_map.return_value = {
+            'SH600000': {'roe_pct': 8.8, 'report_date': '20251231', 'industry': '银行'},
+            'SZ000001': {'roe_pct': 10.6, 'report_date': '20251231', 'industry': '银行'},
+        }
+        mock_get_latest_dividend_yield_map.return_value = {
+            'SH600000': {'cash_div_total': 0.62, 'basis_year': 2025},
+            'SZ000001': {'cash_div_total': 0.576, 'basis_year': 2025},
+        }
+
+        summary = ScreenerService.refresh_snapshot()
+
+        self.assertTrue(summary['updated'])
+        self.assertEqual(summary['source'], 'cache')
+        self.assertEqual(summary['count'], 2)
+        self.assertIn('本地估值缓存', summary['message'])
+        self.assertEqual(StockScreenerSnapshot.objects.count(), 2)
+        self.assertEqual(StockScreenerSnapshot.objects.get(symbol='SH600000').name, '浦发银行')
+
+    @patch('api.screener_service.ak.stock_zh_a_spot')
+    @patch('api.screener_service.ak.stock_zh_a_spot_em')
+    def test_screener_refresh_retains_existing_snapshot_when_all_sources_fail(self, mock_spot_em, mock_spot_sina):
+        mock_spot_em.side_effect = requests.exceptions.ConnectionError('upstream down')
+        mock_spot_sina.side_effect = requests.exceptions.ConnectionError('sina down')
+        snapshot_date = timezone.now().date()
+        StockScreenerSnapshot.objects.create(
+            snapshot_date=snapshot_date,
+            symbol='SH600000',
+            name='浦发银行',
+            price=10.0,
+            market_cap=300000000000,
+            pe=5.0,
+            pb=0.5,
+            dividend_yield=6.2,
+            roe_proxy_pct=10.0,
+        )
+
+        summary = ScreenerService.refresh_snapshot()
+
+        self.assertFalse(summary['updated'])
+        self.assertTrue(summary['retained'])
+        self.assertEqual(summary['source'], 'database')
+        self.assertEqual(summary['snapshot_date'], snapshot_date.isoformat())
+        self.assertEqual(summary['count'], 1)
+        self.assertEqual(StockScreenerSnapshot.objects.count(), 1)
+
+    def test_screener_query_endpoint_filters_snapshot_rows(self):
+        snapshot_date = timezone.now().date()
+        StockScreenerSnapshot.objects.bulk_create([
+            StockScreenerSnapshot(
+                snapshot_date=snapshot_date,
+                symbol='SH600000',
+                name='浦发银行',
+                price=10.0,
+                market_cap=300000000000,
+                pe=5.0,
+                pb=0.5,
+                dividend_yield=6.2,
+                roe_proxy_pct=10.0,
+            ),
+            StockScreenerSnapshot(
+                snapshot_date=snapshot_date,
+                symbol='SZ000001',
+                name='平安银行',
+                price=12.0,
+                market_cap=220000000000,
+                pe=6.0,
+                pb=0.72,
+                dividend_yield=4.8,
+                roe_proxy_pct=12.0,
+            ),
+            StockScreenerSnapshot(
+                snapshot_date=snapshot_date,
+                symbol='SZ300750',
+                name='宁德时代',
+                price=200.0,
+                market_cap=900000000000,
+                pe=25.0,
+                pb=4.5,
+                dividend_yield=0.8,
+                roe_proxy_pct=18.0,
+            ),
+        ])
+
+        response = self.client.get('/api/sentiment/screener/?pb_max=1&dividend_yield_min=4&sort_by=roi&sort_order=desc')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['meta']['ready'])
+        self.assertEqual(response.data['pagination']['total'], 2)
+        self.assertEqual(response.data['results'][0]['symbol'], 'SH600000')
+        self.assertAlmostEqual(response.data['results'][0]['roe_pct'], 10.0, places=2)
+        self.assertAlmostEqual(response.data['results'][0]['roi_pct'], 20.0, places=2)
+        self.assertGreaterEqual(response.data['results'][0]['roi_pct'], response.data['results'][1]['roi_pct'])
+
+    def test_screener_query_excludes_anomalies_by_default_but_can_include_them(self):
+        snapshot_date = timezone.now().date()
+        StockScreenerSnapshot.objects.bulk_create([
+            StockScreenerSnapshot(
+                snapshot_date=snapshot_date,
+                symbol='SH600000',
+                name='浦发银行',
+                price=10.0,
+                market_cap=300000000000,
+                pe=5.0,
+                pb=0.5,
+                dividend_yield=6.2,
+                roe_proxy_pct=10.0,
+            ),
+            StockScreenerSnapshot(
+                snapshot_date=snapshot_date,
+                symbol='SZ300716',
+                name='ST泉为',
+                price=14.14,
+                market_cap=2263000000,
+                pe=-20.95,
+                pb=-2152.33,
+                dividend_yield=0.77,
+                roe_proxy_pct=10273.65,
+            ),
+        ])
+
+        default_response = self.client.get('/api/sentiment/screener/?sort_by=symbol&sort_order=asc')
+        include_response = self.client.get('/api/sentiment/screener/?sort_by=symbol&sort_order=asc&include_anomalies=1')
+
+        self.assertEqual(default_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(default_response.data['pagination']['total'], 1)
+        self.assertEqual(default_response.data['results'][0]['symbol'], 'SH600000')
+        self.assertFalse(default_response.data['filters']['include_anomalies'])
+
+        self.assertEqual(include_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(include_response.data['pagination']['total'], 2)
+        self.assertTrue(include_response.data['filters']['include_anomalies'])
+        self.assertEqual(include_response.data['results'][0]['symbol'], 'SH600000')
+        self.assertEqual(include_response.data['results'][1]['symbol'], 'SZ300716')
+
+    @patch('api.views.ScreenerService.refresh_snapshot')
+    def test_screener_refresh_endpoint_returns_summary(self, mock_refresh_snapshot):
+        mock_refresh_snapshot.return_value = {
+            'snapshot_date': '2026-04-16',
+            'count': 5120,
+            'updated': True,
+            'message': 'done',
+        }
+
+        response = self.client.post('/api/sentiment/screener/refresh/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['count'], 5120)
 
     @patch('api.views.FundamentalService.get_shareholder_structure_data')
     def test_quality_shareholder_structure_endpoint_returns_payload(self, mock_shareholder_data):

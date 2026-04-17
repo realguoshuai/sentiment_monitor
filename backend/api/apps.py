@@ -1,4 +1,5 @@
 from django.apps import AppConfig
+from django.db.backends.signals import connection_created
 import os
 
 class ApiConfig(AppConfig):
@@ -6,8 +7,10 @@ class ApiConfig(AppConfig):
     name = 'api'
 
     def ready(self):
-        # 涉及领域: 东方财富(.eastmoney.com), 腾讯行情(.gtimg.cn)
-        no_proxy_list = ['.eastmoney.com', '.gtimg.cn', '127.0.0.1', 'localhost']
+        connection_created.connect(self._configure_sqlite_connection, dispatch_uid='api.sqlite.pragmas')
+
+        # 涉及领域: 东方财富(.eastmoney.com), 腾讯行情(.gtimg.cn), 新浪行情(.sina.com.cn)
+        no_proxy_list = ['.eastmoney.com', '.gtimg.cn', '.sina.com.cn', '127.0.0.1', 'localhost']
         os.environ['NO_PROXY'] = ','.join(no_proxy_list)
 
         # 确保只在主进程中启动定时任务
@@ -18,6 +21,14 @@ class ApiConfig(AppConfig):
             # 预热核心缓存 (异步进行，避免阻塞启动)
             import threading
             threading.Thread(target=self.warm_valuation_cache, daemon=True).start()
+
+    @staticmethod
+    def _configure_sqlite_connection(sender, connection, **kwargs):
+        if connection.vendor != 'sqlite':
+            return
+        cursor = connection.cursor()
+        cursor.execute('PRAGMA journal_mode=MEMORY;')
+        cursor.execute('PRAGMA synchronous=NORMAL;')
 
     def warm_valuation_cache(self):
         """预热监控标的的历史估值和深度分析缓存"""

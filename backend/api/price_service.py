@@ -4,6 +4,7 @@ import time
 import logging
 from datetime import datetime
 from django.conf import settings
+from django.core.cache import cache
 
 from .utils import format_symbol
 from .cache_manager import CacheManager
@@ -22,13 +23,33 @@ class PriceService:
 
     @staticmethod
     def _cache_get(key):
-        """委托给 CacheManager (保留接口兼容性)"""
-        return CacheManager.get_df(key)
+        """委托给 CacheManager，并兼容普通 dict/list 缓存。"""
+        cached_df = CacheManager.get_df(key)
+        if cached_df is not None:
+            return cached_df
+        try:
+            return cache.get(key)
+        except Exception as e:
+            logger.warning(f"Payload cache retrieval failed for {key}: {e}")
+            try:
+                cache.delete(key)
+            except Exception:
+                pass
+            return None
 
     @staticmethod
     def _cache_set(key, value, ttl):
-        """委托给 CacheManager (保留接口兼容性)"""
-        CacheManager.set_df(key, value, ttl)
+        """委托给 CacheManager，并兼容普通 dict/list 缓存。"""
+        import pandas as pd
+
+        if isinstance(value, pd.DataFrame):
+            return CacheManager.set_df(key, value, ttl)
+        try:
+            cache.set(key, value, ttl)
+            return True
+        except Exception as e:
+            logger.warning(f"Payload cache storage failed for {key}: {e}")
+            return False
 
     @staticmethod
     def _normalize_historical_cache_value(value):

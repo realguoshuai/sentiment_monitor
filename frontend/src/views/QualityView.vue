@@ -30,6 +30,10 @@
       <div class="loader-box">
         <div class="spinner"></div>
         <p>正在深度挖掘 10 年财务数据...</p>
+        <div class="loading-quote">
+          <p>“{{ loadingQuote.text }}”</p>
+          <span>{{ loadingQuote.author }}</span>
+        </div>
       </div>
     </div>
 
@@ -49,6 +53,10 @@
         <div v-if="shareholderLoading && !shareholderHistory.length" class="deferred-card">
           <div class="deferred-spinner"></div>
           <p>正在同步股东人数统计口径…</p>
+          <div class="deferred-quote">
+            <p>“{{ loadingQuote.text }}”</p>
+            <strong>{{ loadingQuote.author }}</strong>
+          </div>
           <span>核心财务图表已优先加载，这块会随后补齐。</span>
         </div>
         <div v-else-if="!shareholderHistory.length" class="deferred-card deferred-card-empty">
@@ -161,6 +169,34 @@
           <p class="signal-meta">{{ stabilitySummary.moat_label }}</p>
         </section>
 
+        <section v-if="balanceSheetSummary" class="signal-block">
+          <div class="signal-block-head">
+            <span class="section-kicker">Balance Sheet</span>
+            <strong>{{ balanceSheetSummary.balance_sheet_label }}</strong>
+          </div>
+          <div class="signal-grid">
+            <div class="signal-card" @mouseenter="showTooltip($event, 'debt_to_equity')" @mouseleave="hideTooltip">
+              <span>有息负债 / 净资产</span>
+              <strong>{{ balanceSheetSummary.latest_debt_to_equity_pct.toFixed(1) }}%</strong>
+            </div>
+            <div class="signal-card" @mouseenter="showTooltip($event, 'short_debt_coverage')" @mouseleave="hideTooltip">
+              <span>短债覆盖</span>
+              <strong>{{ formatCoverage(balanceSheetSummary.latest_short_debt_coverage_pct, balanceSheetSummary.latest_short_debt) }}</strong>
+            </div>
+            <div class="signal-card" @mouseenter="showTooltip($event, 'asset_quality_ratio')" @mouseleave="hideTooltip">
+              <span>营运资产 / 收入</span>
+              <strong>{{ balanceSheetSummary.latest_receivable_inventory_prepay_to_revenue_pct.toFixed(1) }}%</strong>
+            </div>
+            <div class="signal-card" @mouseenter="showTooltip($event, 'goodwill_to_equity')" @mouseleave="hideTooltip">
+              <span>商誉 / 净资产</span>
+              <strong>{{ balanceSheetSummary.latest_goodwill_to_equity_pct.toFixed(1) }}%</strong>
+            </div>
+          </div>
+          <p class="signal-meta">
+            {{ balanceSheetSummary.liquidity_label }} / {{ balanceSheetSummary.asset_quality_label }} · {{ (balanceSheetSummary.risk_flags || []).join(' · ') }}
+          </p>
+        </section>
+
         <section v-if="shareholderSummary" class="signal-block">
           <div class="signal-block-head">
             <span class="section-kicker">Holder Snapshot</span>
@@ -248,6 +284,22 @@
         </div>
       </section>
 
+      <section class="chart-section balance-sheet-section card chart-card wide-card">
+        <div class="section-header">
+          <div>
+            <h2>资产负债表风险透视</h2>
+            <p class="subtitle">现金、负债和营运资产同屏看，先判断偿债缓冲，再看资产质量有没有拖累估值。</p>
+          </div>
+          <div v-if="balanceSheetSummary" class="feature-pill">{{ balanceSheetSummary.balance_sheet_label }}</div>
+        </div>
+        <div ref="balanceRiskChartRef" class="chart-container"></div>
+        <div class="insight-strip">
+          <div class="insight-chip"><span>现金高于有息负债</span><strong>估值底通常更厚</strong></div>
+          <div class="insight-chip"><span>短债覆盖低于 100%</span><strong>要盯融资续接能力</strong></div>
+          <div class="insight-chip"><span>营运资产占收入抬升</span><strong>警惕回款和库存压力</strong></div>
+        </div>
+      </section>
+
       <section class="chart-section capital-allocation-section card chart-card wide-card">
         <div class="section-header">
           <div>
@@ -288,11 +340,12 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import * as echarts from 'echarts'
+import { echarts, type ECharts } from '@/lib/echarts'
 import { useRoute } from 'vue-router'
 
 import { stockApi } from '@/api'
 import { useSentimentStore } from '@/stores/sentiment'
+import { useInvestorLoadingQuotes } from '@/composables/useInvestorLoadingQuotes'
 
 const route = useRoute()
 const sentimentStore = useSentimentStore()
@@ -303,9 +356,12 @@ const qualityData = ref<any[]>([])
 const cashflowSummary = ref<any | null>(null)
 const capitalAllocationSummary = ref<any | null>(null)
 const stabilitySummary = ref<any | null>(null)
+const balanceSheetSummary = ref<any | null>(null)
 const shareholderHistory = ref<any[]>([])
 const shareholderSummary = ref<any | null>(null)
 const shareholderError = ref('')
+const quoteLoadingActive = computed(() => loading.value || shareholderLoading.value)
+const { loadingQuote } = useInvestorLoadingQuotes(quoteLoadingActive)
 
 const tooltip = ref({
   visible: false,
@@ -325,6 +381,11 @@ const metricDefs: Record<string, { label: string, calc: string, use: string }> =
   reinvestment_rate: { label: '再投资率', calc: '资本开支 / 经营活动现金流', use: '反映赚来的钱必须拿回去复投的比例。越低代表自由度越高。' },
   bvps_growth: { label: '每股净资产增速', calc: '(本期BVPS / 上期BVPS) - 1', use: '复利成长的底层驱动力。长期增速若高于 Roe，说明有高溢价融资或低价回购。' },
   share_change: { label: '股本变动', calc: '(最新股本 / 初始股本) - 1', use: '由于增发或股权激励导致的股权摊薄。负值代表回购注销，对老股东有利。' },
+  debt_to_equity: { label: '有息负债 / 净资产', calc: '有息负债 / 归母净资产', use: '看财务杠杆是否已经抬高到需要警惕的水平。过高意味着景气回落时净资产回报会被债务成本吞噬。' },
+  short_debt_coverage: { label: '短债覆盖率', calc: '货币资金 / 短期有息负债', use: '衡量短期偿债缓冲。低于 100% 时，企业更依赖滚动融资或经营现金流来覆盖到期债务。' },
+  net_cash_to_equity: { label: '净现金 / 净资产', calc: '(货币资金 - 有息负债) / 归母净资产', use: '看企业是净现金体质还是净负债体质。净现金越高，估值下行时的底越厚。' },
+  asset_quality_ratio: { label: '营运资产 / 收入', calc: '(应收 + 存货 + 预付款) / 营业收入', use: '看收入里有多少被压在应收、库存和预付款里。比例持续走高，通常意味着回款变慢、压货或经营弹性变差。' },
+  goodwill_to_equity: { label: '商誉 / 净资产', calc: '商誉 / 归母净资产', use: '看并购形成的商誉是否已经高到足以影响净资产安全垫。商誉高企时，要警惕减值和并购质量。' },
   gross_margin_vol: { label: '毛利稳定性', calc: '过去10年毛利率的标准差', use: '波动越小，说明行业格局稳定或产品护城河深。大起大落往往对应深周期性。' },
   roe_vol: { label: '盈利连贯性', calc: '过去10年 ROE 的标准差', use: '衡量核心获利能力的波动。低波动意味着业绩可预测性强，更容易给高估值。' },
   roic_vol: { label: '回报稳定性', calc: '过去10年 ROIC 的标准差', use: '衡量投入资本整体回报的稳定性。核心看护城河是否能跨越行业周期。' }
@@ -353,15 +414,17 @@ const moatChartRef = ref<HTMLElement | null>(null)
 const stabilityChartRef = ref<HTMLElement | null>(null)
 const payoutChartRef = ref<HTMLElement | null>(null)
 const capitalAllocationChartRef = ref<HTMLElement | null>(null)
+const balanceRiskChartRef = ref<HTMLElement | null>(null)
 const shareholderChartRef = ref<HTMLElement | null>(null)
 
-let dupontChart: echarts.ECharts | null = null
-let cashflowChart: echarts.ECharts | null = null
-let moatChart: echarts.ECharts | null = null
-let stabilityChart: echarts.ECharts | null = null
-let payoutChart: echarts.ECharts | null = null
-let capitalAllocationChart: echarts.ECharts | null = null
-let shareholderChart: echarts.ECharts | null = null
+let dupontChart: ECharts | null = null
+let cashflowChart: ECharts | null = null
+let moatChart: ECharts | null = null
+let stabilityChart: ECharts | null = null
+let payoutChart: ECharts | null = null
+let capitalAllocationChart: ECharts | null = null
+let balanceRiskChart: ECharts | null = null
+let shareholderChart: ECharts | null = null
 
 const stockName = computed(() => {
   const stock = sentimentStore.sentimentData.find(item => item.stock_symbol === symbol)
@@ -412,6 +475,11 @@ const formatCompactNumber = (value?: number | null) => {
   return `${Math.round(numeric)}`
 }
 
+const formatCoverage = (coverage?: number | null, shortDebt?: number | null) => {
+  if ((shortDebt ?? 0) <= 0) return '无短债'
+  return formatPct(coverage)
+}
+
 const toFiniteOrNull = (value: unknown) => {
   const numeric = Number(value)
   return Number.isFinite(numeric) ? numeric : null
@@ -424,6 +492,7 @@ const disposeCharts = () => {
   stabilityChart?.dispose()
   payoutChart?.dispose()
   capitalAllocationChart?.dispose()
+  balanceRiskChart?.dispose()
   shareholderChart?.dispose()
   dupontChart = null
   cashflowChart = null
@@ -431,6 +500,7 @@ const disposeCharts = () => {
   stabilityChart = null
   payoutChart = null
   capitalAllocationChart = null
+  balanceRiskChart = null
   shareholderChart = null
 }
 
@@ -453,6 +523,7 @@ const fetchData = async () => {
     cashflowSummary.value = res.data.cashflow_summary || null
     capitalAllocationSummary.value = res.data.capital_allocation_summary || null
     stabilitySummary.value = res.data.stability_summary || null
+    balanceSheetSummary.value = res.data.balance_sheet_summary || null
     coreLoaded = true
     setTimeout(() => {
       initCharts()
@@ -830,6 +901,80 @@ const initCharts = () => {
     })
   }
 
+  if (balanceRiskChartRef.value) {
+    balanceRiskChart = echarts.init(balanceRiskChartRef.value)
+    balanceRiskChart.setOption({
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        valueFormatter: (value: number) => Number(value).toFixed(2),
+      },
+      legend: { bottom: 0, textStyle: { color: '#64748b' } },
+      grid: { top: 40, left: 50, right: 50, bottom: 60 },
+      xAxis: { type: 'category', data: years, axisLabel: { color: '#94a3b8' } },
+      yAxis: [
+        {
+          type: 'value',
+          name: 'Amount',
+          axisLabel: { color: '#94a3b8' },
+          splitLine: { lineStyle: { type: 'dashed', color: '#f1f5f9' } },
+        },
+        {
+          type: 'value',
+          name: 'Ratio (%)',
+          axisLabel: { color: '#94a3b8' },
+          splitLine: { show: false },
+        },
+      ],
+      series: [
+        {
+          name: 'Cash',
+          type: 'bar',
+          data: data.map(item => item.cash_balance),
+          color: '#10b981',
+        },
+        {
+          name: 'Interest Debt',
+          type: 'bar',
+          data: data.map(item => item.interest_bearing_debt),
+          color: '#ef4444',
+        },
+        {
+          name: 'Debt / Equity',
+          type: 'line',
+          yAxisIndex: 1,
+          data: data.map(item => item.debt_to_equity_pct),
+          lineStyle: { width: 3 },
+          color: '#2563eb',
+        },
+        {
+          name: 'Short Debt Coverage',
+          type: 'line',
+          yAxisIndex: 1,
+          data: data.map(item => item.short_debt > 0 ? item.short_debt_coverage_pct : null),
+          lineStyle: { width: 3 },
+          color: '#f59e0b',
+        },
+        {
+          name: 'Working Asset / Revenue',
+          type: 'line',
+          yAxisIndex: 1,
+          data: data.map(item => item.receivable_inventory_prepay_to_revenue_pct),
+          lineStyle: { width: 2, type: 'dashed' },
+          color: '#8b5cf6',
+        },
+        {
+          name: 'Goodwill / Equity',
+          type: 'line',
+          yAxisIndex: 1,
+          data: data.map(item => item.goodwill_to_equity_pct),
+          lineStyle: { width: 2, type: 'dotted' },
+          color: '#64748b',
+        },
+      ],
+    })
+  }
+
   if (shareholderChartRef.value && shareholderHistory.value.length) {
     const dates = shareholderHistory.value.map(item => item.date)
     const priceSeries = shareholderHistory.value.map(item => toFiniteOrNull(item.price))
@@ -923,6 +1068,7 @@ const handleResize = () => {
   stabilityChart?.resize()
   payoutChart?.resize()
   capitalAllocationChart?.resize()
+  balanceRiskChart?.resize()
   shareholderChart?.resize()
 }
 
@@ -1020,6 +1166,34 @@ onUnmounted(() => {
 .loader-box {
   text-align: center;
   color: #64748b;
+}
+
+.loading-quote {
+  max-width: 420px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  text-align: center;
+}
+
+.loading-quote p {
+  margin: 0;
+  color: #0f172a;
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1.7;
+}
+
+.loading-quote span {
+  display: block;
+  margin-top: 8px;
+  color: #0f766e;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 800;
 }
 
 .spinner {
@@ -1374,6 +1548,31 @@ onUnmounted(() => {
 .deferred-card span {
   font-size: 0.88rem;
   color: #64748b;
+}
+
+.deferred-quote {
+  max-width: 480px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(240, 249, 255, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.deferred-quote p {
+  margin: 0;
+  color: #0f172a;
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.7;
+}
+
+.deferred-quote strong {
+  display: block;
+  margin-top: 8px;
+  color: #0f766e;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .deferred-card-empty {

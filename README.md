@@ -17,6 +17,10 @@
 | --- | --- | --- |
 | ![首页看板](QQ图片20260327161107.png) | ![对比分析](QQ图片20260327161155.png) | ![深度分析](QQ图片20260327161212.png) |
 
+## 路线图
+
+- 价值分析后续开发路线图见 [docs/plans/2026-04-16-value-analysis-roadmap.md](/d:/code/git/sentiment_monitor/docs/plans/2026-04-16-value-analysis-roadmap.md:1)
+
 ## 主要能力
 
 ### 1. 实时行情与舆情

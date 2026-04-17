@@ -10,6 +10,33 @@ export default defineConfig({
       '@': resolve(__dirname, 'src'),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) {
+            return
+          }
+
+          if (id.includes('echarts') || id.includes('zrender')) {
+            return 'echarts-vendor'
+          }
+
+          if (
+            id.includes('vue-router') ||
+            id.includes('pinia') ||
+            id.includes('/vue/')
+          ) {
+            return 'vue-vendor'
+          }
+
+          if (id.includes('axios')) {
+            return 'http-vendor'
+          }
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {

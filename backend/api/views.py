@@ -8,6 +8,7 @@ import akshare as ak
 import pandas as pd
 import logging
 import json
+import re
 
 from .models import Stock, SentimentData, News, Report, Announcement
 from .serializers import (
@@ -20,6 +21,8 @@ from .analysis_service import AnalysisService
 from .history_backtest_service import HistoryBacktestService
 from .price_service import PriceService
 from .fundamental_service import FundamentalService
+from .screener_service import ScreenerService
+from .utils import format_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -34,21 +37,72 @@ class StockViewSet(viewsets.ModelViewSet):
     serializer_class = StockSerializer
     lookup_field = 'symbol'
 
+    @staticmethod
+    def _coerce_list(value):
+        if value in (None, ''):
+            return []
+        if isinstance(value, (list, tuple, set)):
+            items = list(value)
+        elif isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return []
+            if raw.startswith('['):
+                try:
+                    parsed = json.loads(raw)
+                    items = parsed if isinstance(parsed, list) else [raw]
+                except (TypeError, ValueError):
+                    items = re.split(r'[,，\n]+', raw)
+            else:
+                items = re.split(r'[,，\n]+', raw)
+        else:
+            items = [value]
+        return [str(item).strip() for item in items if str(item).strip()]
+
+    @classmethod
+    def _normalize_peer_symbols(cls, value, current_symbol=''):
+        current_fixed = PriceService._fix_symbol(current_symbol) if current_symbol else ''
+        normalized = []
+        for item in cls._coerce_list(value):
+            fixed_symbol = PriceService._fix_symbol(item)
+            if fixed_symbol == current_fixed or fixed_symbol in normalized:
+                continue
+            normalized.append(fixed_symbol)
+        return normalized
+
+    def _normalize_stock_payload(self, raw_data, *, partial=False, current_symbol=''):
+        data = raw_data.copy()
+        current_fixed = PriceService._fix_symbol(current_symbol) if current_symbol else ''
+        symbol = str(data.get('symbol', '') or '').strip().upper()
+        fixed_symbol = current_fixed
+
+        if symbol:
+            fixed_symbol = PriceService._fix_symbol(symbol)
+            data['symbol'] = fixed_symbol
+        elif not partial:
+            raise ValueError('股票代码不能为空')
+
+        if not partial or 'keywords' in data:
+            keywords = self._coerce_list(data.get('keywords', []))
+            if not keywords and fixed_symbol:
+                keywords = [fixed_symbol[2:]]
+            data['keywords'] = json.dumps(keywords, ensure_ascii=False)
+
+        if not partial or 'peer_symbols' in data:
+            peer_symbols = self._normalize_peer_symbols(data.get('peer_symbols', []), fixed_symbol)
+            data['peer_symbols'] = json.dumps(peer_symbols, ensure_ascii=False)
+
+        if not partial or 'industry' in data:
+            data['industry'] = str(data.get('industry', '') or '').strip()
+
+        return data, fixed_symbol
+
     def create(self, request, *args, **kwargs):
         """添加股票时自动修复代码格式"""
-        data = request.data.copy()
-        symbol = data.get('symbol', '').strip().upper()
-        if not symbol:
-            return Response({'error': '股票代码不能为空'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # 自动补全前缀
-        fixed_symbol = PriceService._fix_symbol(symbol)
-        data['symbol'] = fixed_symbol
-        keywords = data.get('keywords', [])
-        if isinstance(keywords, list):
-            data['keywords'] = json.dumps(keywords, ensure_ascii=False)
-        elif keywords in (None, ''):
-            data['keywords'] = json.dumps([fixed_symbol[2:]], ensure_ascii=False)
+        try:
+            data, fixed_symbol = self._normalize_stock_payload(request.data, partial=False)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         
         # 如果名称为空，尝试从实时接口获取
         if not data.get('name'):
@@ -62,6 +116,38 @@ class StockViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        try:
+            data, _ = self._normalize_stock_payload(
+                request.data,
+                partial=False,
+                current_symbol=instance.symbol,
+            )
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(instance, data=data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(serializer.data)
+
+    def partial_update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        try:
+            data, _ = self._normalize_stock_payload(
+                request.data,
+                partial=True,
+                current_symbol=instance.symbol,
+            )
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(instance, data=data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(serializer.data)
 
     def destroy(self, request, *args, **kwargs):
         """删除股票"""
@@ -212,7 +298,7 @@ def search_stocks(request):
         results = []
         for _, row in matches.iterrows():
             code = str(row['代码']) # 确保为字符串
-            symbol = f"SH{code}" if code.startswith('6') else f"SZ{code}"
+            symbol = format_symbol(code)
             results.append({
                 'name': str(row['名称']), # 确保为字符串
                 'symbol': symbol,
@@ -222,6 +308,27 @@ def search_stocks(request):
     except Exception as e:
         logger.error(f"Search filtering error: {e}")
         return Response([])
+
+
+@api_view(['GET'])
+def get_screener_results(request):
+    """A 股选股结果接口"""
+    try:
+        payload = ScreenerService.query_latest_snapshot(request.GET)
+        return Response(payload)
+    except Exception as e:
+        logger.error(f"Screener Query Error: {e}")
+        return Response({'error': str(e)}, status=500)
+
+
+@api_view(['POST'])
+def refresh_screener_snapshot(request):
+    """刷新 A 股选股快照"""
+    try:
+        return Response(ScreenerService.refresh_snapshot())
+    except Exception as e:
+        logger.error(f"Screener Refresh Error: {e}")
+        return Response({'error': str(e)}, status=500)
 
 
 @api_view(['GET'])
@@ -242,6 +349,7 @@ def get_quality_analysis(request):
             'cashflow_summary': quality_data.get('cashflow_summary', {}),
             'capital_allocation_summary': quality_data.get('capital_allocation_summary', {}),
             'stability_summary': quality_data.get('stability_summary', {}),
+            'balance_sheet_summary': quality_data.get('balance_sheet_summary', {}),
             'shareholder_history': quality_data.get('shareholder_history', []),
             'shareholder_summary': quality_data.get('shareholder_summary', {}),
         })

@@ -1,3 +1,5 @@
+import json
+
 from rest_framework import serializers
 from .models import Stock, SentimentData, News, Report, Announcement
 
@@ -43,4 +45,13 @@ class SentimentDataSerializer(serializers.ModelSerializer):
 class StockSerializer(serializers.ModelSerializer):
     class Meta:
         model = Stock
-        fields = ['id', 'name', 'symbol', 'keywords', 'extra_links']
+        fields = ['id', 'name', 'symbol', 'keywords', 'extra_links', 'industry', 'peer_symbols']
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        for field in ['keywords', 'peer_symbols']:
+            try:
+                data[field] = json.loads(data.get(field) or '[]')
+            except (TypeError, ValueError):
+                data[field] = []
+        return data

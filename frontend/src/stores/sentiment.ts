@@ -78,6 +78,17 @@ export const useSentimentStore = defineStore('sentiment', () => {
     }
   }
 
+  async function updateStock(symbol: string, data: Partial<Stock>) {
+    try {
+      await stockApi.updateStock(symbol, data)
+      await fetchStocks()
+      return true
+    } catch (e) {
+      console.error('Failed to update stock:', e)
+      return false
+    }
+  }
+
   async function removeStock(symbol: string) {
     try {
       await stockApi.deleteStock(symbol)
@@ -151,6 +162,7 @@ export const useSentimentStore = defineStore('sentiment', () => {
     avgSentiment,
     fetchStocks,
     addStock,
+    updateStock,
     removeStock,
     fetchLatestSentiment,
     triggerCollection,

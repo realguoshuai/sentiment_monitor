@@ -4,12 +4,13 @@ from typing import Dict, List, Optional
 from django.core.cache import cache
 
 from .fundamental_service import FundamentalService
+from .models import Stock
 from .price_service import PriceService
 
 
 class AnalysisService:
     CACHE_TTL = 12 * 3600
-    CACHE_VERSION = 'v4'
+    CACHE_VERSION = 'v6'
     CONSERVATIVE_REQUIRED_RETURN = 12.0
     BASE_REQUIRED_RETURN = 10.0
     OPTIMISTIC_REQUIRED_RETURN = 8.0
@@ -48,7 +49,7 @@ class AnalysisService:
 
         quality_data = {}
         try:
-            quality_data = FundamentalService.get_quality_data(fixed_symbol)
+            quality_data = FundamentalService.get_quality_data(fixed_symbol, include_shareholder=False)
         except Exception:
             quality_data = {}
 
@@ -61,6 +62,11 @@ class AnalysisService:
             quality_data,
             val_config=val_config
         )
+        peer_comparison = cls.build_peer_comparison(
+            fixed_symbol,
+            forward=forward,
+            history=stock_hist,
+        )
 
         return {
             'symbol': fixed_symbol,
@@ -68,12 +74,102 @@ class AnalysisService:
             'f_score': f_score,
             'forward': forward,
             'valuation_conclusion': valuation_conclusion,
+            'peer_comparison': peer_comparison,
             'investment_thesis': cls.build_investment_thesis(
                 valuation_conclusion,
                 f_score,
                 quality_data,
             ),
             'history': stock_hist,
+        }
+
+    @classmethod
+    def build_peer_comparison(
+        cls,
+        symbol: str,
+        forward: Optional[dict] = None,
+        history: Optional[List[Dict]] = None,
+    ) -> dict:
+        fixed_symbol = PriceService._fix_symbol(symbol)
+        stock = Stock.objects.filter(symbol=fixed_symbol).first()
+        if not stock:
+            return cls._build_empty_peer_comparison(
+                fixed_symbol,
+                reason='当前标的不在监控列表中，无法读取同行配置。',
+            )
+
+        industry = (stock.industry or '').strip()
+        explicit_peers = stock.get_peer_symbols()
+        industry_peers = []
+        if industry:
+            industry_peers = list(
+                Stock.objects.filter(industry=industry)
+                .exclude(symbol=fixed_symbol)
+                .values_list('symbol', flat=True)
+            )
+
+        peer_symbols = []
+        for candidate in [*explicit_peers, *industry_peers]:
+            fixed_peer = PriceService._fix_symbol(candidate)
+            if fixed_peer == fixed_symbol or fixed_peer in peer_symbols:
+                continue
+            peer_symbols.append(fixed_peer)
+            if len(peer_symbols) >= 6:
+                break
+
+        if not peer_symbols:
+            return cls._build_empty_peer_comparison(
+                fixed_symbol,
+                industry=industry,
+                reason='先在标的管理里补充行业或同行代码，才能生成横向估值锚。',
+            )
+
+        stock_map = {
+            item.symbol: item
+            for item in Stock.objects.filter(symbol__in=[fixed_symbol, *peer_symbols])
+        }
+        realtime_map = PriceService.get_realtime_price([fixed_symbol, *peer_symbols], fetch_fundamentals=True)
+        rows = []
+        symbols = [fixed_symbol, *peer_symbols]
+        latest_history = cls._latest_history_point(history or [])
+
+        for item_symbol in symbols:
+            realtime = realtime_map.get(item_symbol, {})
+            current_forward = forward if item_symbol == fixed_symbol and forward else FundamentalService.get_forward_metrics(item_symbol)
+            row = cls._build_peer_row(
+                item_symbol,
+                realtime=realtime,
+                forward=current_forward,
+                latest_history=latest_history if item_symbol == fixed_symbol else {},
+                stock=stock_map.get(item_symbol),
+                is_target=item_symbol == fixed_symbol,
+            )
+            if row:
+                rows.append(row)
+
+        target_row = next((row for row in rows if row['is_target']), None)
+        peer_rows = [row for row in rows if not row['is_target']]
+        if not target_row or not peer_rows:
+            return cls._build_empty_peer_comparison(
+                fixed_symbol,
+                industry=industry,
+                reason='同行快照数据不足，暂时无法形成可比矩阵。',
+            )
+
+        medians = cls._build_peer_medians(peer_rows)
+        relative_view = cls._build_peer_relative_view(target_row, medians)
+        source_label = cls._build_peer_source_label(bool(explicit_peers), bool(industry_peers))
+
+        return {
+            'enabled': True,
+            'industry': industry,
+            'peer_count': len(peer_rows),
+            'source_label': source_label,
+            'reason': '',
+            'summary': cls._build_peer_summary(target_row, medians, relative_view),
+            'medians': medians,
+            'relative_view': relative_view,
+            'rows': rows,
         }
 
     @classmethod
@@ -92,6 +188,11 @@ class AnalysisService:
         current_dy = cls._safe_float(latest.get('dividend_yield'))
         current_roi = cls._safe_float(latest.get('roi'))
         expected_roe = cls._safe_float(forward.get('expected_roe') or forward.get('avg_roe_5y'))
+        normalized_earnings = cls._build_normalized_earnings_view(
+            current_price=current_price,
+            current_pe=current_pe,
+            quality_data=quality_data or {},
+        )
         current_payload = cls._build_current_payload(
             current_price,
             current_pb,
@@ -106,6 +207,7 @@ class AnalysisService:
             current_pe=current_pe,
             expected_roe=expected_roe,
             quality_data=quality_data or {},
+            normalized_earnings=normalized_earnings,
             val_config=val_config or {},
         )
         available_models = [model for model in models if model['status'] == 'available']
@@ -135,6 +237,7 @@ class AnalysisService:
                 signals=signals,
                 models=models,
                 blended_range=blended_range,
+                normalized_earnings=normalized_earnings,
             )
 
         business_return_pct = blended_range.get('business_return_pct', 0)
@@ -178,6 +281,7 @@ class AnalysisService:
             },
             'assumptions': assumptions,
             'signals': signals,
+            'normalized_earnings': normalized_earnings,
             'multi_model_valuation': {
                 'approach': 'weighted_blend',
                 'available_model_count': len(available_models),
@@ -201,6 +305,7 @@ class AnalysisService:
         signals: dict,
         models: List[dict],
         blended_range: dict,
+        normalized_earnings: Optional[dict] = None,
     ) -> dict:
         return {
             'summary': '数据不足',
@@ -233,6 +338,7 @@ class AnalysisService:
             },
             'assumptions': assumptions,
             'signals': signals,
+            'normalized_earnings': normalized_earnings or cls._build_empty_normalized_earnings_view(),
             'multi_model_valuation': {
                 'approach': 'weighted_blend',
                 'available_model_count': len([model for model in models if model['status'] == 'available']),
@@ -259,6 +365,7 @@ class AnalysisService:
         cashflow_summary = quality_data.get('cashflow_summary') or {}
         capital_allocation_summary = quality_data.get('capital_allocation_summary') or {}
         stability_summary = quality_data.get('stability_summary') or {}
+        balance_sheet_summary = quality_data.get('balance_sheet_summary') or {}
         shareholder_summary = quality_data.get('shareholder_summary') or {}
 
         discount_label = valuation_conclusion.get('discount_premium', {}).get('label', '未知')
@@ -283,6 +390,13 @@ class AnalysisService:
         revenue_growth_volatility_pct = cls._safe_float(
             stability_summary.get('revenue_growth_volatility_pct')
         )
+        debt_to_equity_pct = cls._safe_float(balance_sheet_summary.get('latest_debt_to_equity_pct'))
+        short_debt_coverage_pct = cls._safe_float(balance_sheet_summary.get('latest_short_debt_coverage_pct'))
+        receivable_inventory_prepay_to_revenue_pct = cls._safe_float(
+            balance_sheet_summary.get('latest_receivable_inventory_prepay_to_revenue_pct')
+        )
+        goodwill_to_equity_pct = cls._safe_float(balance_sheet_summary.get('latest_goodwill_to_equity_pct'))
+        balance_sheet_label = balance_sheet_summary.get('balance_sheet_label', '待验证')
         holder_count_change_pct = cls._safe_float(shareholder_summary.get('holder_count_change_pct'))
 
         score = 0
@@ -301,6 +415,8 @@ class AnalysisService:
         if roic_proxy_pct >= 12 and bvps_growth_pct >= 8:
             score += 1
         if roe_volatility_pct <= 8 and negative_growth_years <= 1:
+            score += 1
+        if balance_sheet_label != '高风险' and short_debt_coverage_pct >= 100:
             score += 1
         if share_change_pct <= 1.5:
             score += 1
@@ -358,6 +474,17 @@ class AnalysisService:
                     roe_volatility_pct <= 12 and negative_growth_years <= 2 and holder_count_change_pct <= 20,
                 ),
             ),
+            cls._build_assumption_item(
+                label='资产负债表不拖后腿',
+                detail=(
+                    f'有息负债/净资产 {cls._round(debt_to_equity_pct)}%，短债覆盖 {cls._round(short_debt_coverage_pct)}%，'
+                    f'营运资产占收入 {cls._round(receivable_inventory_prepay_to_revenue_pct)}%，当前标签 {balance_sheet_label}。'
+                ),
+                status=cls._assumption_status(
+                    balance_sheet_label == '低风险' and short_debt_coverage_pct >= 120 and debt_to_equity_pct <= 50,
+                    balance_sheet_label != '高风险' and short_debt_coverage_pct >= 90 and debt_to_equity_pct <= 100,
+                ),
+            ),
         ]
 
         risk_checklist = [
@@ -390,6 +517,17 @@ class AnalysisService:
                     share_change_pct <= 3 and holder_count_change_pct <= 15,
                 ),
             ),
+            cls._build_risk_item(
+                label='资产负债表拖累',
+                detail=(
+                    f'有息负债/净资产 {cls._round(debt_to_equity_pct)}%，短债覆盖 {cls._round(short_debt_coverage_pct)}%，'
+                    f'营运资产占收入 {cls._round(receivable_inventory_prepay_to_revenue_pct)}%，商誉/净资产 {cls._round(goodwill_to_equity_pct)}%。'
+                ),
+                level=cls._risk_level(
+                    balance_sheet_label == '低风险' and short_debt_coverage_pct >= 120 and goodwill_to_equity_pct <= 10,
+                    balance_sheet_label != '高风险' and short_debt_coverage_pct >= 90 and goodwill_to_equity_pct <= 25,
+                ),
+            ),
         ]
 
         review_triggers = [
@@ -397,6 +535,7 @@ class AnalysisService:
             f'复核 CFO/净利润是否维持在 {max(cls._round(min(cfo_to_profit_pct, 120)), 80)}% 左右以上',
             '复核自由现金流是否继续为正，资本开支强度是否显著抬升',
             '复核股本变化与股东人数公告，确认没有再融资摊薄和筹码明显分散',
+            '复核短债覆盖、营运资产占收入和商誉占净资产是否继续恶化',
         ]
 
         return {
@@ -557,11 +696,12 @@ class AnalysisService:
         current_pe: float,
         expected_roe: float,
         quality_data: dict,
+        normalized_earnings: Optional[dict] = None,
         val_config: dict = {},
     ) -> List[dict]:
         models = [
             cls._build_roe_anchor_model(current_price, current_pb, expected_roe, val_config),
-            cls._build_earnings_power_model(current_price, current_pe),
+            cls._build_earnings_power_model(current_price, current_pe, normalized_earnings or {}),
             cls._build_owner_earnings_model(current_price, expected_roe, quality_data),
         ]
         available_models = [model for model in models if model['status'] == 'available']
@@ -638,6 +778,7 @@ class AnalysisService:
         cls,
         current_price: float,
         current_pe: float,
+        normalized_earnings: Optional[dict] = None,
     ) -> dict:
         if current_price <= 0 or current_pe <= 0:
             return cls._build_unavailable_model(
@@ -646,14 +787,25 @@ class AnalysisService:
                 reason='缺少当前 PE 或价格',
             )
 
-        earnings_per_share = current_price / current_pe
+        normalized_earnings = normalized_earnings or {}
+        reported_eps = current_price / current_pe
+        normalized_eps = cls._safe_float(normalized_earnings.get('normalized_eps'))
+        use_normalized = normalized_eps > 0
+        earnings_per_share = normalized_eps if use_normalized else reported_eps
         pe_low = 100 / cls.CONSERVATIVE_REQUIRED_RETURN
         pe_base = 100 / cls.BASE_REQUIRED_RETURN
         pe_high = 100 / cls.OPTIMISTIC_REQUIRED_RETURN
         price_low = earnings_per_share * pe_low
         price_base = earnings_per_share * pe_base
         price_high = earnings_per_share * pe_high
-        earnings_yield_pct = 100 / current_pe if current_pe > 0 else 0
+        earnings_yield_pct = (earnings_per_share / current_price) * 100 if current_price > 0 else 0
+        basis_label = '归一化 EPS' if use_normalized else '报表 EPS'
+        cycle_position_label = normalized_earnings.get('cycle_position_label', '接近中枢')
+        description = (
+            '把近 5 年中枢 EPS 资本化，避免把利润高点直接映射成估值。'
+            if use_normalized
+            else '把当前每股盈利资本化，适合成熟、利润相对稳定的公司。'
+        )
 
         return cls._build_model_result(
             key='earnings_power',
@@ -667,18 +819,173 @@ class AnalysisService:
             implied_pb_high=0,
             weight=cls.MODEL_WEIGHTS['earnings_power'],
             business_return_pct=earnings_yield_pct,
-            description='把当前每股盈利资本化，适合成熟、利润相对稳定的公司。',
+            description=description,
+            basis_label=basis_label,
             highlights=[
-                f'EPS {cls._round(earnings_per_share)}',
+                f'当前 EPS {cls._round(reported_eps)}',
+                f'归一 EPS {cls._round(normalized_eps) if use_normalized else cls._round(reported_eps)}',
                 f'当前 PE {cls._round(current_pe)}x',
-                f'盈利收益率 {cls._round(earnings_yield_pct)}%',
+                f'盈利位置 {cycle_position_label}',
             ],
             assumptions={
                 'eps': cls._round(earnings_per_share),
+                'reported_eps': cls._round(reported_eps),
+                'normalized_eps': cls._round(normalized_eps) if use_normalized else None,
+                'selected_basis': 'normalized' if use_normalized else 'reported',
+                'cycle_position_label': cycle_position_label,
                 'fair_pe_low': cls._round(pe_low),
                 'fair_pe_base': cls._round(pe_base),
                 'fair_pe_high': cls._round(pe_high),
             },
+        )
+
+    @classmethod
+    def _build_normalized_earnings_view(
+        cls,
+        current_price: float,
+        current_pe: float,
+        quality_data: dict,
+    ) -> dict:
+        history = (quality_data or {}).get('history') or []
+        if not history:
+            return cls._build_empty_normalized_earnings_view()
+
+        window = history[-5:]
+        latest = window[-1]
+        window_years = len(window)
+        latest_share_count = cls._safe_float(latest.get('implied_share_count'))
+        share_count_candidates = [
+            cls._safe_float(item.get('implied_share_count'))
+            for item in window
+            if cls._safe_float(item.get('implied_share_count')) > 0
+        ]
+        share_count = latest_share_count or (median(share_count_candidates) if share_count_candidates else 0.0)
+
+        current_eps = cls._safe_float(current_price / current_pe) if current_price > 0 and current_pe > 0 else 0.0
+        if current_eps <= 0:
+            current_eps = cls._safe_float(latest.get('BASIC_EPS'))
+
+        eps_candidates = [
+            cls._safe_float(item.get('BASIC_EPS'))
+            for item in window
+            if cls._safe_float(item.get('BASIC_EPS')) > 0
+        ]
+        normalized_eps = median(eps_candidates) if eps_candidates else 0.0
+
+        current_fcf_per_share = 0.0
+        if share_count > 0:
+            current_fcf_per_share = cls._safe_float(latest.get('fcf')) / share_count
+
+        fcf_per_share_candidates = []
+        for item in window:
+            item_share_count = cls._safe_float(item.get('implied_share_count')) or share_count
+            if item_share_count <= 0:
+                continue
+            fcf_value = cls._safe_float(item.get('fcf'))
+            fcf_per_share_candidates.append(fcf_value / item_share_count)
+        normalized_fcf_per_share = median(fcf_per_share_candidates) if fcf_per_share_candidates else 0.0
+
+        current_net_margin_pct = cls._safe_float(latest.get('net_margin'))
+        margin_candidates = [
+            cls._safe_float(item.get('net_margin'))
+            for item in window
+            if item.get('net_margin') is not None
+        ]
+        normalized_net_margin_pct = median(margin_candidates) if margin_candidates else current_net_margin_pct
+
+        eps_deviation_pct = cls._pct_gap_from_mid_cycle(current_eps, normalized_eps)
+        fcf_deviation_pct = cls._pct_gap_from_mid_cycle(current_fcf_per_share, normalized_fcf_per_share)
+        margin_deviation_pct = cls._pct_gap_from_mid_cycle(current_net_margin_pct, normalized_net_margin_pct)
+        cycle_position_label = cls._classify_cycle_position(eps_deviation_pct, margin_deviation_pct)
+        use_normalized = normalized_eps > 0
+
+        return {
+            'enabled': use_normalized or abs(normalized_fcf_per_share) > 0 or abs(normalized_net_margin_pct) > 0,
+            'selected_basis': 'normalized' if use_normalized else 'reported',
+            'basis_label': '归一化 EPS' if use_normalized else '报表 EPS',
+            'window_years': window_years,
+            'cycle_position_label': cycle_position_label,
+            'current_eps': cls._round(current_eps),
+            'normalized_eps': cls._round(normalized_eps),
+            'eps_deviation_pct': cls._round(eps_deviation_pct),
+            'current_fcf_per_share': cls._round(current_fcf_per_share),
+            'normalized_fcf_per_share': cls._round(normalized_fcf_per_share),
+            'fcf_deviation_pct': cls._round(fcf_deviation_pct),
+            'current_net_margin_pct': cls._round(current_net_margin_pct),
+            'normalized_net_margin_pct': cls._round(normalized_net_margin_pct),
+            'margin_deviation_pct': cls._round(margin_deviation_pct),
+            'explanation': cls._build_normalized_earnings_explanation(
+                current_eps=current_eps,
+                normalized_eps=normalized_eps,
+                eps_deviation_pct=eps_deviation_pct,
+                current_fcf_per_share=current_fcf_per_share,
+                normalized_fcf_per_share=normalized_fcf_per_share,
+                cycle_position_label=cycle_position_label,
+                use_normalized=use_normalized,
+                window_years=window_years,
+            ),
+        }
+
+    @classmethod
+    def _build_empty_normalized_earnings_view(cls) -> dict:
+        return {
+            'enabled': False,
+            'selected_basis': 'reported',
+            'basis_label': '报表 EPS',
+            'window_years': 0,
+            'cycle_position_label': '数据不足',
+            'current_eps': 0,
+            'normalized_eps': 0,
+            'eps_deviation_pct': 0,
+            'current_fcf_per_share': 0,
+            'normalized_fcf_per_share': 0,
+            'fcf_deviation_pct': 0,
+            'current_net_margin_pct': 0,
+            'normalized_net_margin_pct': 0,
+            'margin_deviation_pct': 0,
+            'explanation': '缺少足够的年度财务数据，暂时无法建立归一化利润口径。',
+        }
+
+    @staticmethod
+    def _pct_gap_from_mid_cycle(current_value: float, normalized_value: float) -> float:
+        if normalized_value == 0:
+            return 0.0
+        return ((current_value / normalized_value) - 1) * 100
+
+    @staticmethod
+    def _classify_cycle_position(eps_deviation_pct: float, margin_deviation_pct: float) -> str:
+        if eps_deviation_pct >= 25 or (eps_deviation_pct >= 15 and margin_deviation_pct >= 10):
+            return '高于中枢'
+        if eps_deviation_pct <= -25 or (eps_deviation_pct <= -15 and margin_deviation_pct <= -10):
+            return '低于中枢'
+        if abs(eps_deviation_pct) <= 12:
+            return '接近中枢'
+        return '略偏离中枢'
+
+    @classmethod
+    def _build_normalized_earnings_explanation(
+        cls,
+        current_eps: float,
+        normalized_eps: float,
+        eps_deviation_pct: float,
+        current_fcf_per_share: float,
+        normalized_fcf_per_share: float,
+        cycle_position_label: str,
+        use_normalized: bool,
+        window_years: int,
+    ) -> str:
+        if not use_normalized:
+            return '可用年度样本不足，盈利能力估值暂按当前报表 EPS 计算。'
+
+        basis_text = '盈利能力估值已优先采用归一化 EPS，避免把异常高点利润直接资本化。'
+        if cycle_position_label == '低于中枢':
+            basis_text = '盈利能力估值已优先采用归一化 EPS，避免把阶段性低点利润固化成长期价值。'
+
+        return (
+            f'当前 EPS {cls._round(current_eps)}，近 {window_years} 年归一 EPS {cls._round(normalized_eps)}，'
+            f'当前盈利{cycle_position_label}（偏离 {cls._round(eps_deviation_pct)}%）；'
+            f'当前 FCF/股 {cls._round(current_fcf_per_share)}，归一 FCF/股 {cls._round(normalized_fcf_per_share)}。'
+            f'{basis_text}'
         )
 
     @classmethod
@@ -780,6 +1087,7 @@ class AnalysisService:
         description: str,
         highlights: List[str],
         assumptions: dict,
+        basis_label: str = '',
     ) -> dict:
         return {
             'key': key,
@@ -790,6 +1098,7 @@ class AnalysisService:
             'effective_weight_pct': 0,
             'summary': cls._classify_valuation(price_low, price_base, price_high, current_price),
             'business_return_pct': cls._round(business_return_pct),
+            'basis_label': basis_label,
             'fair_value_range': {
                 'price_low': cls._round(price_low),
                 'price_base': cls._round(price_base),
@@ -890,6 +1199,156 @@ class AnalysisService:
             'dividend_yield': cls._round(current_dy),
             'roi': cls._round(current_roi),
         }
+
+    @classmethod
+    def _build_empty_peer_comparison(
+        cls,
+        symbol: str,
+        industry: str = '',
+        reason: str = '',
+    ) -> dict:
+        return {
+            'enabled': False,
+            'industry': industry,
+            'peer_count': 0,
+            'source_label': '',
+            'reason': reason,
+            'summary': '',
+            'medians': {},
+            'relative_view': {},
+            'rows': [{
+                'symbol': symbol,
+                'name': symbol,
+                'industry': industry,
+                'is_target': True,
+                'price': 0,
+                'market_cap': 0,
+                'pe': 0,
+                'pb': 0,
+                'dividend_yield': 0,
+                'expected_roe': 0,
+            }],
+        }
+
+    @classmethod
+    def _build_peer_row(
+        cls,
+        symbol: str,
+        realtime: dict,
+        forward: dict,
+        latest_history: Optional[dict] = None,
+        stock: Optional[Stock] = None,
+        is_target: bool = False,
+    ) -> Optional[dict]:
+        latest_history = latest_history or {}
+        price = cls._safe_float(realtime.get('price') or latest_history.get('price'))
+        pe = cls._safe_float(realtime.get('pe') or latest_history.get('pe'))
+        pb = cls._safe_float(realtime.get('pb') or latest_history.get('pb'))
+        dividend_yield = cls._safe_float(
+            realtime.get('dividend_yield') or latest_history.get('dividend_yield')
+        )
+        expected_roe = cls._safe_float(forward.get('expected_roe') or forward.get('avg_roe_5y'))
+        market_cap = cls._safe_float(realtime.get('market_cap'))
+
+        if max(price, pe, pb, dividend_yield, expected_roe, market_cap) <= 0:
+            return None
+
+        return {
+            'symbol': symbol,
+            'name': (stock.name if stock else '') or symbol,
+            'industry': (stock.industry if stock else '') or '',
+            'is_target': is_target,
+            'price': cls._round(price),
+            'market_cap': cls._round(market_cap),
+            'pe': cls._round(pe),
+            'pb': cls._round(pb),
+            'dividend_yield': cls._round(dividend_yield),
+            'expected_roe': cls._round(expected_roe),
+        }
+
+    @classmethod
+    def _build_peer_medians(cls, rows: List[dict]) -> dict:
+        def metric_median(field: str) -> float:
+            values = [cls._safe_float(item.get(field)) for item in rows if cls._safe_float(item.get(field)) > 0]
+            return cls._round(median(values)) if values else 0
+
+        return {
+            'price': metric_median('price'),
+            'pe': metric_median('pe'),
+            'pb': metric_median('pb'),
+            'dividend_yield': metric_median('dividend_yield'),
+            'expected_roe': metric_median('expected_roe'),
+        }
+
+    @classmethod
+    def _build_peer_relative_view(cls, target: dict, medians: dict) -> dict:
+        return {
+            'pe_vs_peer_median_pct': cls._round(cls._pct_vs_median(target.get('pe'), medians.get('pe'))),
+            'pb_vs_peer_median_pct': cls._round(cls._pct_vs_median(target.get('pb'), medians.get('pb'))),
+            'dividend_yield_vs_peer_median_pct': cls._round(
+                cls._point_diff_vs_median(target.get('dividend_yield'), medians.get('dividend_yield'))
+            ),
+            'expected_roe_vs_peer_median_pct': cls._round(
+                cls._pct_vs_median(target.get('expected_roe'), medians.get('expected_roe'))
+            ),
+        }
+
+    @classmethod
+    def _build_peer_summary(cls, target: dict, medians: dict, relative_view: dict) -> str:
+        pb_gap = cls._round(relative_view.get('pb_vs_peer_median_pct'))
+        roe_gap = cls._round(relative_view.get('expected_roe_vs_peer_median_pct'))
+        dy_gap = cls._round(relative_view.get('dividend_yield_vs_peer_median_pct'))
+        pb_text = (
+            f'PB 较同行中位低 {abs(pb_gap)}%'
+            if pb_gap < 0
+            else f'PB 较同行中位高 {pb_gap}%'
+            if pb_gap > 0
+            else 'PB 与同行中位接近'
+        )
+        roe_text = (
+            f'前瞻 ROE 高 {roe_gap}%'
+            if roe_gap > 0
+            else f'前瞻 ROE 低 {abs(roe_gap)}%'
+            if roe_gap < 0
+            else '前瞻 ROE 与同行中位接近'
+        )
+        dy_text = (
+            f'股息率高 {dy_gap}%'
+            if dy_gap > 0
+            else f'股息率低 {abs(dy_gap)}%'
+            if dy_gap < 0
+            else '股息率接近同行中位'
+        )
+        return (
+            f"同行中位 PE {cls._round(medians.get('pe'))}x / PB {cls._round(medians.get('pb'))}x。"
+            f"{pb_text}，{roe_text}，{dy_text}。"
+        )
+
+    @staticmethod
+    def _build_peer_source_label(has_explicit: bool, has_industry: bool) -> str:
+        if has_explicit and has_industry:
+            return '显式同行 + 同行业监控'
+        if has_explicit:
+            return '显式同行'
+        if has_industry:
+            return '同行业监控'
+        return ''
+
+    @staticmethod
+    def _pct_vs_median(current, median_value) -> float:
+        current_value = AnalysisService._safe_float(current)
+        benchmark = AnalysisService._safe_float(median_value)
+        if current_value <= 0 or benchmark <= 0:
+            return 0.0
+        return ((current_value / benchmark) - 1) * 100
+
+    @staticmethod
+    def _point_diff_vs_median(current, median_value) -> float:
+        current_value = AnalysisService._safe_float(current)
+        benchmark = AnalysisService._safe_float(median_value)
+        if current_value <= 0 or benchmark <= 0:
+            return 0.0
+        return current_value - benchmark
 
     @classmethod
     def _build_gap_payload(cls, current_price: float, fair_price: float) -> dict:

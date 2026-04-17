@@ -5,6 +5,8 @@ import logging
 import time
 import json
 import os
+import threading
+import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime
@@ -17,6 +19,11 @@ from .cache_manager import CacheManager
 logger = logging.getLogger(__name__)
 
 class FundamentalService:
+    AKSHARE_TIMEOUT = (5, 12)
+    _request_patch_lock = threading.RLock()
+    _request_patch_refcount = 0
+    _original_session_request = None
+
     @staticmethod
     def _cache_get(key):
         """委托给 CacheManager (保留接口兼容性)"""
@@ -70,9 +77,11 @@ class FundamentalService:
             f"shareholder_overlay_v2_{symbol}",
             f"shareholder_overlay_v3_{symbol}",
             f"quality_core_v1_{symbol}",
+            f"quality_core_v2_{symbol}",
             f"northbound_history_v1_{symbol}",
             f"margin_history_v1_{symbol}",
             f"quality_v11_{symbol}",
+            f"quality_v12_{symbol}",
             f"f_score_v7_{symbol}",
         ]
         for key in cache_keys:
@@ -98,7 +107,7 @@ class FundamentalService:
         
         try:
             # 1. 利润表 (YTD -> Single Quarter -> TTM)
-            df_profit = ak.stock_profit_sheet_by_quarterly_em(symbol=symbol)
+            df_profit = cls._call_akshare(ak.stock_profit_sheet_by_quarterly_em, symbol=symbol)
             df_profit = df_profit[['REPORT_DATE', 'PARENT_NETPROFIT', 'NOTICE_DATE']]
             df_profit['REPORT_DATE'] = pd.to_datetime(df_profit['REPORT_DATE'])
             df_profit['NOTICE_DATE'] = pd.to_datetime(df_profit['NOTICE_DATE'])
@@ -113,7 +122,7 @@ class FundamentalService:
             df_profit['ttm_profit'] = df_profit['q_profit'].rolling(window=4).sum().bfill()
             
             # 2. 资产负债表 (净资产, 总资产)
-            df_balance = ak.stock_balance_sheet_by_report_em(symbol=symbol)
+            df_balance = cls._call_akshare(ak.stock_balance_sheet_by_report_em, symbol=symbol)
             if 'TOTAL_PARENT_EQUITY' in df_balance.columns:
                 cols = ['REPORT_DATE', 'TOTAL_PARENT_EQUITY']
                 if 'TOTAL_ASSETS' in df_balance.columns:
@@ -179,7 +188,7 @@ class FundamentalService:
             return cached_df
         
         try:
-            df_cash = ak.stock_cash_flow_sheet_by_quarterly_em(symbol=symbol)
+            df_cash = cls._call_akshare(ak.stock_cash_flow_sheet_by_quarterly_em, symbol=symbol)
             df_cash = df_cash[['REPORT_DATE', 'NETCASH_OPERATE', 'NOTICE_DATE']]
             df_cash['REPORT_DATE'] = pd.to_datetime(df_cash['REPORT_DATE'])
             df_cash['NETCASH_OPERATE'] = pd.to_numeric(df_cash['NETCASH_OPERATE'], errors='coerce').fillna(0)
@@ -206,7 +215,7 @@ class FundamentalService:
             # 使用 ak.stock_history_dividend_detail
             # 注意：某些版本 akshare 接口名可能是 stock_history_dividend_detail
             # 如果报错，尝试 alternative
-            df = ak.stock_history_dividend_detail(symbol=symbol[2:], indicator="分红")
+            df = cls._call_akshare(ak.stock_history_dividend_detail, symbol=symbol[2:], indicator="分红")
             
             # 字段映射 (修正 AkShare 编码问题)
             # 通过索引获取：0: 公告日期, 3: 每10股派现
@@ -264,7 +273,7 @@ class FundamentalService:
                 continue
             fetcher_name = getattr(fetcher, '__name__', '')
             try:
-                df_cash = fetcher(symbol=symbol)
+                df_cash = cls._call_akshare(fetcher, symbol=symbol)
                 if df_cash is None or df_cash.empty:
                     continue
                 if 'REPORT_DATE' in df_cash.columns:
@@ -295,6 +304,39 @@ class FundamentalService:
                 else:
                     os.environ[key] = value
 
+    @classmethod
+    @contextmanager
+    def _with_akshare_timeout(cls):
+        with cls._request_patch_lock:
+            if cls._request_patch_refcount == 0:
+                cls._original_session_request = requests.sessions.Session.request
+
+                def _request_with_timeout(session, method, url, **kwargs):
+                    if kwargs.get('timeout') in (None, 0):
+                        kwargs['timeout'] = cls.AKSHARE_TIMEOUT
+                    return cls._original_session_request(session, method, url, **kwargs)
+
+                requests.sessions.Session.request = _request_with_timeout
+            cls._request_patch_refcount += 1
+
+        try:
+            yield
+        finally:
+            with cls._request_patch_lock:
+                cls._request_patch_refcount -= 1
+                if cls._request_patch_refcount <= 0 and cls._original_session_request is not None:
+                    requests.sessions.Session.request = cls._original_session_request
+                    cls._original_session_request = None
+                    cls._request_patch_refcount = 0
+
+    @classmethod
+    def _call_akshare(cls, fetcher, *args, use_no_proxy=False, **kwargs):
+        if use_no_proxy:
+            with cls._without_proxy_env(), cls._with_akshare_timeout():
+                return fetcher(*args, **kwargs)
+        with cls._with_akshare_timeout():
+            return fetcher(*args, **kwargs)
+
     @staticmethod
     def _classify_holder_trend(change_pct):
         if change_pct <= -10:
@@ -312,8 +354,7 @@ class FundamentalService:
             return cached_df
 
         try:
-            with cls._without_proxy_env():
-                df = ak.stock_zh_a_gdhs_detail_em(symbol=symbol[2:])
+            df = cls._call_akshare(ak.stock_zh_a_gdhs_detail_em, symbol=symbol[2:], use_no_proxy=True)
             if df is None or df.empty:
                 return pd.DataFrame()
 
@@ -382,8 +423,7 @@ class FundamentalService:
             return cached_df
 
         try:
-            with cls._without_proxy_env():
-                df = ak.stock_hsgt_individual_em(symbol=symbol[2:])
+            df = cls._call_akshare(ak.stock_hsgt_individual_em, symbol=symbol[2:], use_no_proxy=True)
             if df is None or df.empty:
                 return pd.DataFrame()
 
@@ -532,8 +572,7 @@ class FundamentalService:
             return daily_df
 
         try:
-            with cls._without_proxy_env():
-                daily_df = fetcher(date=trade_date)
+            daily_df = cls._call_akshare(fetcher, date=trade_date, use_no_proxy=True)
             if daily_df is None:
                 daily_df = pd.DataFrame()
             cls._cache_set(daily_key, daily_df, 12 * 3600)
@@ -747,6 +786,71 @@ class FundamentalService:
 
         return working[columns], source
 
+    @classmethod
+    def _sum_existing_columns(cls, frame, candidates):
+        columns = [column for column in candidates if column in frame.columns]
+        if not columns:
+            return pd.Series(0.0, index=frame.index, dtype='float64')
+
+        series = pd.Series(0.0, index=frame.index, dtype='float64')
+        for column in columns:
+            series = series.add(
+                pd.to_numeric(frame[column], errors='coerce').fillna(0),
+                fill_value=0,
+            )
+        return series
+
+    @classmethod
+    def _extract_balance_risk_metrics(cls, df_balance):
+        columns = [
+            'REPORT_DATE',
+            'short_debt',
+            'receivable_balance',
+            'inventory_balance',
+            'prepayment_balance',
+            'goodwill_balance',
+        ]
+        if df_balance is None or df_balance.empty:
+            return pd.DataFrame(columns=columns)
+
+        working = df_balance.copy()
+        working['short_debt'] = cls._sum_existing_columns(
+            working,
+            [
+                'SHORT_LOAN',
+                'BORROW_SHORT',
+                'SHORT_BORROWINGS',
+                'NONCURRENT_LIAB_DUE_WITHIN_1Y',
+                'CURRENT_PORTION_OF_NONCURRENT_LIABILITIES',
+            ],
+        )
+        working['receivable_balance'] = cls._sum_existing_columns(
+            working,
+            [
+                'ACCOUNTS_RECE',
+                'ACCOUNTS_RECEIVABLE',
+                'NOTES_RECE',
+                'NOTES_ACCOUNTS_RECE',
+                'BILL_RECE',
+                '应收账款',
+                '应收票据',
+            ],
+        )
+        working['inventory_balance'] = cls._sum_existing_columns(
+            working,
+            ['INVENTORY', '存货'],
+        )
+        working['prepayment_balance'] = cls._sum_existing_columns(
+            working,
+            ['PREPAYMENT', 'PREPAYMENTS', 'PREPAY_ACCOUNT', '预付款项'],
+        )
+        working['goodwill_balance'] = cls._sum_existing_columns(
+            working,
+            ['GOODWILL', '商誉'],
+        )
+
+        return working[columns]
+
     @staticmethod
     def _classify_financing_signal(share_change_pct):
         if share_change_pct <= -1.5:
@@ -836,18 +940,86 @@ class FundamentalService:
             return '波动明显'
         return '中性'
 
+    @staticmethod
+    def _classify_liquidity(short_debt_coverage_pct, net_cash_to_equity_pct, interest_bearing_debt):
+        if interest_bearing_debt <= 0:
+            return '净现金'
+        if short_debt_coverage_pct >= 160 and net_cash_to_equity_pct >= -10:
+            return '现金覆盖'
+        if short_debt_coverage_pct >= 100:
+            return '可控'
+        return '偏紧'
+
+    @staticmethod
+    def _classify_asset_quality(receivable_inventory_prepay_to_revenue_pct, goodwill_to_equity_pct):
+        if receivable_inventory_prepay_to_revenue_pct <= 35 and goodwill_to_equity_pct <= 10:
+            return '轻'
+        if receivable_inventory_prepay_to_revenue_pct <= 60 and goodwill_to_equity_pct <= 25:
+            return '中性'
+        return '承压'
+
+    @classmethod
+    def _classify_balance_sheet_risk(
+        cls,
+        debt_to_equity_pct,
+        short_debt_coverage_pct,
+        receivable_inventory_prepay_to_revenue_pct,
+        goodwill_to_equity_pct,
+        interest_bearing_debt,
+    ):
+        if (
+            interest_bearing_debt <= 0
+            or (
+                debt_to_equity_pct <= 30
+                and short_debt_coverage_pct >= 130
+                and receivable_inventory_prepay_to_revenue_pct <= 35
+                and goodwill_to_equity_pct <= 10
+            )
+        ):
+            return '低风险'
+        if (
+            debt_to_equity_pct <= 80
+            and short_debt_coverage_pct >= 90
+            and receivable_inventory_prepay_to_revenue_pct <= 55
+            and goodwill_to_equity_pct <= 25
+        ):
+            return '中风险'
+        return '高风险'
+
+    @classmethod
+    def _build_balance_sheet_flags(
+        cls,
+        debt_to_equity_pct,
+        short_debt_coverage_pct,
+        receivable_inventory_prepay_to_revenue_pct,
+        goodwill_to_equity_pct,
+        interest_bearing_debt,
+    ):
+        flags = []
+        if interest_bearing_debt > 0 and short_debt_coverage_pct < 100:
+            flags.append('短债覆盖偏紧')
+        if debt_to_equity_pct > 80:
+            flags.append('有息负债偏高')
+        if receivable_inventory_prepay_to_revenue_pct > 55:
+            flags.append('营运资产占收入偏高')
+        if goodwill_to_equity_pct > 25:
+            flags.append('商誉占净资产偏高')
+        if not flags:
+            flags.append('资产负债表相对稳健')
+        return flags
+
     @classmethod
     def get_quality_data(cls, symbol, include_shareholder=True):
         """获取近10年高质量基本面数据 (杜邦因子+护城河+派息+现金流质量)"""
         symbol = cls._fix_symbol(symbol)
-        cache_key = f"quality_v11_{symbol}" if include_shareholder else f"quality_core_v1_{symbol}"
+        cache_key = f"quality_v12_{symbol}" if include_shareholder else f"quality_core_v2_{symbol}"
         cached_data = cls._cache_get_value(cache_key)
         if cached_data is not None:
             return cached_data
 
         try:
             # 1. 获取利润表数据 (使用报告期接口，确保 12/31 是全年累积数据)
-            df_profit = ak.stock_profit_sheet_by_report_em(symbol=symbol)
+            df_profit = cls._call_akshare(ak.stock_profit_sheet_by_report_em, symbol=symbol)
             notice_col = cls._first_existing_column(df_profit, ['NOTICE_DATE', '公告日期', '公告日'])
             revenue_col = cls._first_existing_column(
                 df_profit,
@@ -897,7 +1069,7 @@ class FundamentalService:
             df_profit = df_profit.sort_values('REPORT_DATE')
 
             # 2. 获取资产负债表数据
-            df_balance = ak.stock_balance_sheet_by_report_em(symbol=symbol)
+            df_balance = cls._call_akshare(ak.stock_balance_sheet_by_report_em, symbol=symbol)
             df_balance['REPORT_DATE'] = pd.to_datetime(df_balance['REPORT_DATE'])
             df_balance = df_balance[df_balance['REPORT_DATE'].dt.month == 12]
 
@@ -905,6 +1077,7 @@ class FundamentalService:
             df_cash = cls.get_yearly_cashflow(symbol)
             cashflow_metrics, capex_source = cls._extract_cashflow_metrics(df_cash)
             capital_structure_metrics, invested_capital_source = cls._extract_capital_structure_metrics(df_balance)
+            balance_risk_metrics = cls._extract_balance_risk_metrics(df_balance)
 
             # 3. 合并表
             df = pd.merge(
@@ -914,11 +1087,13 @@ class FundamentalService:
             )
             df = pd.merge(df, cashflow_metrics, on='REPORT_DATE', how='left')
             df = pd.merge(df, capital_structure_metrics, on='REPORT_DATE', how='left')
+            df = pd.merge(df, balance_risk_metrics, on='REPORT_DATE', how='left')
 
             for col in [
                 'TOTAL_OPERATE_INCOME', 'PARENT_NETPROFIT', 'OPERATE_COST', 'TOTAL_ASSETS',
                 'TOTAL_PARENT_EQUITY', 'BASIC_EPS', 'cfo', 'capex', 'cash_balance',
-                'interest_bearing_debt', 'invested_capital',
+                'interest_bearing_debt', 'invested_capital', 'short_debt',
+                'receivable_balance', 'inventory_balance', 'prepayment_balance', 'goodwill_balance',
             ]:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
@@ -1003,6 +1178,34 @@ class FundamentalService:
             )
             df['roic_proxy_pct'] = df.apply(
                 lambda r: cls._safe_ratio(r['PARENT_NETPROFIT'], r['avg_invested_capital']) * 100,
+                axis=1,
+            )
+            df['net_cash'] = df['cash_balance'] - df['interest_bearing_debt']
+            df['debt_to_equity_pct'] = df.apply(
+                lambda r: cls._safe_ratio(r['interest_bearing_debt'], r['TOTAL_PARENT_EQUITY']) * 100,
+                axis=1,
+            )
+            df['debt_to_assets_pct'] = df.apply(
+                lambda r: cls._safe_ratio(r['interest_bearing_debt'], r['TOTAL_ASSETS']) * 100,
+                axis=1,
+            )
+            df['net_cash_to_equity_pct'] = df.apply(
+                lambda r: cls._safe_ratio(r['net_cash'], r['TOTAL_PARENT_EQUITY']) * 100,
+                axis=1,
+            )
+            df['short_debt_coverage_pct'] = df.apply(
+                lambda r: cls._safe_ratio(r['cash_balance'], r['short_debt']) * 100 if r['short_debt'] > 0 else 0,
+                axis=1,
+            )
+            df['receivable_inventory_prepay_balance'] = (
+                df['receivable_balance'] + df['inventory_balance'] + df['prepayment_balance']
+            )
+            df['receivable_inventory_prepay_to_revenue_pct'] = df.apply(
+                lambda r: cls._safe_ratio(r['receivable_inventory_prepay_balance'], r['TOTAL_OPERATE_INCOME']) * 100,
+                axis=1,
+            )
+            df['goodwill_to_equity_pct'] = df.apply(
+                lambda r: cls._safe_ratio(r['goodwill_balance'], r['TOTAL_PARENT_EQUITY']) * 100,
                 axis=1,
             )
             df['year'] = df['REPORT_DATE'].dt.year
@@ -1100,6 +1303,41 @@ class FundamentalService:
                     cyclical_label,
                 ),
             }
+            balance_sheet_summary = {
+                'latest_cash_balance': round(float(latest['cash_balance']) if latest is not None else 0, 2),
+                'latest_interest_bearing_debt': round(float(latest['interest_bearing_debt']) if latest is not None else 0, 2),
+                'latest_net_cash': round(float(latest['net_cash']) if latest is not None else 0, 2),
+                'latest_short_debt': round(float(latest['short_debt']) if latest is not None else 0, 2),
+                'latest_short_debt_coverage_pct': round(float(latest['short_debt_coverage_pct']) if latest is not None else 0, 2),
+                'latest_debt_to_equity_pct': round(float(latest['debt_to_equity_pct']) if latest is not None else 0, 2),
+                'latest_debt_to_assets_pct': round(float(latest['debt_to_assets_pct']) if latest is not None else 0, 2),
+                'latest_net_cash_to_equity_pct': round(float(latest['net_cash_to_equity_pct']) if latest is not None else 0, 2),
+                'latest_receivable_inventory_prepay_to_revenue_pct': round(float(latest['receivable_inventory_prepay_to_revenue_pct']) if latest is not None else 0, 2),
+                'latest_goodwill_to_equity_pct': round(float(latest['goodwill_to_equity_pct']) if latest is not None else 0, 2),
+                'liquidity_label': cls._classify_liquidity(
+                    float(latest['short_debt_coverage_pct']) if latest is not None else 0,
+                    float(latest['net_cash_to_equity_pct']) if latest is not None else 0,
+                    float(latest['interest_bearing_debt']) if latest is not None else 0,
+                ),
+                'asset_quality_label': cls._classify_asset_quality(
+                    float(latest['receivable_inventory_prepay_to_revenue_pct']) if latest is not None else 0,
+                    float(latest['goodwill_to_equity_pct']) if latest is not None else 0,
+                ),
+                'balance_sheet_label': cls._classify_balance_sheet_risk(
+                    float(latest['debt_to_equity_pct']) if latest is not None else 0,
+                    float(latest['short_debt_coverage_pct']) if latest is not None else 0,
+                    float(latest['receivable_inventory_prepay_to_revenue_pct']) if latest is not None else 0,
+                    float(latest['goodwill_to_equity_pct']) if latest is not None else 0,
+                    float(latest['interest_bearing_debt']) if latest is not None else 0,
+                ),
+                'risk_flags': cls._build_balance_sheet_flags(
+                    float(latest['debt_to_equity_pct']) if latest is not None else 0,
+                    float(latest['short_debt_coverage_pct']) if latest is not None else 0,
+                    float(latest['receivable_inventory_prepay_to_revenue_pct']) if latest is not None else 0,
+                    float(latest['goodwill_to_equity_pct']) if latest is not None else 0,
+                    float(latest['interest_bearing_debt']) if latest is not None else 0,
+                ),
+            }
             records = df[
                 [
                     'date', 'year', 'TOTAL_OPERATE_INCOME', 'PARENT_NETPROFIT',
@@ -1109,6 +1347,11 @@ class FundamentalService:
                     'capex_intensity_pct', 'retention_ratio_pct', 'reinvestment_rate_pct',
                     'revenue_growth_pct',
                     'cash_balance', 'interest_bearing_debt', 'invested_capital',
+                    'short_debt', 'net_cash',
+                    'debt_to_equity_pct', 'debt_to_assets_pct', 'net_cash_to_equity_pct',
+                    'receivable_balance', 'inventory_balance', 'prepayment_balance',
+                    'receivable_inventory_prepay_to_revenue_pct', 'goodwill_balance',
+                    'goodwill_to_equity_pct', 'short_debt_coverage_pct',
                     'roic_proxy_pct', 'implied_share_count', 'share_change_pct',
                     'book_value_per_share', 'book_value_per_share_growth_pct',
                     'equity_growth_pct',
@@ -1120,6 +1363,7 @@ class FundamentalService:
                 'cashflow_summary': summary,
                 'capital_allocation_summary': capital_allocation_summary,
                 'stability_summary': stability_summary,
+                'balance_sheet_summary': balance_sheet_summary,
                 'shareholder_history': [],
                 'shareholder_summary': {},
             }
@@ -1134,6 +1378,7 @@ class FundamentalService:
                 'cashflow_summary': {},
                 'capital_allocation_summary': {},
                 'stability_summary': {},
+                'balance_sheet_summary': {},
                 'shareholder_history': [],
                 'shareholder_summary': {},
             }

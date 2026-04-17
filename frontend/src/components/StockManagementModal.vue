@@ -74,6 +74,30 @@
           <p v-if="newStock.symbol" class="mt-2 text-[10px] text-cyan-400/70">
             已选中: <span class="font-bold">{{ newStock.name }}</span> ({{ newStock.symbol }})
           </p>
+
+          <div class="mt-4 grid gap-3 md:grid-cols-2">
+            <label class="block">
+              <span class="mb-2 block text-[10px] font-semibold uppercase tracking-widest text-slate-500">行业</span>
+              <input
+                v-model="newStock.industry"
+                type="text"
+                placeholder="例如：白酒 / 银行 / 医疗器械"
+                class="w-full rounded-xl border border-white/10 bg-slate-900 px-4 py-2.5 text-sm text-white outline-none transition-all placeholder:text-slate-600 focus:border-cyan-500/50"
+              />
+            </label>
+            <label class="block">
+              <span class="mb-2 block text-[10px] font-semibold uppercase tracking-widest text-slate-500">同行代码</span>
+              <input
+                v-model="newStock.peerSymbolsInput"
+                type="text"
+                placeholder="例如：600519, 000858, 603369"
+                class="w-full rounded-xl border border-white/10 bg-slate-900 px-4 py-2.5 text-sm text-white outline-none transition-all placeholder:text-slate-600 focus:border-cyan-500/50"
+              />
+            </label>
+          </div>
+          <p class="mt-3 text-[10px] leading-5 text-slate-500">
+            行业用于自动收敛到同一行业的已监控标的；同行代码用于显式指定可比公司，深度分析页会优先拿这两组做横向估值对照。
+          </p>
         </div>
       </div>
 
@@ -83,26 +107,85 @@
           <div
             v-for="stock in store.stocks"
             :key="stock.id"
-            class="group flex items-center justify-between p-4 bg-white/[0.02] border border-white/5 rounded-2xl hover:bg-white/[0.05] hover:border-cyan-500/30 transition-all"
+            class="group rounded-2xl border border-white/5 bg-white/[0.02] p-4 transition-all hover:border-cyan-500/30 hover:bg-white/[0.05]"
           >
-            <div class="flex items-center gap-4">
-              <div class="w-10 h-10 bg-slate-800 rounded-xl flex items-center justify-center text-cyan-400 font-bold border border-white/5">
-                {{ stock.name.charAt(0) }}
+            <div class="flex items-start justify-between gap-4">
+              <div class="flex items-center gap-4">
+                <div class="flex h-10 w-10 items-center justify-center rounded-xl border border-white/5 bg-slate-800 font-bold text-cyan-400">
+                  {{ stock.name.charAt(0) }}
+                </div>
+                <div class="min-w-0">
+                  <div class="text-sm font-bold text-white">{{ stock.name }}</div>
+                  <div class="text-[10px] font-mono text-slate-500">{{ stock.symbol }}</div>
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    <span class="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-2 py-1 text-[10px] font-semibold text-cyan-300">
+                      行业 {{ stock.industry || '未配置' }}
+                    </span>
+                    <span class="rounded-full border border-white/10 bg-white/5 px-2 py-1 text-[10px] font-semibold text-slate-300">
+                      同行 {{ stock.peer_symbols.length }} 家
+                    </span>
+                  </div>
+                </div>
               </div>
-              <div>
-                <div class="text-sm font-bold text-white">{{ stock.name }}</div>
-                <div class="text-[10px] font-mono text-slate-500">{{ stock.symbol }}</div>
+              <div class="flex items-center gap-2">
+                <button
+                  @click="startEdit(stock)"
+                  class="rounded-lg border border-white/10 px-3 py-2 text-[11px] font-semibold text-slate-300 transition-all hover:border-cyan-400/40 hover:bg-cyan-400/10 hover:text-cyan-200"
+                >
+                  {{ editingSymbol === stock.symbol ? '编辑中' : '配置对比' }}
+                </button>
+                <button
+                  @click="handleRemove(stock.symbol)"
+                  class="rounded-lg p-2 text-slate-600 transition-all hover:bg-red-400/10 hover:text-red-400"
+                  title="删除标的"
+                >
+                  <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </button>
               </div>
             </div>
-            <button
-              @click="handleRemove(stock.symbol)"
-              class="p-2 text-slate-600 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-all"
-              title="删除标的"
-            >
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
-            </button>
+
+            <div v-if="editingSymbol === stock.symbol" class="mt-4 rounded-2xl border border-cyan-400/15 bg-slate-950/40 p-4">
+              <div class="grid gap-3 md:grid-cols-2">
+                <label class="block">
+                  <span class="mb-2 block text-[10px] font-semibold uppercase tracking-widest text-slate-500">行业</span>
+                  <input
+                    v-model="editDraft.industry"
+                    type="text"
+                    placeholder="例如：白酒 / 银行 / 医疗器械"
+                    class="w-full rounded-xl border border-white/10 bg-slate-900 px-4 py-2.5 text-sm text-white outline-none transition-all placeholder:text-slate-600 focus:border-cyan-500/50"
+                  />
+                </label>
+                <label class="block">
+                  <span class="mb-2 block text-[10px] font-semibold uppercase tracking-widest text-slate-500">同行代码</span>
+                  <textarea
+                    v-model="editDraft.peerSymbolsInput"
+                    rows="3"
+                    placeholder="多个代码可用逗号或换行分隔"
+                    class="w-full rounded-xl border border-white/10 bg-slate-900 px-4 py-2.5 text-sm text-white outline-none transition-all placeholder:text-slate-600 focus:border-cyan-500/50"
+                  ></textarea>
+                </label>
+              </div>
+              <div class="mt-3 text-[10px] leading-5 text-slate-500">
+                当前同行: {{ stock.peer_symbols.length ? stock.peer_symbols.join(' / ') : '未配置' }}
+              </div>
+              <div class="mt-4 flex items-center justify-end gap-2">
+                <button
+                  @click="cancelEdit"
+                  class="rounded-lg border border-white/10 px-3 py-2 text-[11px] font-semibold text-slate-300 transition-all hover:bg-white/5"
+                >
+                  取消
+                </button>
+                <button
+                  @click="handleUpdate(stock)"
+                  :disabled="updatingSymbol === stock.symbol"
+                  class="rounded-lg bg-gradient-to-r from-cyan-500 to-indigo-600 px-4 py-2 text-[11px] font-bold text-white shadow-lg shadow-cyan-500/20 transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {{ updatingSymbol === stock.symbol ? '保存中...' : '保存同行配置' }}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -112,7 +195,7 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { stockApi } from '@/api'
+import { stockApi, type Stock } from '@/api'
 import { useSentimentStore } from '@/stores/sentiment'
 
 type StockSearchResult = {
@@ -129,14 +212,23 @@ defineEmits(['close'])
 
 const store = useSentimentStore()
 const loading = ref(false)
+const updatingSymbol = ref('')
 const searchLoading = ref(false)
 const searchQuery = ref('')
 const suggestions = ref<StockSearchResult[]>([])
+const editingSymbol = ref('')
 
 const newStock = reactive({
   name: '',
   symbol: '',
   keywords: [] as string[],
+  industry: '',
+  peerSymbolsInput: '',
+})
+
+const editDraft = reactive({
+  industry: '',
+  peerSymbolsInput: '',
 })
 
 onMounted(() => {
@@ -149,6 +241,23 @@ function resetSelection() {
   newStock.name = ''
   newStock.symbol = ''
   newStock.keywords = []
+  newStock.industry = ''
+  newStock.peerSymbolsInput = ''
+}
+
+function normalizePeerSymbols(input: string) {
+  return input
+    .split(/[\n,，]+/)
+    .map((item) => item.trim().toUpperCase())
+    .filter(Boolean)
+    .map((item) => {
+      const rawCode = item.replace(/^(SH|SZ)/, '')
+      if (/^\d{6}$/.test(rawCode)) {
+        return rawCode.startsWith('6') ? `SH${rawCode}` : `SZ${rawCode}`
+      }
+      return item
+    })
+    .filter((item, index, arr) => arr.indexOf(item) === index)
 }
 
 async function handleSearch() {
@@ -211,7 +320,13 @@ async function handleAdd() {
 
   loading.value = true
   try {
-    const success = await store.addStock({ ...newStock })
+    const success = await store.addStock({
+      name: newStock.name,
+      symbol: newStock.symbol,
+      keywords: newStock.keywords,
+      industry: newStock.industry.trim(),
+      peer_symbols: normalizePeerSymbols(newStock.peerSymbolsInput),
+    })
     if (!success) return
 
     resetSelection()
@@ -226,6 +341,35 @@ async function handleAdd() {
     console.error('Add stock failed:', error)
   } finally {
     loading.value = false
+  }
+}
+
+function startEdit(stock: Stock) {
+  editingSymbol.value = stock.symbol
+  editDraft.industry = stock.industry || ''
+  editDraft.peerSymbolsInput = (stock.peer_symbols || []).join(', ')
+}
+
+function cancelEdit() {
+  editingSymbol.value = ''
+  editDraft.industry = ''
+  editDraft.peerSymbolsInput = ''
+}
+
+async function handleUpdate(stock: Stock) {
+  updatingSymbol.value = stock.symbol
+  try {
+    const success = await store.updateStock(stock.symbol, {
+      industry: editDraft.industry.trim(),
+      peer_symbols: normalizePeerSymbols(editDraft.peerSymbolsInput),
+    })
+    if (success) {
+      cancelEdit()
+    }
+  } catch (error) {
+    console.error('Update stock failed:', error)
+  } finally {
+    updatingSymbol.value = ''
   }
 }
 

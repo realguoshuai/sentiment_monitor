@@ -1,40 +1,49 @@
 import re
 
 
+def _infer_symbol_prefix(code: str) -> str:
+    """根据 6 位数字代码推断交易所前缀。"""
+    if code.startswith('92') or code.startswith(('4', '8')):
+        return 'BJ'
+    if code.startswith(('6', '9')):
+        return 'SH'
+    return 'SZ'
+
+
 def format_symbol(symbol: str) -> str:
     """
-    标准化股票代码格式，确保带有 SH 或 SZ 前缀。
+    标准化股票代码格式，确保带有 SH / SZ / BJ 前缀。
 
     Args:
-        symbol: 原始代码，如 '600519', 'sz002304', 'SH600000'
+        symbol: 原始代码，如 '600519', 'sz002304', 'SH600000', 'bj920000'
 
     Returns:
-        str: 标准化后的代码，如 'SH600519', 'SZ002304'
+        str: 标准化后的代码，如 'SH600519', 'SZ002304', 'BJ920000'
     """
     if not symbol:
         return ""
 
     symbol = symbol.strip().upper()
 
-    # 如果已经符合 SH/SZXXXXXX 格式，直接返回
-    if re.match(r'^(SH|SZ)\d{6}$', symbol):
+    # 如果已经符合 SH/SZ/BJXXXXXX 格式，直接返回
+    if re.match(r'^(SH|SZ|BJ)\d{6}$', symbol):
         return symbol
 
     # 如果只有 6 位数字
     if re.match(r'^\d{6}$', symbol):
-        if symbol.startswith(('6', '9')):
-            return f'SH{symbol}'
-        else:
-            return f'SZ{symbol}'
+        return f'{_infer_symbol_prefix(symbol)}{symbol}'
 
-    # 处理带前缀但格式不规范的情况 (如 sh.600519)
+    # 处理带前缀但格式不规范的情况 (如 sh.600519 / bj920000)
     nums = re.findall(r'\d{6}', symbol)
     if nums:
         code = nums[0]
-        if 'SH' in symbol or code.startswith(('6', '9')):
+        if 'BJ' in symbol:
+            return f'BJ{code}'
+        if 'SH' in symbol:
             return f'SH{code}'
-        else:
+        if 'SZ' in symbol:
             return f'SZ{code}'
+        return f'{_infer_symbol_prefix(code)}{code}'
 
     return symbol
 

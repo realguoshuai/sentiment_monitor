@@ -2,8 +2,8 @@
 Django settings for sentiment_monitor project.
 """
 
-from pathlib import Path
 import os
+from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -65,10 +65,12 @@ TEMPLATES = [
 WSGI_APPLICATION = 'sentiment_monitor.wsgi.application'
 
 # Database
+sqlite_db_path = Path(os.getenv('DJANGO_DB_PATH', str(BASE_DIR / 'db.sqlite3')))
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'NAME': sqlite_db_path,
         'OPTIONS': {
             'timeout': 20,
         }

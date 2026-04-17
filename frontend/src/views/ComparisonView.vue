@@ -276,7 +276,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useSentimentStore } from '@/stores/sentiment'
 import { stockApi, type RealtimePrice } from '@/api'
-import * as echarts from 'echarts'
+import { echarts, type ECharts } from '@/lib/echarts'
 
 const store = useSentimentStore()
 
@@ -308,7 +308,7 @@ const colors = ['#6366f1', '#14b8a6', '#f43f5e', '#f59e0b', '#8b5cf6', '#22c55e'
 
 // Chart refs
 const priceSpreadRef = ref<HTMLElement>()
-let priceChart: echarts.ECharts | null = null
+let priceChart: ECharts | null = null
 
 function getStockName(symbol: string) {
   return store.sentimentData.find(s => s.stock_symbol === symbol)?.stock_name || symbol

@@ -21,15 +21,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { use } from 'echarts/core'
-import { CanvasRenderer } from 'echarts/renderers'
-import { ScatterChart, LineChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent, TitleComponent, MarkLineComponent } from 'echarts/components'
+import { computed } from 'vue'
+import '@/lib/echarts'
 import VChart from 'vue-echarts'
 import type { Report } from '@/api'
-
-use([CanvasRenderer, ScatterChart, LineChart, GridComponent, TooltipComponent, TitleComponent, MarkLineComponent])
 
 const props = defineProps<{
   reports: Report[]

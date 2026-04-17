@@ -65,6 +65,8 @@ export interface Stock {
   symbol: string
   keywords: string[]
   extra_links: string
+  industry: string
+  peer_symbols: string[]
 }
 
 export interface RealtimePrice {
@@ -117,10 +119,51 @@ export interface SentimentData {
   extra_links?: string
 }
 
+export interface ScreenerMeta {
+  ready: boolean
+  snapshot_date: string
+  count: number
+  industry_count: number
+  roe_basis_label: string
+}
+
+export interface ScreenerResult {
+  symbol: string
+  name: string
+  industry: string
+  price: number
+  market_cap: number
+  pe: number
+  pb: number
+  dividend_yield: number
+  roe_pct: number
+  roi_pct: number
+  is_monitored: boolean
+}
+
+export interface ScreenerQueryResponse {
+  meta: ScreenerMeta
+  filters: {
+    q: string
+    industry: string
+    include_anomalies: boolean
+    sort_by: string
+    sort_order: string
+  }
+  results: ScreenerResult[]
+  pagination: {
+    page: number
+    page_size: number
+    total: number
+    total_pages: number
+  }
+}
+
 // API functions
 export const stockApi = {
   getStocks: () => api.get<Stock[]>('/stocks/'),
   createStock: (data: Partial<Stock>) => api.post<Stock>('/stocks/', data),
+  updateStock: (symbol: string, data: Partial<Stock>) => api.patch<Stock>(`/stocks/${symbol}/`, data),
   deleteStock: (symbol: string) => api.delete(`/stocks/${symbol}/`),
   getTodaySentiment: () => api.get<SentimentData[]>('/sentiment/today/'),
   getLatestSentiment: () => api.get<SentimentData[]>('/sentiment/latest/'),
@@ -141,6 +184,14 @@ export const stockApi = {
     ),
   getQualityShareholderStructure: (symbol: string) =>
     api.get<any>(`/sentiment/quality/shareholder-structure/?symbol=${symbol}`, { timeout: 45000 }),
+  getScreenerResults: (params: Record<string, any>) =>
+    api.get<ScreenerQueryResponse>('/sentiment/screener/', { params, timeout: 30000 }),
+  refreshScreenerSnapshot: () =>
+    api.post<{ snapshot_date: string, count: number, updated: boolean, message: string }>(
+      '/sentiment/screener/refresh/',
+      {},
+      { timeout: 120000 },
+    ),
 }
 
 export default api
