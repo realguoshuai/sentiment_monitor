@@ -7,6 +7,7 @@
 - 首页看板：监控股票列表、实时价格、最新舆情数据
 - 个股详情页：单股舆情明细、公告、研报、新闻
 - 对比分析页：多标的实时/历史估值与价格对冲对比
+- 条件选股页：基于 SQLite 本地快照的 PB / PE / ROE / 股息率组合筛选
 - 深度分析页：10 年分位、F-Score、估值结论层、多模型估值、Investment Thesis
 - 历史回测页：历史区间回放、收益分析、信号相关性
 - 财务溯源页：现金流质量、资本配置、经营稳定性、股价与股东人数对比
@@ -15,7 +16,14 @@
 
 | 首页看板 | 对比分析 | 深度分析 |
 | --- | --- | --- |
-| ![首页看板](QQ图片20260327161107.png) | ![对比分析](QQ图片20260327161155.png) | ![深度分析](QQ图片20260327161212.png) |
+| ![首页看板](QQ图片20260327161155.png) | ![对比分析](QQ图片20260327161107.png) | ![深度分析](QQ图片20260327161212.png) |
+
+## 最新进展
+
+- 条件选股页已上线：基于 SQLite 本地快照做全市场筛选，支持 PB / PE / ROE / ROI / 股息率 / 总市值组合过滤
+- 选股页指标口径已校正：ROE 优先取年报口径，股息率按当前价格对应的现金分红收益率计算
+- 财务溯源页已将“股价与股东人数对比”上移至页面最上方，并保留最稳定的股东统计日股价 + 股东户数双轴展示
+- 前端 API 已统一走相对路径 `/api`，开发和部署环境的接入方式更一致
 
 ## 路线图
 
@@ -74,7 +82,15 @@
   - 护城河与经营稳定性标签
 - 杜邦 ROE 拆解、盈利护城河追踪、股东回馈矩阵
 
-### 4. 历史回测
+### 4. 条件选股
+
+- 基于 SQLite 本地快照做全市场筛选，不影响现有分析链路
+- 支持 PB / PE / ROE / ROI / 股息率 / 总市值等组合条件
+- 默认剔除异常估值样本，可手动切换纳入
+- 提供“低估高股息 / 高 ROE 价值 / 现金奶牛”等常用预设
+- 结果可直接加入监控列表，或跳转到深度分析页继续研判
+
+### 5. 历史回测
 
 - 个股历史估值回放
 - 收益拆解
@@ -86,7 +102,7 @@
 | --- | --- |
 | 后端 | Django 4.x, Django REST Framework, SQLite |
 | 前端 | Vue 3, TypeScript, Vite, Pinia, Vue Router, ECharts, Tailwind CSS |
-| 数据源 | 腾讯财经接口、AkShare |
+| 数据源 | 腾讯财经接口、东方财富、AkShare、新浪财经兜底 |
 | 缓存 | Django file-based cache + DataFrame 文件缓存 |
 
 ## 项目结构
@@ -107,7 +123,7 @@ sentiment_monitor/
 │  │  ├─ components/          # 页面组件
 │  │  ├─ router/              # 前端路由
 │  │  ├─ stores/              # Pinia 状态
-│  │  └─ views/               # Dashboard / Detail / Compare / Analysis / History / Quality
+│  │  └─ views/               # Dashboard / Detail / Compare / Screener / Analysis / History / Quality
 │  ├─ package.json
 │  └─ vite.config.ts
 ├─ legacy/                    # 历史文件或旧实现
@@ -122,6 +138,7 @@ sentiment_monitor/
 | 首页看板 | `/` | 股票池、实时价格、舆情总览 |
 | 个股详情 | `/stock/:symbol` | 单股舆情明细 |
 | 对比分析 | `/compare` | 多标的实时/历史对比 |
+| 条件选股 | `/screener` | 基于 SQLite 快照的 PB / PE / ROE / 股息率组合筛选 |
 | 深度分析 | `/analysis/:symbol` | 分位、F-Score、估值结论层、多模型估值、Thesis |
 | 历史回测 | `/analysis/:symbol/history` | 历史回放与收益分析 |
 | 财务溯源 | `/quality/:symbol` | 现金流、资本配置、稳定性、股东人数 |
@@ -148,6 +165,8 @@ sentiment_monitor/
 
 - `GET /api/sentiment/analysis/?symbol=SZ000001`
 - `GET /api/sentiment/history-backtest/?symbol=SZ000001`
+- `GET /api/sentiment/screener/?pb_max=1.5&pe_max=15&roe_min=12&dividend_yield_min=4&sort_by=pb&sort_order=asc`
+- `POST /api/sentiment/screener/refresh/`
 - `GET /api/sentiment/quality/?symbol=SZ000001&include_shareholder=1`
 - `GET /api/sentiment/quality/shareholder-structure/?symbol=SZ000001`
 - `POST /api/sentiment/quality/refresh/`
@@ -215,6 +234,7 @@ npm run dev
 项目当前已经对几个慢路径做了缓存拆分：
 
 - 深度分析：`analysis_v4_*`，默认缓存 12 小时
+- 条件选股：全市场快照落库到 SQLite，本地筛选只查最新快照，不重复拉取全市场数据
 - 财务溯源主数据：`quality_v11_*` / `quality_core_v1_*`
 - 股东结构图：`shareholder_overlay_v3_*`
 - 财报与现金流序列、分红、股东户数等都有单独缓存键
