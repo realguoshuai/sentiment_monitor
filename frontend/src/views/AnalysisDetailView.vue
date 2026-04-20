@@ -70,6 +70,16 @@
     </div>
 
     <div class="main-content" v-else>
+      <section v-if="analysisCacheNotice" class="analysis-cache-banner">
+        <div class="analysis-cache-copy">
+          <span class="analysis-cache-badge">
+            {{ analysisData?.background_refreshing ? '缓存优先' : '缓存结果' }}
+          </span>
+          <strong>{{ analysisCacheNotice }}</strong>
+        </div>
+        <span v-if="analysisCacheAtText" class="analysis-cache-time">{{ analysisCacheAtText }}</span>
+      </section>
+
       <!-- 1. 深度对比鍥捐〃 -->
       <section class="section chart-section">
         <div class="chart-layout">
@@ -595,6 +605,9 @@ interface PeerComparisonRow {
 
 interface AnalysisPayload {
   symbol: string;
+  cache_status?: 'fresh' | 'stale';
+  background_refreshing?: boolean;
+  cached_at?: string | null;
   percentiles: Record<string, PercentileMetric>;
   forward: {
     expected_roe: number;
@@ -749,6 +762,9 @@ const activeMetric = ref('pe');
 const compareSymbols = ref<string[]>([]);
 const chartRef = ref<HTMLElement | null>(null);
 let chartInstance: ECharts | null = null;
+let analysisRetryTimer: ReturnType<typeof window.setTimeout> | null = null;
+let analysisRetryCount = 0;
+const MAX_ANALYSIS_REFRESH_RETRIES = 2;
 
 const calcParams = ref({
   expectedRoe: 15,
@@ -786,6 +802,18 @@ const peerMedians = computed(() => peerComparison.value?.medians ?? null);
 const peerRelativeView = computed(() => peerComparison.value?.relative_view ?? null);
 const investmentThesis = computed(() => analysisData.value?.investment_thesis ?? null);
 const valuationSummaryClass = computed(() => `summary-${valuationConclusion.value?.summary_color || 'slate'}`);
+const analysisCacheAtText = computed(() => formatCacheTimestamp(analysisData.value?.cached_at));
+const analysisCacheNotice = computed(() => {
+  if (!analysisData.value || analysisData.value.cache_status !== 'stale') return '';
+
+  const prefix = analysisCacheAtText.value
+    ? `当前先展示 ${analysisCacheAtText.value} 的分析结果`
+    : '当前先展示上次缓存结果';
+
+  return analysisData.value.background_refreshing
+    ? `${prefix}，后台正在刷新最新分析。`
+    : `${prefix}。`;
+});
 const manualFairPb = computed(() => {
   const expectedRoe = Number(calcParams.value.expectedRoe || 0);
   const requiredReturn = Number(calcParams.value.requiredReturn || 0);
@@ -818,13 +846,12 @@ onMounted(async () => {
 const fetchMainData = async () => {
   loading.value = true;
   currentStep.value = 0;
+  clearAnalysisRefreshRetry();
   try {
     currentStep.value = 1;
     const res = await stockApi.getAnalysis(symbol);
-    analysisData.value = res.data;
-    calcParams.value.expectedRoe = res.data.valuation_conclusion?.assumptions?.expected_roe ?? res.data.forward.expected_roe;
-    stockData.value = { symbol: res.data.symbol };
-    historicalCache.value[symbol] = res.data;
+    applyAnalysisPayload(res.data);
+    syncAnalysisRefreshState(res.data);
 
     currentStep.value = 2;
     currentStep.value = 3;
@@ -927,6 +954,18 @@ const getSymbolName = (s: string) => {
   return sentimentStore.sentimentData.find(item => item.stock_symbol === s)?.stock_name || s;
 };
 
+const formatCacheTimestamp = (value?: string | null) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return `上次更新 ${date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })}`;
+};
+
 const formatPct = (value?: number) => {
   if (value === undefined || value === null || Number.isNaN(value)) return '--';
   return `${Number(value).toFixed(1)}%`;
@@ -972,6 +1011,54 @@ const formatMetric = (value?: number, metric = 'pe') => {
 };
 
 const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
+
+const clearAnalysisRefreshRetry = () => {
+  if (analysisRetryTimer !== null) {
+    window.clearTimeout(analysisRetryTimer);
+    analysisRetryTimer = null;
+  }
+  analysisRetryCount = 0;
+};
+
+const applyAnalysisPayload = (payload: AnalysisPayload) => {
+  analysisData.value = payload;
+  calcParams.value.expectedRoe =
+    payload.valuation_conclusion?.assumptions?.expected_roe ?? payload.forward.expected_roe;
+  stockData.value = { symbol: payload.symbol };
+  historicalCache.value[payload.symbol] = payload;
+};
+
+const queueAnalysisRefreshRetry = () => {
+  if (analysisRetryTimer !== null || analysisRetryCount >= MAX_ANALYSIS_REFRESH_RETRIES) return;
+
+  const delay = analysisRetryCount === 0 ? 4000 : 7000;
+  analysisRetryTimer = window.setTimeout(async () => {
+    analysisRetryTimer = null;
+    analysisRetryCount += 1;
+
+    try {
+      const res = await stockApi.getAnalysis(symbol);
+      applyAnalysisPayload(res.data);
+      syncAnalysisRefreshState(res.data);
+      await nextTick();
+      initChart();
+    } catch (error) {
+      console.error('Failed to refresh analysis cache:', error);
+      if (analysisRetryCount < MAX_ANALYSIS_REFRESH_RETRIES) {
+        queueAnalysisRefreshRetry();
+      }
+    }
+  }, delay);
+};
+
+const syncAnalysisRefreshState = (payload: AnalysisPayload) => {
+  if (payload.cache_status === 'stale' && payload.background_refreshing) {
+    queueAnalysisRefreshRetry();
+    return;
+  }
+
+  clearAnalysisRefreshRetry();
+};
 
 const initChart = () => {
   if (!chartRef.value || !analysisData.value) return;
@@ -1062,6 +1149,7 @@ watch([activeMetric, compareDataMap], () => {
 });
 
 onUnmounted(() => {
+  clearAnalysisRefreshRetry();
   window.removeEventListener('resize', handleResize);
   chartInstance?.dispose();
   chartInstance = null;
@@ -1987,6 +2075,49 @@ onUnmounted(() => {
     linear-gradient(180deg, #f8fbff 0%, #eef4fb 100%);
 }
 
+.analysis-cache-banner {
+  margin-bottom: 18px;
+  padding: 14px 18px;
+  border-radius: 18px;
+  border: 1px solid #fed7aa;
+  background: linear-gradient(135deg, rgba(255, 247, 237, 0.98) 0%, rgba(255, 255, 255, 0.94) 100%);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  color: #9a3412;
+  box-shadow: 0 16px 32px -28px rgba(154, 52, 18, 0.55);
+}
+
+.analysis-cache-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.analysis-cache-copy strong {
+  font-size: 0.92rem;
+  line-height: 1.6;
+}
+
+.analysis-cache-badge {
+  width: fit-content;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 237, 213, 0.95);
+  color: #c2410c;
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.analysis-cache-time {
+  white-space: nowrap;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #c2410c;
+}
+
 .hero-card {
   padding: 28px;
   border-radius: 28px;
@@ -2288,6 +2419,14 @@ onUnmounted(() => {
 
   .btn-back {
     align-self: flex-start;
+  }
+
+  .analysis-cache-banner {
+    display: grid;
+  }
+
+  .analysis-cache-time {
+    white-space: normal;
   }
 }
 </style>

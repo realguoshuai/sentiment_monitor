@@ -262,7 +262,7 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({'error': '需要股票代码'}, status=400)
 
         period = request.GET.get('period', '10y')
-        return Response(AnalysisService.get_analysis(symbol, period))
+        return Response(AnalysisService.get_analysis_response(symbol, period))
 
 
 @api_view(['GET'])

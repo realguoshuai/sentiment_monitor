@@ -1,15 +1,22 @@
 ﻿from statistics import median
+import logging
+import threading
 from typing import Dict, List, Optional
 
 from django.core.cache import cache
+from django.utils import timezone
 
 from .fundamental_service import FundamentalService
 from .models import Stock
 from .price_service import PriceService
 
+logger = logging.getLogger(__name__)
+
 
 class AnalysisService:
     CACHE_TTL = 12 * 3600
+    STALE_CACHE_TTL = 7 * 24 * 3600
+    REFRESH_LOCK_TTL = 15 * 60
     CACHE_VERSION = 'v6'
     CONSERVATIVE_REQUIRED_RETURN = 12.0
     BASE_REQUIRED_RETURN = 10.0
@@ -25,6 +32,14 @@ class AnalysisService:
     def cache_key(cls, symbol: str, period: str = '10y') -> str:
         fixed_symbol = PriceService._fix_symbol(symbol)
         return f'analysis_{cls.CACHE_VERSION}_{fixed_symbol}_{period}'
+
+    @classmethod
+    def stale_cache_key(cls, symbol: str, period: str = '10y') -> str:
+        return f'{cls.cache_key(symbol, period)}_stale'
+
+    @classmethod
+    def refresh_lock_key(cls, symbol: str, period: str = '10y') -> str:
+        return f'{cls.cache_key(symbol, period)}_refreshing'
 
     @classmethod
     def build_analysis_payload(cls, symbol: str, period: str = '10y') -> dict:
@@ -1466,14 +1481,43 @@ class AnalysisService:
 
     @classmethod
     def get_analysis(cls, symbol: str, period: str = '10y') -> dict:
-        key = cls.cache_key(symbol, period)
-        cached = cache.get(key)
-        if cached is not None:
-            return cached
+        cached_entry = cls._normalize_cache_entry(cache.get(cls.cache_key(symbol, period)))
+        if cached_entry is not None:
+            return cached_entry['payload']
 
         payload = cls.build_analysis_payload(symbol, period)
-        cache.set(key, payload, cls.CACHE_TTL)
+        cls._store_payload(symbol, period, payload)
         return payload
+
+    @classmethod
+    def get_analysis_response(cls, symbol: str, period: str = '10y') -> dict:
+        fresh_entry = cls._normalize_cache_entry(cache.get(cls.cache_key(symbol, period)))
+        if fresh_entry is not None:
+            return cls._build_response_payload(
+                fresh_entry,
+                cache_status='fresh',
+                background_refreshing=False,
+            )
+
+        stale_entry = cls._normalize_cache_entry(cache.get(cls.stale_cache_key(symbol, period)))
+        if stale_entry is not None:
+            background_refreshing = bool(cache.get(cls.refresh_lock_key(symbol, period)))
+            if not background_refreshing:
+                background_refreshing = cls._schedule_background_refresh(symbol, period)
+
+            return cls._build_response_payload(
+                stale_entry,
+                cache_status='stale',
+                background_refreshing=background_refreshing,
+            )
+
+        payload = cls.build_analysis_payload(symbol, period)
+        cached_at = cls._store_payload(symbol, period, payload)
+        return cls._build_response_payload(
+            {'payload': payload, 'cached_at': cached_at},
+            cache_status='fresh',
+            background_refreshing=False,
+        )
 
     @classmethod
     def warm_cache(cls, symbols, period: str = '10y') -> None:
@@ -1482,5 +1526,80 @@ class AnalysisService:
                 cls.get_analysis(symbol, period)
             except Exception:
                 continue
+
+    @classmethod
+    def _normalize_cache_entry(cls, cached) -> Optional[dict]:
+        if cached is None:
+            return None
+
+        if isinstance(cached, dict) and isinstance(cached.get('payload'), dict):
+            return {
+                'payload': cls._sanitize_payload(cached.get('payload')),
+                'cached_at': cached.get('cached_at'),
+            }
+
+        if isinstance(cached, dict):
+            return {
+                'payload': cls._sanitize_payload(cached),
+                'cached_at': None,
+            }
+
+        return None
+
+    @classmethod
+    def _sanitize_payload(cls, payload: Optional[dict]) -> dict:
+        clean_payload = dict(payload or {})
+        clean_payload.pop('cache_status', None)
+        clean_payload.pop('background_refreshing', None)
+        clean_payload.pop('cached_at', None)
+        return clean_payload
+
+    @classmethod
+    def _store_payload(cls, symbol: str, period: str, payload: dict) -> str:
+        cached_at = timezone.now().isoformat()
+        entry = {
+            'payload': cls._sanitize_payload(payload),
+            'cached_at': cached_at,
+        }
+        cache.set(cls.cache_key(symbol, period), entry, cls.CACHE_TTL)
+        cache.set(cls.stale_cache_key(symbol, period), entry, cls.STALE_CACHE_TTL)
+        return cached_at
+
+    @classmethod
+    def _build_response_payload(
+        cls,
+        cache_entry: dict,
+        *,
+        cache_status: str,
+        background_refreshing: bool,
+    ) -> dict:
+        payload = dict(cache_entry.get('payload') or {})
+        payload['cache_status'] = cache_status
+        payload['background_refreshing'] = background_refreshing
+        payload['cached_at'] = cache_entry.get('cached_at')
+        return payload
+
+    @classmethod
+    def _schedule_background_refresh(cls, symbol: str, period: str) -> bool:
+        if not cache.add(cls.refresh_lock_key(symbol, period), True, cls.REFRESH_LOCK_TTL):
+            return False
+
+        thread = threading.Thread(
+            target=cls._refresh_in_background,
+            args=(symbol, period),
+            daemon=True,
+        )
+        thread.start()
+        return True
+
+    @classmethod
+    def _refresh_in_background(cls, symbol: str, period: str) -> None:
+        try:
+            payload = cls.build_analysis_payload(symbol, period)
+            cls._store_payload(symbol, period, payload)
+        except Exception as exc:
+            logger.warning('Background analysis refresh failed for %s: %s', symbol, exc)
+        finally:
+            cache.delete(cls.refresh_lock_key(symbol, period))
 
 
