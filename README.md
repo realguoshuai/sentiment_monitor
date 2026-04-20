@@ -1,16 +1,6 @@
-# Sentiment Monitor
+﻿# Sentiment Monitor
 
-面向 A 股的研究终端，聚合了实时行情、舆情采集、估值分析、历史回测和财务溯源能力。
-
-当前版本已经从“舆情看板”扩展为一套可直接用于个股研究的分析工作台：
-
-- 首页看板：监控股票列表、实时价格、最新舆情数据
-- 个股详情页：单股舆情明细、公告、研报、新闻
-- 对比分析页：多标的实时/历史估值与价格对冲对比
-- 条件选股页：基于 SQLite 本地快照的 PB / PE / ROE / 股息率组合筛选
-- 深度分析页：10 年分位、F-Score、估值结论层、多模型估值、Investment Thesis
-- 历史回测页：历史区间回放、收益分析、信号相关性
-- 财务溯源页：现金流质量、资本配置、经营稳定性、股价与股东人数对比
+面向 A 股研究场景的本地分析工作台，聚合了实时行情、舆情采集、条件选股、深度估值、历史回测和财务溯源能力。项目当前已经从最初的“舆情看板”扩展成一套可直接用于个股研究的前后端应用。
 
 ## 项目展示
 
@@ -18,117 +8,106 @@
 | --- | --- | --- |
 | ![首页看板](docs/screenshots/QQ图片20260327161155.png) | ![对比分析](docs/screenshots/QQ图片20260327161107.png) | ![深度分析](docs/screenshots/QQ图片20260327161212.png) |
 
-## 最新进展
+## 当前能力
 
-- 条件选股页已上线：基于 SQLite 本地快照做全市场筛选，支持 PB / PE / ROE / ROI / 股息率 / 总市值组合过滤
-- 选股页指标口径已校正：ROE 优先取年报口径，股息率按当前价格对应的现金分红收益率计算
-- 财务溯源页已将“股价与股东人数对比”上移至页面最上方，并保留最稳定的股东统计日股价 + 股东户数双轴展示
-- 前端 API 已统一走相对路径 `/api`，开发和部署环境的接入方式更一致
+### 首页看板
+- 监控股票池增删改查
+- 实时价格、PE、PB、股息率、市值快照
+- 最新新闻、研报、公告与情绪标签
 
-## 路线图
+### 个股详情
+- 单只股票舆情明细
+- 公告、研报、新闻分组展示
+- 从首页直接跳转研究链路
 
-- 价值分析后续开发路线图见 [docs/plans/2026-04-16-value-analysis-roadmap.md](/d:/code/git/sentiment_monitor/docs/plans/2026-04-16-value-analysis-roadmap.md:1)
+### 对比分析
+- 多标的实时价格对比
+- 历史价格与估值序列对比
+- 支持最新价与分时视角
 
-## 主要能力
+### 条件选股
+- 基于 SQLite 本地快照做全市场筛选
+- 支持 `PB / PE / ROE / ROI / 股息率 / 总市值` 组合过滤
+- 结果支持排序
+- 筛选区改为弹出式交互，结果优先展示
+- 默认可剔除异常估值样本，也可手动纳入
 
-### 1. 实时行情与舆情
+### 深度分析
+- 10 年历史分位矩阵：`PE / PB / ROI / 股息率`
+- `F-Score` 财务安全性排雷
+- 估值结论层：合理价值区间、折价/溢价、安全边际、预期年化回报
+- 多模型估值：`ROE-PB` 锚点、盈利能力估值、股东自由现金流估值
+- 同行与行业横向对比
+- Investment Thesis：买入理由、关键假设、风险清单、复核触发器
+- 新增“上次缓存结果优先返回，后台再刷新”机制，减少深度分析页等待时间
 
-- 监控股票池支持增删改查
-- 批量获取实时价格、PE、PB、股息率、市值
-- 聚合新闻、研报、公告，并沉淀情绪分数和热度分数
+### 财务溯源
+- 股价与股东人数对比图置顶展示
+- 现金流质量矩阵：`CFO / FCF / CFO转净利 / FCF转净利 / Capex / FCF收益率`
+- 资本配置分析：再投资率、留存率、股本变动、BVPS 增长等
+- 经营稳定性分析：收入、利润率、ROE/ROIC 代理波动与周期标签
+- 杜邦 ROE 拆解、盈利护城河追踪、股东回报矩阵
 
-### 2. 深度分析
-
-- 10 年历史分位矩阵：PE / PB / ROI / 股息率
-- F-Score 安全性排雷
-- 估值结论层
-  - 合理价值区间
-  - 折价 / 溢价
-  - 安全边际
-  - 预期年化回报拆解
-- 多模型估值
-  - ROE-PB 锚点
-  - 盈利能力估值
-  - 股东自由现金流估值
-- Investment Thesis 跟踪
-  - 买入理由
-  - 核心假设
-  - 风险清单
-  - 财报后复核项
-
-### 3. 财务溯源
-
-- 股价与股东人数对比
-  - 优先展示近 10 年窗口
-  - 当前图表只保留“股东统计日股价 + 股东户数”，不再叠加融资和外资口径
-- 现金流质量矩阵
-  - CFO
-  - FCF
-  - CFO / 净利润
-  - FCF / 净利润
-  - Capex 强度
-  - FCF 收益率
-- 资本配置分析
-  - ROIC 代理
-  - 再投资率
-  - 留存率
-  - 股本变动
-  - BVPS 增长
-- 经营稳定性分析
-  - 收入增速波动
-  - 毛利率 / 净利率波动
-  - ROE / ROIC 代理波动
-  - 周期性标签
-  - 护城河与经营稳定性标签
-- 杜邦 ROE 拆解、盈利护城河追踪、股东回馈矩阵
-
-### 4. 条件选股
-
-- 基于 SQLite 本地快照做全市场筛选，不影响现有分析链路
-- 支持 PB / PE / ROE / ROI / 股息率 / 总市值等组合条件
-- 默认剔除异常估值样本，可手动切换纳入
-- 提供“低估高股息 / 高 ROE 价值 / 现金奶牛”等常用预设
-- 结果可直接加入监控列表，或跳转到深度分析页继续研判
-
-### 5. 历史回测
-
+### 历史回测
 - 个股历史估值回放
 - 收益拆解
 - 信号相关性分析
+
+## 最近更新
+
+- 深度分析接口改为“优先返回上次缓存结果，后台异步刷新最新结果”
+- 选股页完成 UI 重做，筛选器支持弹出式面板和结果排序
+- 前端 API 基地址统一为相对路径 `/api`
+- `start.bat` 调整为非阻塞启动：前后端先启动，再后台执行一次数据同步
+- 项目展示图片已统一整理到 `docs/screenshots/`
+
+## 路线图
+
+- 价值分析后续规划见 [docs/plans/2026-04-16-value-analysis-roadmap.md](docs/plans/2026-04-16-value-analysis-roadmap.md)
 
 ## 技术栈
 
 | 层 | 技术 |
 | --- | --- |
 | 后端 | Django 4.x, Django REST Framework, SQLite |
-| 前端 | Vue 3, TypeScript, Vite, Pinia, Vue Router, ECharts, Tailwind CSS |
-| 数据源 | 腾讯财经接口、东方财富、AkShare、新浪财经兜底 |
-| 缓存 | Django file-based cache + DataFrame 文件缓存 |
+| 前端 | Vue 3, TypeScript, Vite, Pinia, Vue Router, ECharts |
+| 数据源 | 腾讯财经、东方财富、AkShare、新浪财经兜底 |
+| 缓存 | Django FileBasedCache + 文件快照缓存 |
 
 ## 项目结构
 
 ```text
 sentiment_monitor/
-├─ backend/
-│  ├─ api/                    # 核心业务服务、REST API、缓存管理、测试
-│  ├─ collector/              # 舆情采集逻辑
-│  ├─ scripts/                # 诊断、迁移、验证等非运行时脚本
-│  ├─ sentiment_monitor/      # Django 项目配置
-│  ├─ cache_data/             # 文件缓存目录
-│  ├─ manage.py
-│  └─ requirements.txt
-├─ frontend/
-│  ├─ src/
-│  │  ├─ api/                 # Axios 封装
-│  │  ├─ components/          # 页面组件
-│  │  ├─ router/              # 前端路由
-│  │  ├─ stores/              # Pinia 状态
-│  │  └─ views/               # Dashboard / Detail / Compare / Screener / Analysis / History / Quality
-│  ├─ package.json
-│  └─ vite.config.ts
-├─ legacy/                    # 历史文件或旧实现
-├─ start.bat                  # Windows 一键启动脚本
-└─ README.md
+├── backend/
+│   ├── api/                        # 核心业务服务、REST API、缓存、测试、管理命令
+│   ├── analyzer/                   # 分析辅助模块
+│   ├── collector/                  # 舆情与行情采集逻辑
+│   ├── scripts/                    # 诊断、修复、验证等工具脚本
+│   ├── scratch/                    # 临时调试脚本与输出
+│   │   └── debug_outputs/
+│   ├── cache_data/                 # Django 文件缓存目录
+│   ├── sentiment_monitor/          # Django 配置
+│   ├── manage.py
+│   ├── requirements.txt
+│   └── db.sqlite3
+├── docs/
+│   ├── plans/                      # 开发路线图与规划文档
+│   └── screenshots/                # README 展示图片
+├── frontend/
+│   ├── src/
+│   │   ├── api/                    # Axios 封装
+│   │   ├── components/             # 通用组件
+│   │   ├── composables/            # 组合式逻辑
+│   │   ├── lib/                    # ECharts 等基础封装
+│   │   ├── router/                 # 前端路由
+│   │   ├── stores/                 # Pinia 状态
+│   │   └── views/                  # Dashboard / Detail / Compare / Screener / Analysis / History / Quality
+│   ├── dist/                       # 前端构建产物
+│   ├── package.json
+│   └── vite.config.ts
+├── legacy/                         # 历史文件或旧实现
+├── start.bat                       # Windows 一键启动脚本
+└── README.md
 ```
 
 ## 页面与路由
@@ -138,22 +117,21 @@ sentiment_monitor/
 | 首页看板 | `/` | 股票池、实时价格、舆情总览 |
 | 个股详情 | `/stock/:symbol` | 单股舆情明细 |
 | 对比分析 | `/compare` | 多标的实时/历史对比 |
-| 条件选股 | `/screener` | 基于 SQLite 快照的 PB / PE / ROE / 股息率组合筛选 |
-| 深度分析 | `/analysis/:symbol` | 分位、F-Score、估值结论层、多模型估值、Thesis |
+| 条件选股 | `/screener` | 基于 SQLite 快照的全市场筛选 |
+| 深度分析 | `/analysis/:symbol` | 分位、F-Score、估值、同行、Thesis |
 | 历史回测 | `/analysis/:symbol/history` | 历史回放与收益分析 |
 | 财务溯源 | `/quality/:symbol` | 现金流、资本配置、稳定性、股东人数 |
 
 ## 核心接口
 
 ### 股票与采集
-
 - `GET /api/stocks/`
 - `POST /api/stocks/`
+- `PATCH /api/stocks/{symbol}/`
 - `DELETE /api/stocks/{symbol}/`
 - `POST /api/collect/`
 
-### 舆情与行情
-
+### 行情与舆情
 - `GET /api/sentiment/latest/`
 - `GET /api/sentiment/today/`
 - `GET /api/sentiment/realtime_prices/`
@@ -162,7 +140,6 @@ sentiment_monitor/
 - `GET /api/sentiment/comparison_historical/?symbols=...&limit=30&period=day`
 
 ### 研究分析
-
 - `GET /api/sentiment/analysis/?symbol=SZ000001`
 - `GET /api/sentiment/history-backtest/?symbol=SZ000001`
 - `GET /api/sentiment/screener/?pb_max=1.5&pe_max=15&roe_min=12&dividend_yield_min=4&sort_by=pb&sort_order=asc`
@@ -179,11 +156,13 @@ sentiment_monitor/
 start.bat
 ```
 
-脚本会：
+脚本会依次执行：
 
-- 启动 Django / Uvicorn 后端，默认 `127.0.0.1:8000`
-- 启动 Vite 前端，默认 `localhost:5173`
-- 自动打开浏览器
+1. 启动 Uvicorn 后端，默认地址 `http://127.0.0.1:8000`
+2. 启动 Vite 前端，默认地址 `http://localhost:5173`
+3. 自动打开浏览器
+4. 后台执行一次 `python manage.py sync_all_data`
+5. 同时触发非阻塞缓存预热，不阻塞前端打开
 
 ### 方式 2：手动启动
 
@@ -195,12 +174,6 @@ python -m venv venv
 .\venv\Scripts\activate
 pip install -r requirements.txt
 python manage.py migrate
-python manage.py runserver
-```
-
-如果你希望和 `start.bat` 保持一致，也可以用：
-
-```powershell
 uvicorn sentiment_monitor.asgi:application --host 127.0.0.1 --port 8000
 ```
 
@@ -212,49 +185,63 @@ npm install
 npm run dev
 ```
 
-前端默认地址：
+## 数据同步
 
-- `http://localhost:5173`
+### 一次性全量同步
 
-后端默认地址：
+```powershell
+cd backend
+.\venv\Scripts\activate
+python manage.py sync_all_data
+```
 
-- `http://127.0.0.1:8000`
+可选参数：
+
+- `--skip-collector`：跳过监控池新闻/公告/研报采集
+- `--skip-screener`：跳过全市场选股快照刷新
+- `--skip-quality`：跳过财务质量缓存预热
+- `--with-shareholder`：财务预热时一并拉取股东结构数据
+
+### 只执行舆情采集
+
+```powershell
+cd backend
+.\venv\Scripts\activate
+python manage.py run_collector
+```
 
 ## 前后端联调说明
 
-前端 API 现在统一走相对路径 `'/api'`。
+前端 API 统一走相对路径 `/api`。
 
-- 开发环境下，Vite 通过 `vite.config.ts` 里的代理把 `/api` 转发到 `http://127.0.0.1:8000`
-- 部署环境下，建议由同域名反向代理直接把 `/api` 转给 Django
+- 开发环境下，Vite 通过 [frontend/vite.config.ts](frontend/vite.config.ts) 将 `/api` 代理到 `http://127.0.0.1:8000`
+- 部署环境下，建议由同域名反向代理将 `/api` 转发给 Django
 
-这意味着前端代码里不再需要手动拼接主机名或端口。
+这样前端不再需要手动拼接主机名或端口。
 
-## 缓存与性能
+## 缓存与性能策略
 
-项目当前已经对几个慢路径做了缓存拆分：
+项目当前针对慢路径做了几层拆分：
 
-- 深度分析：`analysis_v4_*`，默认缓存 12 小时
-- 条件选股：全市场快照落库到 SQLite，本地筛选只查最新快照，不重复拉取全市场数据
-- 财务溯源主数据：`quality_v11_*` / `quality_core_v1_*`
-- 股东结构图：`shareholder_overlay_v3_*`
-- 财报与现金流序列、分红、股东户数等都有单独缓存键
+- 深度分析：`analysis_v6_*` 缓存 12 小时；如果新缓存失效但旧缓存仍在，会先返回旧结果，再后台刷新
+- 选股页：全市场快照写入 SQLite，本地筛选只查询最新快照，不重复拉取全市场数据
+- 财务溯源：核心财务数据和股东结构图分开缓存，减少整页阻塞
+- 启动预热：应用启动后后台线程会预热常用历史数据、深度分析和历史回测缓存
+- 文件缓存目录位于 `backend/cache_data/`
 
-当前策略的重点是：
+需要注意：
 
-- 核心财务数据先返回
-- 股东结构图单独异步拉取
-- 首次冷启动或缓存失效时，AkShare 数据源仍可能较慢
+- 首次冷启动或缓存完全失效时，AkShare 与东方财富相关链路仍可能较慢
+- Windows 下如果文件缓存出现偶发权限问题，接口通常会降级为“缓存写失败但继续返回结果”
 
 ## 数据源说明
 
-### 腾讯财经接口
-
+### 腾讯财经
 - 实时价格
 - 分时数据
 - 历史 K 线
 
-### AkShare
-
+### 东方财富 / AkShare / 新浪兜底
 - A 股快照搜索
 - 新闻、研报、公告
 - 财务报表
@@ -267,7 +254,7 @@ npm run dev
 
 ```powershell
 cd backend
-python manage.py test api.tests
+python manage.py test api.tests api.tests_analysis_cache api.tests_sync_command
 ```
 
 前端构建：
@@ -277,24 +264,19 @@ cd frontend
 npm run build
 ```
 
-当前已验证通过：
-
-- `python manage.py test api.tests`
-- `npm run build`
-
 ## 已知事项
 
-- 财务溯源页首次打开某只股票时，AkShare 相关数据源可能较慢
-- Windows 下文件缓存偶发权限告警时，接口会降级为“缓存写失败但继续返回结果”
-- 前端构建目前仍有一个 Vite 告警：主 chunk 超过 `500 kB`，不影响功能
+- 财务溯源页首次打开某只股票时，外部数据源可能仍然较慢
+- 当前前端构建仍可能出现 Vite 大 chunk 警告，但不影响运行
+- `backend/scripts/` 与 `backend/scratch/` 中仍保留了较多调试脚本，后续可以继续分层整理
 
 ## 开发建议
 
-- 功能相关代码优先放在 `backend/api/` 和 `frontend/src/`
-- 诊断、迁移、一次性脚本统一收纳到 `backend/scripts/`
-- 新增页面时，优先在 `frontend/src/router/index.ts` 中补路由，再扩展 `frontend/src/api/index.ts`
-- 新增慢查询或慢抓取路径时，优先考虑拆分缓存而不是把整页请求继续做大
+- 功能主逻辑优先收敛到 `backend/api/` 和 `frontend/src/`
+- 诊断、修复、验证脚本尽量放到 `backend/scripts/`
+- 临时调试输出放到 `backend/scratch/debug_outputs/`
+- 新增慢查询或慢抓取路径时，优先考虑缓存拆分，而不是继续放大单次页面请求
 
 ## 许可证
 
-当前仓库未单独声明开源许可证，如需对外发布，请补充 LICENSE。
+当前仓库未单独声明开源许可证；如果需要公开发布，建议补充 `LICENSE`。
