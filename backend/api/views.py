@@ -15,7 +15,7 @@ from .serializers import (
     StockSerializer, SentimentDataSerializer, 
     NewsSerializer, ReportSerializer, AnnouncementSerializer
 )
-from collector.collector import run_collection
+from collector.collector import collect_stock_data, run_collection
 import threading
 from .analysis_service import AnalysisService
 from .history_backtest_service import HistoryBacktestService
@@ -115,7 +115,22 @@ class StockViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
+        self._trigger_single_stock_collection(serializer.instance)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @staticmethod
+    def _trigger_single_stock_collection(stock: Stock) -> None:
+        """新增股票后在后台补采该标的，避免必须手动全量采集。"""
+
+        def task():
+            try:
+                collect_stock_data(stock)
+                logger.info("Auto collected sentiment data for newly added stock %s", stock.symbol)
+            except Exception:
+                logger.exception("Auto collection failed for newly added stock %s", stock.symbol)
+
+        thread = threading.Thread(target=task, daemon=True)
+        thread.start()
 
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -268,9 +283,11 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
 @api_view(['GET'])
 def search_stocks(request):
     """搜索 A 股标的 (模糊匹配，带 24h 高速缓存)"""
-    query = request.GET.get('q', '').strip().upper()
-    if not query:
+    raw_query = request.GET.get('q', '').strip()
+    if not raw_query:
         return Response([])
+    query = raw_query.upper()
+    normalized_code_query = query.replace('SH', '').replace('SZ', '')
         
     # 尝试从缓存获取全量快照，减少 AkShare 的慢采样
     SNAPSHOT_KEY = "stock_zh_a_snapshot"
@@ -289,11 +306,22 @@ def search_stocks(request):
 
     try:
         # 在内存快照中进行模糊匹配
-        mask = (
-            df['名称'].str.contains(query, regex=False, na=False)
-            | df['代码'].str.contains(query, regex=False, na=False)
+        name_series = df['名称'].fillna('').astype(str)
+        code_series = (
+            df['代码']
+            .fillna('')
+            .astype(str)
+            .str.extract(r'(\d+)', expand=False)
+            .fillna('')
+            .str.zfill(6)
         )
-        matches = df[mask].head(10)
+        mask = (
+            name_series.str.contains(raw_query, regex=False, na=False)
+            | code_series.str.contains(normalized_code_query, regex=False, na=False)
+        )
+        matches = df.loc[mask].copy()
+        matches['代码'] = code_series[mask]
+        matches = matches.head(10)
         
         results = []
         for _, row in matches.iterrows():

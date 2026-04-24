@@ -5,13 +5,17 @@
 import os
 import sys
 import django
+import math
 
 # 设置Django环境
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'sentiment_monitor.settings')
 django.setup()
 
-from datetime import datetime
+from datetime import date, datetime
+from django.db import transaction
+from django.utils import timezone
+from django.utils.dateparse import parse_date
 from api.models import Stock, SentimentData, News, Report, Announcement
 from collector.sources import eastmoney, cninfo, xueqiu
 from analyzer.engine import SentimentEngine
@@ -20,6 +24,73 @@ from analyzer.engine import SentimentEngine
 
 
 # analyze_sentiment function was replaced by SentimentEngine.analyze_batch.
+
+
+def _normalize_title(value) -> str:
+    return str(value or '').strip()
+
+
+def _safe_pub_date(value, fallback: date) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+
+    if isinstance(value, date):
+        return value
+
+    text = str(value or '').strip()
+    if not text or text.lower() in {'nan', 'nat', 'none'}:
+        return fallback
+
+    parsed = parse_date(text[:10])
+    return parsed or fallback
+
+
+def _build_news_records(sentiment, items, fallback_date: date):
+    records = []
+    for item in items:
+        title = _normalize_title(item.get('title'))
+        if not title:
+            continue
+        records.append(News(
+            sentiment_data=sentiment,
+            title=title[:300],
+            pub_date=_safe_pub_date(item.get('pub_date'), fallback_date),
+            source=_normalize_title(item.get('source'))[:50] or '未知来源',
+            url=str(item.get('url') or '').strip(),
+        ))
+    return records
+
+
+def _build_report_records(sentiment, items, fallback_date: date):
+    records = []
+    for item in items:
+        title = _normalize_title(item.get('title'))
+        if not title:
+            continue
+        records.append(Report(
+            sentiment_data=sentiment,
+            title=title[:300],
+            pub_date=_safe_pub_date(item.get('pub_date'), fallback_date),
+            org=_normalize_title(item.get('org'))[:100],
+            rating=_normalize_title(item.get('rating'))[:50],
+            url=str(item.get('url') or '').strip(),
+        ))
+    return records
+
+
+def _build_announcement_records(sentiment, items, fallback_date: date):
+    records = []
+    for item in items:
+        title = _normalize_title(item.get('title'))
+        if not title:
+            continue
+        records.append(Announcement(
+            sentiment_data=sentiment,
+            title=title[:300],
+            pub_date=_safe_pub_date(item.get('pub_date'), fallback_date),
+            url=str(item.get('url') or '').strip(),
+        ))
+    return records
 
 
 def collect_stock_data(stock: Stock):
@@ -41,13 +112,33 @@ def collect_stock_data(stock: Stock):
     seen_titles = set()
     news_data = []
     for item in em_news + xq_news:
-        normalized_title = item['title'].strip()[:60] # 取前60个字符去重
+        title = _normalize_title(item.get('title'))
+        if len(title) <= 5:
+            continue
+        normalized_title = title[:60] # 取前60个字符去重
         if normalized_title not in seen_titles:
             seen_titles.add(normalized_title)
-            news_data.append(item)
+            news_data.append({
+                **item,
+                'title': title,
+            })
             
-    report_data = eastmoney.get_reports(symbol_code)
-    announcement_data = cninfo.get_announcements(symbol_code)
+    report_data = [
+        {
+            **item,
+            'title': _normalize_title(item.get('title')),
+        }
+        for item in eastmoney.get_reports(symbol_code)
+        if len(_normalize_title(item.get('title'))) > 5
+    ]
+    announcement_data = [
+        {
+            **item,
+            'title': _normalize_title(item.get('title')),
+        }
+        for item in cninfo.get_announcements(symbol_code)
+        if len(_normalize_title(item.get('title'))) > 5
+    ]
     
     print(f"  [OK] Consolidated News: {len(news_data)} items (EM: {len(em_news)}, XQ: {len(xq_news)})")
     print(f"  [OK] Reports: {len(report_data)} items")
@@ -63,65 +154,44 @@ def collect_stock_data(stock: Stock):
     
     # 映射为 -1 到 1 的范围
     final_score = (avg_score - 0.5) * 2
-    total = len(all_titles)
     
     # 计算热度分值 (权重: 研报 2.5, 公告 2.0, 新闻 1.0)
     # 采用对数缩放避免极端值
-    import math
     n_count, r_count, a_count = len(news_data), len(report_data), len(announcement_data)
     raw_hot = (n_count * 1.0) + (r_count * 2.5) + (a_count * 2.0)
     hot_score = min(100, round(math.log1p(raw_hot) * 15, 2)) # 缩放到约 0-100 范围
     
     # 保存舆情数据
-    today = datetime.now().date()
-    sentiment, created = SentimentData.objects.update_or_create(
-        stock=stock,
-        date=today,
-        defaults={
-            'sentiment_score': round(final_score, 3),
-            'sentiment_label': label,
-            'hot_score': hot_score,
-            'news_count': n_count,
-            'report_count': r_count,
-            'announcement_count': a_count,
-            'discussion_count': 0
-        }
-    )
-    
-    # 删除旧数据
-    News.objects.filter(sentiment_data=sentiment).delete()
-    Report.objects.filter(sentiment_data=sentiment).delete()
-    Announcement.objects.filter(sentiment_data=sentiment).delete()
-    
-    # 保存新闻
-    for item in news_data:
-        News.objects.create(
-            sentiment_data=sentiment,
-            title=item['title'],
-            pub_date=item['pub_date'] or today,
-            source=item['source'],
-            url=item['url']
+    today = timezone.localdate()
+    with transaction.atomic():
+        sentiment, created = SentimentData.objects.update_or_create(
+            stock=stock,
+            date=today,
+            defaults={
+                'sentiment_score': round(final_score, 3),
+                'sentiment_label': label,
+                'hot_score': hot_score,
+                'news_count': n_count,
+                'report_count': r_count,
+                'announcement_count': a_count,
+                'discussion_count': 0
+            }
         )
-    
-    # 保存研报
-    for item in report_data:
-        Report.objects.create(
-            sentiment_data=sentiment,
-            title=item['title'],
-            pub_date=item['pub_date'] or today,
-            org=item['org'],
-            rating=item.get('rating', ''),
-            url=item['url']
-        )
-    
-    # 保存公告
-    for item in announcement_data:
-        Announcement.objects.create(
-            sentiment_data=sentiment,
-            title=item['title'],
-            pub_date=item['pub_date'] or today,
-            url=item['url']
-        )
+
+        News.objects.filter(sentiment_data=sentiment).delete()
+        Report.objects.filter(sentiment_data=sentiment).delete()
+        Announcement.objects.filter(sentiment_data=sentiment).delete()
+
+        news_records = _build_news_records(sentiment, news_data, today)
+        report_records = _build_report_records(sentiment, report_data, today)
+        announcement_records = _build_announcement_records(sentiment, announcement_data, today)
+
+        if news_records:
+            News.objects.bulk_create(news_records)
+        if report_records:
+            Report.objects.bulk_create(report_records)
+        if announcement_records:
+            Announcement.objects.bulk_create(announcement_records)
     
     return sentiment
 
@@ -204,4 +274,3 @@ def sync_fundamentals_for_all(stocks):
 
 if __name__ == "__main__":
     run_collection()
-

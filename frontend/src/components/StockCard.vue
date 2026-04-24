@@ -27,12 +27,12 @@
       <div class="flex gap-2 items-center mb-3">
         <span class="text-[10px] text-slate-500 font-mono tracking-widest">{{ data.stock_symbol }}</span>
         <span class="px-1.5 py-0.5 rounded text-[9px] font-bold border" :class="sentimentBadgeClass">
-          {{ data.sentiment_label }}
+          {{ isPending ? '待采集' : data.sentiment_label }}
         </span>
       </div>
 
       <!-- Row 3: Sentiment Display -->
-      <div class="mb-3">
+      <div v-if="!isPending" class="mb-3">
         <div class="flex justify-between items-baseline mb-1.5">
           <span class="text-[10px] text-slate-500">舆情走势</span>
           <span class="text-xs font-bold font-mono" :class="sentimentTextClass">{{ formattedScore }}</span>
@@ -44,6 +44,9 @@
             :style="{ width: `${sentimentBarWidth}%` }"
           />
         </div>
+      </div>
+      <div v-else class="mb-3 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-[10px] leading-5 text-cyan-300">
+        新增标的已加入监控，后台正在自动采集舆情数据。
       </div>
 
       <!-- Row 4: Valuation & ROI -->
@@ -134,7 +137,10 @@ const formattedScore = computed(() => {
   return `${score > 0 ? '+' : ''}${score.toFixed(3)}`
 })
 
+const isPending = computed(() => Boolean(props.data.is_pending))
+
 const sentimentBadgeClass = computed(() => {
+  if (isPending.value) return 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20'
   if (props.data.sentiment_score > 0.2) return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
   if (props.data.sentiment_score < -0.2) return 'bg-rose-500/10 text-rose-400 border-rose-500/20'
   return 'bg-amber-500/10 text-amber-400 border-amber-500/20'

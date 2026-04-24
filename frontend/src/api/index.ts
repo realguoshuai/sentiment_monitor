@@ -117,6 +117,7 @@ export interface SentimentData {
   reports: Report[]
   announcements: Announcement[]
   extra_links?: string
+  is_pending?: boolean
 }
 
 export interface ScreenerMeta {

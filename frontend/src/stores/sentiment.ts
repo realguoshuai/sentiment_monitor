@@ -39,6 +39,36 @@ export const useSentimentStore = defineStore('sentiment', () => {
     return [...sentimentData.value].sort((a, b) => b.sentiment_score - a.sentiment_score)
   })
 
+  const dashboardStocks = computed(() => {
+    const sentimentMap = new Map(sentimentData.value.map((item) => [item.stock_symbol, item]))
+    const merged: SentimentData[] = [...sortedStocks.value]
+
+    for (const stock of stocks.value) {
+      if (sentimentMap.has(stock.symbol)) continue
+
+      merged.push({
+        id: -stock.id,
+        stock_name: stock.name,
+        stock_symbol: stock.symbol,
+        date: '',
+        sentiment_score: 0,
+        sentiment_label: 'pending',
+        hot_score: 0,
+        news_count: 0,
+        report_count: 0,
+        announcement_count: 0,
+        discussion_count: 0,
+        news: [],
+        reports: [],
+        announcements: [],
+        extra_links: stock.extra_links,
+        is_pending: true,
+      })
+    }
+
+    return merged
+  })
+
   const totalNews = computed(() => 
     sentimentData.value.reduce((sum, s) => sum + s.news_count, 0)
   )
@@ -156,6 +186,7 @@ export const useSentimentStore = defineStore('sentiment', () => {
     calculateROI,
     roiSortedStocks,
     sortedStocks,
+    dashboardStocks,
     totalNews,
     totalReports,
     totalAnnouncements,

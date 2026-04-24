@@ -64,11 +64,11 @@
         <div class="mb-3 shrink-0">
           <div class="flex justify-between items-end mb-2 pr-1">
             <h2 class="text-[15px] font-bold text-white tracking-wide">个股监控看板</h2>
-            <div class="text-[10px] text-slate-500 font-mono">共 {{ store.sentimentData.length }} 只标的</div>
+            <div class="text-[10px] text-slate-500 font-mono">共 {{ store.dashboardStocks.length }} 只标的</div>
           </div>
           <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 max-h-[50vh] overflow-y-auto pr-1 custom-scrollbar">
             <StockCard
-              v-for="data in store.sortedStocks"
+              v-for="data in store.dashboardStocks"
               :key="data.id"
               :data="data"
               @click="goToDetail(data.stock_symbol)"
@@ -151,6 +151,7 @@ const refreshData = async () => {
 let priceTimer: any = null
 
 onMounted(async () => {
+  await store.fetchStocks()
   if (!store.sentimentData.length) {
     await store.fetchLatestSentiment()
   }

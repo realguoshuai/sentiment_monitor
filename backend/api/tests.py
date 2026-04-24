@@ -1,20 +1,21 @@
 ﻿from unittest.mock import patch
 
 import os
-from datetime import date
+from datetime import date, timedelta
 import pandas as pd
 import requests
 from django.core.cache import cache
-from django.test import override_settings
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from collector.sources import eastmoney, xueqiu
 from .analysis_service import AnalysisService
 from .cache_manager import CacheManager
 from .fundamental_service import FundamentalService
 from .history_backtest_service import HistoryBacktestService
-from .models import Announcement, SentimentData, Stock, StockScreenerSnapshot
+from .models import Announcement, News, Report, SentimentData, Stock, StockScreenerSnapshot
 from .price_service import PriceService
 from .screener_service import ScreenerService
 from .utils import format_symbol
@@ -109,7 +110,8 @@ class SentimentApiTests(APITestCase):
         self.assertEqual(result, {'ok': True})
         self.assertEqual(observed['timeout'], FundamentalService.AKSHARE_TIMEOUT)
 
-    def test_stock_create_and_update_support_industry_and_peer_symbols(self):
+    @patch('api.views.StockViewSet._trigger_single_stock_collection')
+    def test_stock_create_and_update_support_industry_and_peer_symbols(self, mock_trigger_single_stock_collection):
         create_response = self.client.post(
             '/api/stocks/',
             {
@@ -130,6 +132,8 @@ class SentimentApiTests(APITestCase):
         created = Stock.objects.get(symbol='SH600519')
         self.assertEqual(created.get_keywords(), ['茅台'])
         self.assertEqual(created.get_peer_symbols(), ['SZ000858', 'SH603369'])
+        mock_trigger_single_stock_collection.assert_called_once()
+        self.assertEqual(mock_trigger_single_stock_collection.call_args[0][0].symbol, 'SH600519')
 
         update_response = self.client.patch(
             '/api/stocks/SH600519/',
@@ -148,6 +152,42 @@ class SentimentApiTests(APITestCase):
         self.assertEqual(created.industry, '高端白酒')
         self.assertEqual(created.get_keywords(), ['茅台'])
         self.assertEqual(created.get_peer_symbols(), ['SZ000568'])
+        self.assertEqual(mock_trigger_single_stock_collection.call_count, 1)
+
+    def test_search_stocks_matches_chinese_name_when_snapshot_code_is_numeric(self):
+        cache.set(
+            'stock_zh_a_snapshot',
+            pd.DataFrame([
+                {'代码': 858, '名称': '五粮液', '最新价': 128.88},
+                {'代码': 600519, '名称': '贵州茅台', '最新价': 1620.0},
+            ]),
+            3600,
+        )
+
+        response = self.client.get('/api/sentiment/search/?q=五粮液')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['name'], '五粮液')
+        self.assertEqual(response.data[0]['symbol'], 'SZ000858')
+        self.assertAlmostEqual(response.data[0]['price'], 128.88, places=2)
+
+    def test_search_stocks_matches_code_when_snapshot_code_is_numeric(self):
+        cache.set(
+            'stock_zh_a_snapshot',
+            pd.DataFrame([
+                {'代码': 858, '名称': '五粮液', '最新价': 128.88},
+                {'代码': 600519, '名称': '贵州茅台', '最新价': 1620.0},
+            ]),
+            3600,
+        )
+
+        response = self.client.get('/api/sentiment/search/?q=000858')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['name'], '五粮液')
+        self.assertEqual(response.data[0]['symbol'], 'SZ000858')
 
     @patch('api.analysis_service.FundamentalService.get_quality_data')
     @patch('api.analysis_service.FundamentalService.get_forward_metrics')
@@ -1325,3 +1365,384 @@ class SentimentApiTests(APITestCase):
         self.assertEqual(mock_start.call_count, 1)
 
 
+@override_settings(CACHES={
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'sentiment-monitor-eastmoney-tests',
+    }
+})
+class EastMoneySourceTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.stock = Stock.objects.create(
+            name='Sample Corp',
+            symbol='SZ000001',
+            keywords='["sample"]',
+        )
+
+    @patch('collector.sources.eastmoney.ak.stock_news_em')
+    def test_eastmoney_news_uses_named_columns_and_normalizes_missing_values(self, mock_stock_news):
+        mock_stock_news.return_value = pd.DataFrame([
+            {
+                '新闻链接': 'https://example.com/news-1',
+                '文章来源': pd.NA,
+                '发布时间': pd.Timestamp('2026-04-20 08:00:00'),
+                '新闻标题': '平安银行推进零售转型升级',
+                '关键词': '000001',
+            },
+            {
+                '新闻链接': 'https://example.com/news-2',
+                '文章来源': '证券时报',
+                '发布时间': pd.NaT,
+                '新闻标题': '平安银行发布一季报业绩预告',
+                '关键词': '000001',
+            },
+            {
+                '新闻链接': 'https://example.com/news-3',
+                '文章来源': '上证报',
+                '发布时间': pd.Timestamp('2026-04-19 08:00:00'),
+                '新闻标题': '短讯',
+                '关键词': '000001',
+            },
+        ])[['新闻链接', '文章来源', '发布时间', '新闻标题', '关键词']]
+
+        result = eastmoney.get_news('000001')
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]['title'], '平安银行推进零售转型升级')
+        self.assertEqual(result[0]['pub_date'], '2026-04-20')
+        self.assertEqual(result[0]['source'], '东方财富')
+        self.assertEqual(result[1]['source'], '证券时报')
+        self.assertIsNone(result[1]['pub_date'])
+
+    @patch('collector.sources.eastmoney.time.sleep', return_value=None)
+    @patch('collector.sources.eastmoney.ak.stock_research_report_em')
+    def test_eastmoney_reports_use_named_columns_and_filter_invalid_dates(
+        self,
+        mock_research_report,
+        mock_sleep,
+    ):
+        recent_date = date.today() - timedelta(days=30)
+        old_date = date.today() - timedelta(days=800)
+        mock_research_report.return_value = pd.DataFrame([
+            {
+                '报告PDF链接': 'https://example.com/report-1.pdf',
+                '东财评级': '买入',
+                '日期': recent_date,
+                '机构': '中信证券',
+                '报告名称': '平安银行深度跟踪报告',
+            },
+            {
+                '报告PDF链接': 'https://example.com/report-2.pdf',
+                '东财评级': '增持',
+                '日期': old_date,
+                '机构': '国泰君安',
+                '报告名称': '平安银行历史旧报告',
+            },
+            {
+                '报告PDF链接': 'https://example.com/report-3.pdf',
+                '东财评级': '中性',
+                '日期': pd.NaT,
+                '机构': '华泰证券',
+                '报告名称': '平安银行日期缺失报告',
+            },
+        ])[['报告PDF链接', '东财评级', '日期', '机构', '报告名称']]
+
+        result = eastmoney.get_reports('000001')
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['title'], '平安银行深度跟踪报告')
+        self.assertEqual(result[0]['pub_date'], recent_date.isoformat())
+        self.assertEqual(result[0]['org'], '中信证券')
+        self.assertEqual(result[0]['rating'], '买入')
+        self.assertEqual(result[0]['url'], 'https://example.com/report-1.pdf')
+        mock_sleep.assert_called_once()
+
+    @patch('collector.sources.eastmoney.ak.stock_notice_report')
+    def test_eastmoney_notices_use_pub_date_schema_and_dedupe(self, mock_notice_report):
+        first_page = pd.DataFrame([
+            {
+                '网址': 'https://example.com/notice-1',
+                '公告日期': pd.Timestamp('2026-04-18'),
+                '公告标题': '平安银行关于利润分配的公告',
+                '名称': '平安银行',
+                '代码': '000001',
+            },
+            {
+                '网址': 'https://example.com/notice-1-dup',
+                '公告日期': pd.Timestamp('2026-04-18'),
+                '公告标题': '平安银行关于利润分配的公告',
+                '名称': '平安银行',
+                '代码': '000001',
+            },
+            {
+                '网址': 'https://example.com/notice-2',
+                '公告日期': pd.NaT,
+                '公告标题': '平安银行董事会决议公告',
+                '名称': '平安银行',
+                '代码': '000001',
+            },
+            {
+                '网址': 'https://example.com/notice-3',
+                '公告日期': pd.Timestamp('2026-04-18'),
+                '公告标题': '浦发银行关于利润分配的公告',
+                '名称': '浦发银行',
+                '代码': '600000',
+            },
+        ])[['网址', '公告日期', '公告标题', '名称', '代码']]
+        empty_page = pd.DataFrame(columns=first_page.columns)
+        mock_notice_report.side_effect = [first_page] + [empty_page for _ in range(29)]
+
+        result = eastmoney.fetch_notices_from_akshare('000001')
+
+        self.assertEqual(len(result), 2)
+        self.assertIn('pub_date', result[0])
+        self.assertNotIn('date', result[0])
+        self.assertEqual(result[0]['pub_date'], '2026-04-18')
+        self.assertIsNone(result[1]['pub_date'])
+
+    @patch('collector.sources.xueqiu.fetch_xueqiu_news')
+    @patch('collector.sources.xueqiu.time.sleep', return_value=None)
+    def test_xueqiu_news_uses_pub_date_schema(self, mock_sleep, mock_fetch_xueqiu_news):
+        mock_fetch_xueqiu_news.return_value = [
+            {
+                'title': '平安银行雪球热议',
+                'pub_date': '2026-04-21',
+                'url': 'https://example.com/xueqiu-news',
+            }
+        ]
+
+        result = xueqiu.get_news('SZ000001')
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['title'], '平安银行雪球热议')
+        self.assertEqual(result[0]['pub_date'], '2026-04-21')
+        self.assertEqual(result[0]['source'], '雪球')
+        self.assertEqual(result[0]['url'], 'https://example.com/xueqiu-news')
+        mock_fetch_xueqiu_news.assert_called_once_with('SZ000001')
+        mock_sleep.assert_called_once()
+
+    @patch('collector.collector.SentimentEngine.get_label', return_value='neutral')
+    @patch('collector.collector.SentimentEngine.analyze_batch', return_value=0.5)
+    @patch(
+        'collector.collector.cninfo.get_announcements',
+        return_value=[{
+            'title': '平安银行临时公告',
+            'pub_date': None,
+            'url': 'https://example.com/announcement',
+        }],
+    )
+    @patch(
+        'collector.collector.eastmoney.get_reports',
+        return_value=[{
+            'title': '平安银行研究报告',
+            'pub_date': None,
+            'org': '中信证券',
+            'rating': '买入',
+            'url': 'https://example.com/report',
+        }],
+    )
+    @patch('collector.collector.xueqiu.get_news', return_value=[])
+    @patch(
+        'collector.collector.eastmoney.get_news',
+        return_value=[{
+            'title': '平安银行新闻标题',
+            'pub_date': None,
+            'source': '东方财富',
+            'url': 'https://example.com/news',
+        }],
+    )
+    def test_collect_stock_data_falls_back_to_today_when_source_date_missing(
+        self,
+        mock_em_news,
+        mock_xq_news,
+        mock_reports,
+        mock_announcements,
+        mock_analyze_batch,
+        mock_get_label,
+    ):
+        from collector.collector import collect_stock_data
+
+        sentiment = collect_stock_data(self.stock)
+
+        saved_news = News.objects.get(sentiment_data=sentiment)
+        saved_report = Report.objects.get(sentiment_data=sentiment)
+        saved_announcement = Announcement.objects.get(sentiment_data=sentiment)
+
+        self.assertEqual(saved_news.pub_date, sentiment.date)
+        self.assertEqual(saved_report.pub_date, sentiment.date)
+        self.assertEqual(saved_announcement.pub_date, sentiment.date)
+        self.assertEqual(saved_report.org, '中信证券')
+        self.assertEqual(saved_report.rating, '买入')
+        mock_em_news.assert_called_once_with('000001')
+        mock_xq_news.assert_called_once_with('SZ000001')
+        mock_reports.assert_called_once_with('000001')
+        mock_announcements.assert_called_once_with('000001')
+        mock_analyze_batch.assert_called_once()
+        mock_get_label.assert_called_once_with(0.5)
+
+    @patch('collector.collector.SentimentEngine.get_label', return_value='neutral')
+    @patch('collector.collector.SentimentEngine.analyze_batch', return_value=0.5)
+    @patch(
+        'collector.collector.cninfo.get_announcements',
+        return_value=[{
+            'title': '平安银行字符串日期公告',
+            'pub_date': 'nan',
+            'url': 'https://example.com/announcement-string-date',
+        }],
+    )
+    @patch(
+        'collector.collector.eastmoney.get_reports',
+        return_value=[{
+            'title': '平安银行字符串日期研报',
+            'pub_date': 'NaT',
+            'org': '中信证券',
+            'rating': '买入',
+            'url': 'https://example.com/report-string-date',
+        }],
+    )
+    @patch('collector.collector.xueqiu.get_news', return_value=[])
+    @patch(
+        'collector.collector.eastmoney.get_news',
+        return_value=[{
+            'title': '平安银行字符串日期新闻',
+            'pub_date': 'not-a-date',
+            'source': '东方财富',
+            'url': 'https://example.com/news-string-date',
+        }],
+    )
+    def test_collect_stock_data_falls_back_to_today_when_source_date_is_invalid_string(
+        self,
+        mock_em_news,
+        mock_xq_news,
+        mock_reports,
+        mock_announcements,
+        mock_analyze_batch,
+        mock_get_label,
+    ):
+        from collector.collector import collect_stock_data
+
+        sentiment = collect_stock_data(self.stock)
+
+        saved_news = News.objects.get(sentiment_data=sentiment)
+        saved_report = Report.objects.get(sentiment_data=sentiment)
+        saved_announcement = Announcement.objects.get(sentiment_data=sentiment)
+
+        self.assertEqual(saved_news.pub_date, sentiment.date)
+        self.assertEqual(saved_report.pub_date, sentiment.date)
+        self.assertEqual(saved_announcement.pub_date, sentiment.date)
+        self.assertEqual(saved_news.title, '平安银行字符串日期新闻')
+        self.assertEqual(saved_report.title, '平安银行字符串日期研报')
+        self.assertEqual(saved_announcement.title, '平安银行字符串日期公告')
+        mock_em_news.assert_called_once_with('000001')
+        mock_xq_news.assert_called_once_with('SZ000001')
+        mock_reports.assert_called_once_with('000001')
+        mock_announcements.assert_called_once_with('000001')
+        mock_analyze_batch.assert_called_once()
+        mock_get_label.assert_called_once_with(0.5)
+
+    @patch('collector.collector.Report.objects.bulk_create', side_effect=RuntimeError('bulk insert failed'))
+    @patch('collector.collector.SentimentEngine.get_label', return_value='positive')
+    @patch('collector.collector.SentimentEngine.analyze_batch', return_value=0.8)
+    @patch(
+        'collector.collector.cninfo.get_announcements',
+        return_value=[{
+            'title': '新的公告数据',
+            'pub_date': '2026-04-20',
+            'url': 'https://example.com/new-announcement',
+        }],
+    )
+    @patch(
+        'collector.collector.eastmoney.get_reports',
+        return_value=[{
+            'title': '新的研报数据',
+            'pub_date': '2026-04-20',
+            'org': '中信证券',
+            'rating': '买入',
+            'url': 'https://example.com/new-report',
+        }],
+    )
+    @patch('collector.collector.xueqiu.get_news', return_value=[])
+    @patch(
+        'collector.collector.eastmoney.get_news',
+        return_value=[{
+            'title': '新的新闻数据',
+            'pub_date': '2026-04-20',
+            'source': '东方财富',
+            'url': 'https://example.com/new-news',
+        }],
+    )
+    def test_collect_stock_data_rolls_back_when_bulk_insert_fails(
+        self,
+        mock_em_news,
+        mock_xq_news,
+        mock_reports,
+        mock_announcements,
+        mock_analyze_batch,
+        mock_get_label,
+        mock_report_bulk_create,
+    ):
+        from collector.collector import collect_stock_data
+
+        today = timezone.localdate()
+        existing_sentiment = SentimentData.objects.create(
+            stock=self.stock,
+            date=today,
+            sentiment_score=-0.2,
+            sentiment_label='negative',
+            hot_score=5.0,
+            news_count=1,
+            report_count=1,
+            announcement_count=1,
+            discussion_count=0,
+        )
+        News.objects.create(
+            sentiment_data=existing_sentiment,
+            title='旧新闻数据',
+            pub_date=today,
+            source='旧来源',
+            url='https://example.com/old-news',
+        )
+        Report.objects.create(
+            sentiment_data=existing_sentiment,
+            title='旧研报数据',
+            pub_date=today,
+            org='旧机构',
+            rating='中性',
+            url='https://example.com/old-report',
+        )
+        Announcement.objects.create(
+            sentiment_data=existing_sentiment,
+            title='旧公告数据',
+            pub_date=today,
+            url='https://example.com/old-announcement',
+        )
+
+        with self.assertRaises(RuntimeError):
+            collect_stock_data(self.stock)
+
+        existing_sentiment.refresh_from_db()
+
+        self.assertEqual(existing_sentiment.sentiment_label, 'negative')
+        self.assertEqual(existing_sentiment.news_count, 1)
+        self.assertEqual(existing_sentiment.report_count, 1)
+        self.assertEqual(existing_sentiment.announcement_count, 1)
+        self.assertEqual(
+            list(News.objects.filter(sentiment_data=existing_sentiment).values_list('title', flat=True)),
+            ['旧新闻数据'],
+        )
+        self.assertEqual(
+            list(Report.objects.filter(sentiment_data=existing_sentiment).values_list('title', flat=True)),
+            ['旧研报数据'],
+        )
+        self.assertEqual(
+            list(Announcement.objects.filter(sentiment_data=existing_sentiment).values_list('title', flat=True)),
+            ['旧公告数据'],
+        )
+        mock_report_bulk_create.assert_called_once()
+        mock_em_news.assert_called_once_with('000001')
+        mock_xq_news.assert_called_once_with('SZ000001')
+        mock_reports.assert_called_once_with('000001')
+        mock_announcements.assert_called_once_with('000001')
+        mock_analyze_batch.assert_called_once()
+        mock_get_label.assert_called_once_with(0.8)

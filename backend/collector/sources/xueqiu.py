@@ -47,7 +47,7 @@ def get_news(symbol_code: str) -> list:
         for item in news_data[:30]:
             news_list.append({
                 'title': item.get('title', '')[:120],
-                'pub_date': item.get('date', ''),
+                'pub_date': item.get('pub_date', ''),
                 'source': '雪球',
                 'url': item.get('url', '')
             })
@@ -108,7 +108,7 @@ def fetch_xueqiu_news(symbol: str) -> list:
                         if content and len(content) > 5:
                             news_list.append({
                                 'title': content[:150],
-                                'date': pub_date,
+                                'pub_date': pub_date,
                                 'url': url
                             })
                     except:

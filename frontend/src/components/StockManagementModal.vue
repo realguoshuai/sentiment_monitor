@@ -60,7 +60,7 @@
 
             <button
               @click="handleAdd"
-              :disabled="!newStock.symbol || loading"
+              :disabled="(!newStock.symbol && !searchQuery.trim()) || loading"
               class="px-6 bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl font-bold text-white shadow-lg shadow-cyan-500/20 transition-all flex items-center justify-center gap-2 whitespace-nowrap"
             >
               <svg v-if="loading" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -73,6 +73,9 @@
 
           <p v-if="newStock.symbol" class="mt-2 text-[10px] text-cyan-400/70">
             已选中: <span class="font-bold">{{ newStock.name }}</span> ({{ newStock.symbol }})
+          </p>
+          <p v-else-if="searchQuery.trim() && !searchLoading && addError" class="mt-2 text-[10px] text-amber-400/80">
+            {{ addError }}
           </p>
 
           <div class="mt-4 grid gap-3 md:grid-cols-2">
@@ -217,6 +220,7 @@ const searchLoading = ref(false)
 const searchQuery = ref('')
 const suggestions = ref<StockSearchResult[]>([])
 const editingSymbol = ref('')
+const addError = ref('')
 
 const newStock = reactive({
   name: '',
@@ -243,6 +247,7 @@ function resetSelection() {
   newStock.keywords = []
   newStock.industry = ''
   newStock.peerSymbolsInput = ''
+  addError.value = ''
 }
 
 function normalizePeerSymbols(input: string) {
@@ -270,6 +275,8 @@ async function handleSearch() {
     resetSelection()
     return
   }
+
+  addError.value = ''
 
   const normalized = keyword.toUpperCase()
   const rawCode = normalized.replace(/^(SH|SZ)/, '')
@@ -303,10 +310,52 @@ function selectSuggestion(item: StockSearchResult) {
   newStock.keywords = [item.name]
   searchQuery.value = `${item.name} (${item.symbol})`
   suggestions.value = []
+  addError.value = ''
+}
+
+async function resolveStockSelection() {
+  const keyword = searchQuery.value.trim()
+  if (!keyword) return false
+
+  if (newStock.symbol) return true
+
+  searchLoading.value = true
+  addError.value = ''
+  try {
+    const res = await stockApi.searchStocks(keyword)
+    const items = Array.isArray(res.data) ? res.data : []
+    suggestions.value = items
+
+    if (!items.length) {
+      addError.value = `没有找到“${keyword}”对应的公司，请换个关键词或直接输入股票代码。`
+      return false
+    }
+
+    const normalizedKeyword = keyword.toUpperCase()
+    const exactMatch = items.find((item) => item.name === keyword || item.symbol === normalizedKeyword)
+    const chosen = exactMatch || (items.length === 1 ? items[0] : items[0])
+    if (!chosen) {
+      addError.value = `没有找到“${keyword}”对应的公司，请换个关键词或直接输入股票代码。`
+      return false
+    }
+
+    selectSuggestion(chosen)
+    if (items.length > 1 && !exactMatch) {
+      addError.value = `已自动选择最接近的结果：${chosen.name} (${chosen.symbol})。`
+    }
+    return true
+  } catch (error) {
+    console.error('Resolve stock selection failed:', error)
+    addError.value = '公司识别失败，请稍后重试或直接输入股票代码。'
+    return false
+  } finally {
+    searchLoading.value = false
+  }
 }
 
 async function handleAdd() {
-  if (!newStock.symbol) return
+  const resolved = await resolveStockSelection()
+  if (!resolved || !newStock.symbol) return
 
   if (!newStock.name) {
     newStock.keywords = newStock.keywords.length > 0 ? newStock.keywords : [newStock.symbol.slice(2)]
@@ -339,6 +388,7 @@ async function handleAdd() {
     ])
   } catch (error) {
     console.error('Add stock failed:', error)
+    addError.value = '添加失败，请稍后重试。'
   } finally {
     loading.value = false
   }
