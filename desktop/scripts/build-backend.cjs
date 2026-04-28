@@ -5,7 +5,7 @@ const { spawnSync } = require('child_process');
 const repoRoot = path.resolve(__dirname, '..', '..');
 const backendDir = path.join(repoRoot, 'backend');
 const specFile = path.join(backendDir, 'desktop_backend.spec');
-const backendExe = path.join(backendDir, 'dist', 'SentimentMonitor', 'SentimentMonitor.exe');
+const backendExe = path.join(backendDir, 'dist', 'SentimentMonitor-runtime', 'SentimentMonitor.exe');
 
 function resolvePyInstaller() {
   const custom = process.env.SM_PYINSTALLER;

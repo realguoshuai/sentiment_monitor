@@ -18,7 +18,7 @@ const frontendDistDir = isPackaged
 const frontendDistFile = path.join(frontendDistDir, 'index.html');
 const packagedBackendExe = isPackaged
   ? path.join(packagedResourcesDir, 'backend', 'SentimentMonitor.exe')
-  : path.join(repoRoot, 'backend', 'dist', 'SentimentMonitor', 'SentimentMonitor.exe');
+  : path.join(repoRoot, 'backend', 'dist', 'SentimentMonitor-runtime', 'SentimentMonitor.exe');
 const packagedSeedDb = isPackaged
   ? path.join(packagedResourcesDir, 'backend', 'db.sqlite3')
   : path.join(repoRoot, 'backend', 'db.sqlite3');
@@ -31,6 +31,22 @@ let runtimePaths = null;
 let desktopLogFile = null;
 
 app.setName('Sentiment Monitor');
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow) {
+      return;
+    }
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.show();
+    mainWindow.focus();
+  });
+}
 
 function getDesktopLogFile() {
   if (desktopLogFile) {
@@ -207,7 +223,17 @@ function waitForUrl(url, timeoutMs = 30000) {
     const attempt = () => {
       const request = http.get(url, (response) => {
         response.resume();
-        resolve();
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          resolve();
+          return;
+        }
+
+        if (Date.now() >= deadline) {
+          reject(new Error(`Timed out waiting for ${url}: last status ${response.statusCode}`));
+          return;
+        }
+
+        setTimeout(attempt, 500);
       });
 
       request.on('error', () => {
@@ -263,7 +289,7 @@ function spawnBackend() {
     cwd: launch.cwd,
     env: {
       ...process.env,
-      ENABLE_STARTUP_WARM: '1',
+      ENABLE_STARTUP_WARM: isDev ? (process.env.ENABLE_STARTUP_WARM || '1') : '0',
       SENTIMENT_MONITOR_DESKTOP: '1',
       DJANGO_DEBUG: isDev ? 'True' : 'False',
       SENTIMENT_MONITOR_HOME: runtimePaths ? runtimePaths.runtimeDir : backendDir,
@@ -344,7 +370,11 @@ function waitForBackendStartup(url, timeoutMs = 30000) {
   });
 }
 
-async function loadAppWindow() {
+function createMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    return mainWindow;
+  }
+
   mainWindow = new BrowserWindow({
     width: 1500,
     height: 960,
@@ -361,9 +391,41 @@ async function loadAppWindow() {
     },
   });
 
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    logDesktop(`[frontend-console:${level}] ${message} (${sourceId}:${line})`);
+  });
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    logDesktop(`Frontend failed to load ${validatedURL}: ${errorCode} ${errorDescription}`);
+  });
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    logDesktop(`Renderer process gone: ${JSON.stringify(details)}`);
+  });
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
+
+  return mainWindow;
+}
+
+async function showStartupWindow() {
+  const window = createMainWindow();
+  const message = [
+    '<html><body style="margin:0;font-family:Segoe UI,Arial;background:#f5f7fb;color:#0f172a;">',
+    '<div style="height:100vh;display:flex;align-items:center;justify-content:center;">',
+    '<div style="text-align:center;">',
+    '<h2 style="margin:0 0 12px;font-size:22px;">Sentiment Monitor</h2>',
+    '<p style="margin:0;color:#64748b;">Starting local analysis service...</p>',
+    '</div></div></body></html>',
+  ].join('');
+  await window.loadURL(`data:text/html,${encodeURIComponent(message)}`);
+}
+
+async function loadAppWindow() {
+  const window = createMainWindow();
+
   if (isDev) {
-    await mainWindow.loadURL(frontendDevUrl);
-    mainWindow.webContents.openDevTools({ mode: 'detach' });
+    await window.loadURL(frontendDevUrl);
+    window.webContents.openDevTools({ mode: 'detach' });
     return;
   }
 
@@ -380,11 +442,11 @@ async function loadAppWindow() {
       `<pre style="white-space:pre-wrap;background:#e2e8f0;padding:16px;border-radius:8px;">${escapeHtml(checkedFiles)}</pre>`,
       '</body></html>',
     ].join('');
-    await mainWindow.loadURL(`data:text/html,${encodeURIComponent(message)}`);
+    await window.loadURL(`data:text/html,${encodeURIComponent(message)}`);
     return;
   }
 
-  await mainWindow.loadFile(frontendDist.file);
+  await window.loadFile(frontendDist.file);
 }
 
 async function bootstrap() {
@@ -405,14 +467,18 @@ async function bootstrap() {
   );
 
   if (!isDev) {
+    await showStartupWindow();
     spawnBackend();
-    try {
-      await waitForBackendStartup(`${backendUrl}/api/stocks/`, 60000);
-      logDesktop(`Backend ready at ${backendUrl}`);
-    } catch (error) {
-      logDesktop('Backend startup failed', error);
-      dialog.showErrorBox('Backend startup failed', String(error.message || error));
-    }
+    waitForBackendStartup(`${backendUrl}/api/stocks/`, 60000)
+      .then(() => {
+        logDesktop(`Backend ready at ${backendUrl}`);
+      })
+      .catch((error) => {
+        logDesktop('Backend startup failed', error);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          dialog.showErrorBox('Backend startup failed', String(error.message || error));
+        }
+      });
   }
 
   await loadAppWindow();
@@ -434,7 +500,9 @@ function handleFatalStartupError(error) {
 process.on('uncaughtException', handleFatalStartupError);
 process.on('unhandledRejection', handleFatalStartupError);
 
-app.whenReady().then(bootstrap).catch(handleFatalStartupError);
+if (gotSingleInstanceLock) {
+  app.whenReady().then(bootstrap).catch(handleFatalStartupError);
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

@@ -2,6 +2,7 @@
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 from django.core.cache import cache
+from django.db.models import OuterRef, Subquery
 from django.utils import timezone
 from datetime import datetime, timedelta
 import akshare as ak
@@ -181,6 +182,30 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
         """只返回最近30天的数据"""
         thirty_days_ago = datetime.now().date() - timedelta(days=30)
         return SentimentData.objects.filter(date__gte=thirty_days_ago).select_related('stock')
+
+    def _latest_per_stock_queryset(self):
+        latest_ids = (
+            SentimentData.objects
+            .filter(stock=OuterRef('stock'))
+            .order_by('-date', '-updated_at', '-id')
+            .values('id')[:1]
+        )
+        return (
+            SentimentData.objects
+            .filter(id__in=Subquery(latest_ids))
+            .select_related('stock')
+            .order_by('stock__symbol')
+        )
+
+    def retrieve(self, request, *args, **kwargs):
+        symbol = kwargs.get(self.lookup_url_kwarg or self.lookup_field)
+        queryset = SentimentData.objects.filter(stock__symbol=symbol).select_related('stock').order_by('-date', '-updated_at', '-id')
+        sentiment = queryset.first()
+        if sentiment is None:
+            return Response({'message': '暂无该股票数据，请先运行采集脚本'}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = self.get_serializer(sentiment)
+        return Response(serializer.data)
     
     @action(detail=False, methods=['get'])
     def today(self, request):
@@ -206,15 +231,14 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
     
     @action(detail=False, methods=['get'])
     def latest(self, request):
-        """获取最新日期的舆情数据（限制每只股票最多返回50条研报）"""
-        latest_date = SentimentData.objects.order_by('-date').first()
-        if not latest_date:
+        """获取每只监控股票各自最新的舆情数据（限制每只股票最多返回50条研报）"""
+        queryset = self._latest_per_stock_queryset()
+        if not queryset.exists():
             return Response(
                 {'message': '暂无数据，请先运行采集脚本'},
                 status=status.HTTP_404_NOT_FOUND
             )
-        
-        queryset = SentimentData.objects.filter(date=latest_date.date)
+
         serializer = self.get_serializer(queryset, many=True)
         
         # 限制每只股票返回的数据量（避免内存溢出）

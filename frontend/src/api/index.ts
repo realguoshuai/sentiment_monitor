@@ -11,20 +11,23 @@ const getBaseURL = () => {
 
   // 2. 自动探测逻辑
   if (typeof window !== 'undefined') {
-    const { hostname, protocol } = window.location
+    const { hostname, protocol, port } = window.location
+    if (protocol === 'file:') {
+      return 'http://127.0.0.1:8000/api'
+    }
     // 如果是开发环境或本地访问，指向开发服务器
     if (hostname === 'localhost' || hostname === '127.0.0.1') {
       return 'http://127.0.0.1:8000/api'
     }
     // 生产环境自动指向当前域名的 /api 路径
-    return `${protocol}//${hostname}${window.location.port ? ':' + window.location.port : ''}/api`
+    return `${protocol}//${hostname}${port ? ':' + port : ''}/api`
   }
   return '/api'
 }
 
 const api = axios.create({
-  baseURL: '/api',
-  timeout: 15000, // 深度分析耗时较长，增加超时时间
+  baseURL: getBaseURL(),
+  timeout: 15000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -176,7 +179,7 @@ export const stockApi = {
   getComparisonHistorical: (symbols: string[], limit: number = 30, period: string = 'day') =>
     api.get<Record<string, any[]>>(`/sentiment/comparison_historical/?symbols=${symbols.join(',')}&limit=${limit}&period=${period}`),
   searchStocks: (q: string) => api.get<any[]>('/sentiment/search/', { params: { q } }),
-  getAnalysis: (symbol: string) => api.get<any>(`/sentiment/analysis/?symbol=${symbol}`),
+  getAnalysis: (symbol: string) => api.get<any>('/sentiment/analysis/', { params: { symbol }, timeout: 60000 }),
   getHistoryBacktest: (symbol: string) => api.get<any>(`/sentiment/history-backtest/?symbol=${symbol}`),
   getQualityAnalysis: (symbol: string, includeShareholder: boolean = true) =>
     api.get<any>(

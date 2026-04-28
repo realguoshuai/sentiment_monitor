@@ -1,190 +1,52 @@
 # Sentiment Monitor
 
-面向 A 股研究场景的本地分析工作台，聚合了实时行情、舆情采集、条件选股、深度估值、历史回测和财务溯源能力。项目当前已经从最初的“舆情看板”扩展成一套可直接用于个股研究的前后端应用。
+面向 A 股个股研究的本地分析工作台，聚合实时行情、舆情采集、条件选股、深度估值、历史回测和财务质量分析。项目同时提供浏览器开发模式和 Windows 桌面安装包。
 
-## 项目展示
+## 主要功能
 
-| 首页看板 | 对比分析 | 深度分析 |
-| --- | --- | --- |
-| ![首页看板](docs/screenshots/QQ图片20260327161155.png) | ![对比分析](docs/screenshots/QQ图片20260327161107.png) | ![深度分析](docs/screenshots/QQ图片20260327161212.png) |
+- 首页看板：监控股票池、实时价格、PE/PB、股息率、情绪分数、新闻/研报/公告摘要。
+- 监控配置：支持搜索添加股票，维护行业和同行代码。
+- 个股详情：查看单只股票的舆情、公告、研报和新闻。
+- 深度分析：估值分位、F-Score、合理价值区间、投资 thesis、同行横向对比。
+- 股价对比：多只股票实时价格、历史价格和估值序列对比。
+- 条件选股：基于本地 SQLite 快照筛选 PB、PE、ROE、ROI、股息率、市值等指标。
+- 财务质量：现金流、资本配置、经营稳定性、股东人数和财务质量矩阵。
+- 桌面端：Electron + Python 后端打包，支持安装版和便携版。
+- 更新与快速开始：首次打开当前版本时显示更新日志和使用教程，也可从首页右上角再次打开。
 
-## 当前能力
+## 桌面版分发
 
-### 首页看板
-- 监控股票池增删改查
-- 新增标的后自动触发单股舆情采集
-- 新标的在采集完成前会以“待采集”状态先展示在首页
-- 实时价格、PE、PB、股息率、市值快照
-- 最新新闻、研报、公告与情绪标签
-
-### 个股详情
-- 单只股票舆情明细
-- 公告、研报、新闻分组展示
-- 从首页直接跳转研究链路
-
-### 对比分析
-- 多标的实时价格对比
-- 历史价格与估值序列对比
-- 支持最新价与分时视角
-
-### 条件选股
-- 基于 SQLite 本地快照做全市场筛选
-- 支持 `PB / PE / ROE / ROI / 股息率 / 总市值` 组合过滤
-- 结果支持排序、快速加入监控和跳转分析
-- 页面改造成浅色“研究工作台”布局，强化候选池可读性
-- 默认可剔除异常估值样本，也可手动纳入
-
-### 深度分析
-- 10 年历史分位矩阵：`PE / PB / ROI / 股息率`
-- `F-Score` 财务安全性排雷
-- 估值结论层：合理价值区间、折价/溢价、安全边际、预期年化回报
-- 多模型估值：`ROE-PB` 锚点、盈利能力估值、股东自由现金流估值
-- 同行与行业横向对比
-- Investment Thesis：买入理由、关键假设、风险清单、复核触发器
-- 新增“上次缓存结果优先返回，后台再刷新”机制，减少深度分析页等待时间
-
-### 财务溯源
-- 股价与股东人数对比图置顶展示
-- 现金流质量矩阵：`CFO / FCF / CFO转净利 / FCF转净利 / Capex / FCF收益率`
-- 资本配置分析：再投资率、留存率、股本变动、BVPS 增长等
-- 经营稳定性分析：收入、利润率、ROE/ROIC 代理波动与周期标签
-- 杜邦 ROE 拆解、盈利护城河追踪、股东回报矩阵
-
-### 历史回测
-- 个股历史估值回放
-- 收益拆解
-- 信号相关性分析
-
-### 监控配置
-- 支持为监控标的维护行业和同行代码
-- 深度分析页会优先使用行业与同行配置做横向估值对照
-
-## 最近更新
-
-- 桌面端应用启动性能大幅提升：PyInstaller 打包模式由 `--onefile` 切换为 `--onedir` 文件夹模式，消除了后台解压过程，实现 EXE 客户端“秒开”
-- 舆情采集增加后端状态同步与前端全局进度条反馈，提升长任务交互体验
-- 优化数据看板聚合逻辑：通过 ORM Subquery 重写 `latest()` 接口，彻底修复了多标的更新时间不一致导致的数据缺失 Bug
-- 优化长查询交互体验：在深度分析、历史回测等全屏 Loading 界面中统一增加“取消并返回主页”按钮，防止用户在等待中卡死
-- 桌面版打包链路完成：支持 `Setup` 安装包和 `Portable` 便携版
-- 桌面包内置前端产物并优先从 `app.asar/frontend-dist` 加载，避免便携版丢失 `frontend-dist`
-- Electron `file://` 场景下前端自动切换 Hash 路由，修复打包后黑屏问题
-- 深度分析接口超时提升到 120 秒，并对本地文件缓存权限异常做降级处理
-- 新增股票后，后端会自动补采该股票的舆情数据
-- 首页支持展示“待采集”标的，不再只显示已有舆情快照的股票
-- 监控配置页支持行业与同行代码维护，供深度分析横向对比复用
-- 深度分析接口改为“优先返回上次缓存结果，后台异步刷新最新结果”
-- 选股页完成“研究工作台”重做，候选池和结果区优先展示
-- 前端 API 基地址统一为相对路径 `/api`
-- `start.bat` 调整为轻量启动：只启动前后端和浏览器，不再自动执行数据同步脚本
-- 项目展示图片已统一整理到 `docs/screenshots/`
-
-## 路线图
-
-- 价值分析后续规划见 [docs/plans/2026-04-16-value-analysis-roadmap.md](docs/plans/2026-04-16-value-analysis-roadmap.md)
-
-## 技术栈
-
-| 层 | 技术 |
-| --- | --- |
-| 后端 | Python 3.12+, Django 6.x, Django REST Framework, SQLite |
-| 前端 | Vue 3, TypeScript 5.9, Vite, Pinia, Vue Router, ECharts |
-| 桌面版 | Electron 原型桌面壳 |
-| 数据源 | 腾讯财经、东方财富、AkShare、新浪财经兜底 |
-| 缓存 | Django FileBasedCache + 文件快照缓存 |
-
-## 项目结构
+打包产物位于：
 
 ```text
-sentiment_monitor/
-├── backend/
-│   ├── api/                        # 核心业务服务、REST API、缓存、测试、管理命令
-│   ├── analyzer/                   # 分析辅助模块
-│   ├── collector/                  # 舆情与行情采集逻辑
-│   ├── scripts/                    # 诊断、修复、验证等工具脚本
-│   ├── scratch/                    # 临时调试脚本与输出
-│   │   └── debug_outputs/
-│   ├── cache_data/                 # Django 文件缓存目录
-│   ├── sentiment_monitor/          # Django 配置
-│   ├── manage.py
-│   ├── requirements.txt
-│   └── db.sqlite3
-├── docs/
-│   ├── plans/                      # 开发路线图与规划文档
-│   └── screenshots/                # README 展示图片
-├── desktop/                        # Electron 桌面壳原型
-├── frontend/
-│   ├── src/
-│   │   ├── api/                    # Axios 封装
-│   │   ├── components/             # 通用组件
-│   │   ├── composables/            # 组合式逻辑
-│   │   ├── lib/                    # ECharts 等基础封装
-│   │   ├── router/                 # 前端路由
-│   │   ├── stores/                 # Pinia 状态
-│   │   └── views/                  # Dashboard / Detail / Compare / Screener / Analysis / History / Quality
-│   ├── dist/                       # 前端构建产物
-│   ├── package.json
-│   └── vite.config.ts
-├── legacy/                         # 历史文件或旧实现
-├── start.bat                       # Windows 一键启动脚本
-└── README.md
+desktop/release/
 ```
 
-## 页面与路由
-
-| 页面 | 路由 | 说明 |
+| 文件 | 用途 | 建议 |
 | --- | --- | --- |
-| 首页看板 | `/` | 股票池、实时价格、舆情总览 |
-| 个股详情 | `/stock/:symbol` | 单股舆情明细 |
-| 对比分析 | `/compare` | 多标的实时/历史对比 |
-| 条件选股 | `/screener` | 基于 SQLite 快照的全市场筛选 |
-| 深度分析 | `/analysis/:symbol` | 分位、F-Score、估值、同行、Thesis |
-| 历史回测 | `/analysis/:symbol/history` | 历史回放与收益分析 |
-| 财务溯源 | `/quality/:symbol` | 现金流、资本配置、稳定性、股东人数 |
+| `SentimentMonitor-Setup-0.1.0-x64.exe` | Windows 安装包 | 推荐发给普通用户 |
+| `SentimentMonitor-Portable-0.1.0-x64.exe` | 免安装便携版 | 适合临时测试 |
+| `SentimentMonitor-Setup-0.1.0-x64.exe.blockmap` | 自动更新差分文件 | 当前无需单独分发 |
+| `win-unpacked/` | 解包后的调试目录 | 仅用于本机调试 |
 
-## 核心接口
+说明：
 
-### 股票与采集
-- `GET /api/stocks/`
-- `POST /api/stocks/`
-- `PATCH /api/stocks/{symbol}/`
-- `DELETE /api/stocks/{symbol}/`
-- `POST /api/collect/`
-
-### 行情与舆情
-- `GET /api/sentiment/latest/`
-- `GET /api/sentiment/today/`
-- `GET /api/sentiment/realtime_prices/`
-- `GET /api/sentiment/search/?q=...`
-- `GET /api/sentiment/comparison_realtime/?symbols=...&type=last|minute`
-- `GET /api/sentiment/comparison_historical/?symbols=...&limit=30&period=day`
-
-### 研究分析
-- `GET /api/sentiment/analysis/?symbol=SZ000001`
-- `GET /api/sentiment/history-backtest/?symbol=SZ000001`
-- `GET /api/sentiment/screener/?pb_max=1.5&pe_max=15&roe_min=12&dividend_yield_min=4&sort_by=pb&sort_order=asc`
-- `POST /api/sentiment/screener/refresh/`
-- `GET /api/sentiment/quality/?symbol=SZ000001&include_shareholder=1`
-- `GET /api/sentiment/quality/shareholder-structure/?symbol=SZ000001`
-- `POST /api/sentiment/quality/refresh/`
+- 安装版启动速度通常优于便携版。
+- 便携版启动前会先自解压，且可能被 Windows Defender 扫描，因此首次打开可能较慢。
+- 未签名 exe 可能触发 Windows 安全提示。
+- 桌面端默认在本机 `127.0.0.1:8000` 启动内置后端。
 
 ## 启动方式
 
-### 方式 1：Windows 一键启动
+### Windows 一键启动
 
 ```powershell
 start.bat
 ```
 
-脚本会依次执行：
+脚本会启动 Django 后端、Vite 前端，并自动打开浏览器。
 
-1. 启动 Uvicorn 后端，默认地址 `http://127.0.0.1:8000`
-2. 启动 Vite 前端，默认地址 `http://localhost:5173`
-3. 自动打开浏览器
-4. 保留非阻塞缓存预热，不阻塞前端打开
-
-### 方式 2：手动启动
-
-#### 1. 后端
+### 手动启动后端
 
 ```powershell
 cd backend
@@ -195,7 +57,7 @@ python manage.py migrate
 uvicorn sentiment_monitor.asgi:application --host 127.0.0.1 --port 8000
 ```
 
-#### 2. 前端
+### 手动启动前端
 
 ```powershell
 cd frontend
@@ -203,48 +65,117 @@ npm install
 npm run dev
 ```
 
-### 方式 3：Electron 桌面原型
+### 启动 Electron 开发模式
 
 ```powershell
 cd desktop
 npm install
-npm run generate:icon
 npm run dev
 ```
 
-说明：
+## 打包 Windows exe
 
-1. 会自动拉起 Django 后端、Vite 前端和 Electron 窗口
-2. 保留现有 `start.bat` 开发方式，不替换原来的浏览器入口
-3. 已支持 `npm run dist` 生成 Windows 安装版与便携版 exe
-
-### 方式 4：桌面版打包与分发
+推荐使用项目内置脚本：
 
 ```powershell
-cd desktop
-npm install
-npm run dist
+npm.cmd --prefix desktop run check
+backend\venv\Scripts\python.exe backend\manage.py check
+npm.cmd --prefix desktop run dist
 ```
 
-生成产物位于 `desktop/release/`：
+打包完成后检查产物：
 
-| 文件 | 用途 | 建议 |
-| --- | --- | --- |
-| `SentimentMonitor-Setup-0.1.0-x64.exe` | Windows 安装包 | 推荐发给普通用户 |
-| `SentimentMonitor-Portable-0.1.0-x64.exe` | 免安装便携版 | 适合临时测试或不想安装的电脑 |
-| `SentimentMonitor-Setup-0.1.0-x64.exe.blockmap` | 自动更新差分文件 | 当前不用单独分发 |
-| `win-unpacked/` | 解包后的调试目录 | 仅用于本机调试 |
+```powershell
+Get-ChildItem -Path desktop\release | Select-Object Name,Length,LastWriteTime
+```
 
-注意：
+打包会临时生成 `frontend/dist` 和 `backend/dist/SentimentMonitor-runtime`。这些是构建中间产物，不应提交到 Git。
 
-- 便携版首次启动会先解压到临时目录，启动速度可能慢于安装版
-- 未签名 exe 可能被 Windows Defender 或企业安全策略提示风险
-- 桌面版默认使用 `127.0.0.1:8000` 启动内置后端，如果该端口被占用，需要先关闭占用进程
-- 如果从终端启动 Electron 包，请确认没有设置 `ELECTRON_RUN_AS_NODE=1`
+清理建议：
+
+```powershell
+git restore frontend/dist
+git clean -fd -- backend/dist/SentimentMonitor-runtime frontend/dist
+git status --short --untracked-files=all
+```
+
+本机已创建可复用技能 `python-exe-packager`，后续可直接让 Codex 按该流程打包 exe。
+
+## 项目结构
+
+```text
+sentiment_monitor/
+├─ backend/
+│  ├─ api/                       # REST API、业务服务、缓存、测试、管理命令
+│  ├─ analyzer/                  # 分析辅助模块
+│  ├─ collector/                 # 新闻、公告、研报、行情采集
+│  ├─ sentiment_monitor/         # Django 配置
+│  ├─ desktop_backend.py         # 桌面版后端启动入口
+│  ├─ desktop_backend.spec       # PyInstaller 打包配置
+│  ├─ manage.py
+│  ├─ requirements.txt
+│  └─ db.sqlite3
+├─ desktop/                      # Electron 桌面壳和打包脚本
+├─ frontend/
+│  ├─ src/
+│  │  ├─ api/                    # Axios API 封装
+│  │  ├─ components/             # 通用组件
+│  │  ├─ router/                 # Vue Router
+│  │  ├─ stores/                 # Pinia 状态
+│  │  └─ views/                  # 页面
+│  ├─ package.json
+│  └─ vite.config.ts
+├─ docs/
+├─ legacy/
+├─ start.bat
+└─ README.md
+```
+
+## 核心接口
+
+### 股票与采集
+
+- `GET /api/stocks/`
+- `POST /api/stocks/`
+- `PATCH /api/stocks/{symbol}/`
+- `DELETE /api/stocks/{symbol}/`
+- `POST /api/collect/`
+
+### 行情与舆情
+
+- `GET /api/sentiment/latest/`
+- `GET /api/sentiment/today/`
+- `GET /api/sentiment/realtime_prices/`
+- `GET /api/sentiment/search/?q=...`
+- `GET /api/sentiment/comparison_realtime/?symbols=...&type=last|minute`
+- `GET /api/sentiment/comparison_historical/?symbols=...&limit=30&period=day`
+
+### 研究分析
+
+- `GET /api/sentiment/analysis/?symbol=SZ000001`
+- `GET /api/sentiment/history-backtest/?symbol=SZ000001`
+- `GET /api/sentiment/quality/?symbol=SZ000001&include_shareholder=1`
+- `GET /api/sentiment/quality/shareholder-structure/?symbol=SZ000001`
+- `GET /api/sentiment/screener/?pb_max=1.5&pe_max=15&roe_min=12`
+- `POST /api/sentiment/screener/refresh/`
+
+## 最近更新
+
+- 桌面端支持先打开前端页面，再后台等待 Python 后端服务启动。
+- 前端在桌面 `file://` 环境下自动使用 `http://127.0.0.1:8000/api`。
+- Vite 打包使用 `base: './'`，Electron 文件加载使用 Hash 路由，修复打包后黑屏。
+- 新增启动遮罩，避免安装包打开时短暂出现无样式布局。
+- 新增「更新与快速开始」弹窗，并按版本记录是否已读。
+- 修复新增股票后旧股票看板数据消失的问题。
+- 修复 `/api/sentiment/{symbol}/` 多条历史记录导致详情接口异常的问题。
+- `latest` 接口改为每只已关注股票各取自己的最新快照。
+- 桌面端后端运行时数据库和缓存迁移到用户目录，避免写入安装目录。
+- PyInstaller 输出目录改为 `backend/dist/SentimentMonitor-runtime`，规避旧目录权限锁问题。
+- 支持生成 `Setup` 安装包和 `Portable` 便携版。
 
 ## 数据同步
 
-### 一次性全量同步
+全量同步：
 
 ```powershell
 cd backend
@@ -252,14 +183,7 @@ cd backend
 python manage.py sync_all_data
 ```
 
-可选参数：
-
-- `--skip-collector`：跳过监控池新闻/公告/研报采集
-- `--skip-screener`：跳过全市场选股快照刷新
-- `--skip-quality`：跳过财务质量缓存预热
-- `--with-shareholder`：财务预热时一并拉取股东结构数据
-
-### 只执行舆情采集
+只执行监控池舆情采集：
 
 ```powershell
 cd backend
@@ -267,50 +191,58 @@ cd backend
 python manage.py run_collector
 ```
 
-## 前后端联调说明
+常用参数：
 
-前端 API 统一走相对路径 `/api`。
+- `--skip-collector`：跳过监控池新闻/公告/研报采集。
+- `--skip-screener`：跳过全市场选股快照刷新。
+- `--skip-quality`：跳过财务质量缓存预热。
+- `--with-shareholder`：财务预热时拉取股东结构数据。
 
-- 开发环境下，Vite 通过 [frontend/vite.config.ts](frontend/vite.config.ts) 将 `/api` 代理到 `http://127.0.0.1:8000`
-- 部署环境下，建议由同域名反向代理将 `/api` 转发给 Django
+## 缓存与性能
 
-这样前端不再需要手动拼接主机名或端口。
+- 深度分析缓存会优先返回已有结果，后台再刷新最新结果。
+- 条件选股使用本地 SQLite 快照，避免每次筛选都拉取全市场数据。
+- 财务质量和股东结构分开缓存，减少整页阻塞。
+- 桌面打包模式默认关闭启动预热，减少打开时等待。
+- 首次冷启动、缓存失效或外部数据源较慢时，请等待后台加载完成。
 
-另外，桌面模式下如果页面从 `file://` 打开，前端会自动回落到 `http://127.0.0.1:8000/api`，方便 Electron 直接加载本地构建产物。
-桌面打包模式还会把数据库与缓存迁移到用户 `userData` 目录，避免写入安装目录。
-便携版还会把前端构建产物内嵌到 `app.asar/frontend-dist`，并保留 `resources/frontend-dist` 作为兼容兜底。
+## 常见问题
 
-## 缓存与性能策略
+### 打开提示 `Frontend build not found`
 
-项目当前针对慢路径做了几层拆分：
+请重新打包：
 
-- 深度分析：`analysis_v6_*` 缓存 12 小时；如果新缓存失效但旧缓存仍在，会先返回旧结果，再后台刷新
-- 选股页：全市场快照写入 SQLite，本地筛选只查询最新快照，不重复拉取全市场数据
-- 财务溯源：核心财务数据和股东结构图分开缓存，减少整页阻塞
-- 启动预热：应用启动后后台线程会预热常用历史数据、深度分析和历史回测缓存
-- 文件缓存目录位于 `backend/cache_data/`
+```powershell
+npm.cmd --prefix desktop run dist
+```
 
-需要注意：
+### 打开后黑屏
 
-- 首次冷启动或缓存完全失效时，AkShare 与东方财富相关链路仍可能较慢
-- Windows 下如果文件缓存出现偶发权限问题，接口通常会降级为“缓存写失败但继续返回结果”
-- 深度分析首次计算可能需要几十秒，前端会给该接口保留更长超时时间
+请确认使用最新安装包。桌面包在 `file://` 场景下应使用 Hash 路由，地址类似：
 
-## 数据源说明
+```text
+file:///.../resources/app.asar/frontend-dist/index.html#/
+```
 
-### 腾讯财经
-- 实时价格
-- 分时数据
-- 历史 K 线
+### 便携版启动慢
 
-### 东方财富 / AkShare / 新浪兜底
-- A 股快照搜索
-- 新闻、研报、公告
-- 财务报表
-- 分红数据
-- 股东户数
+便携版需要先自解压到临时目录，还可能被系统安全软件扫描。正式分发建议使用 `SentimentMonitor-Setup-0.1.0-x64.exe`。
 
-## 测试与构建
+### 新增股票后旧股票不见了
+
+该问题已修复。`latest` 接口现在按每只股票返回各自最新数据，不再使用单一全局日期过滤。
+
+### 股价对比页面无数据
+
+该问题已随 `latest` 接口修复。对比页面会基于最新的监控股票数据提供候选标的。
+
+## 测试与检查
+
+后端检查：
+
+```powershell
+backend\venv\Scripts\python.exe backend\manage.py check
+```
 
 后端测试：
 
@@ -322,69 +254,28 @@ python manage.py test api.tests api.tests_analysis_cache api.tests_sync_command
 前端构建：
 
 ```powershell
-cd frontend
-npm run build
-```
-
-前端类型检查：
-
-```powershell
-cd frontend
-npm run type-check
-```
-
-桌面打包：
-
-```powershell
-cd desktop
-npm run dist
+npm.cmd --prefix frontend run build
 ```
 
 桌面脚本检查：
 
 ```powershell
-cd desktop
-npm run check
+npm.cmd --prefix desktop run check
 ```
 
-## 桌面版排障
-
-### 打开后提示 `Frontend build not found`
-
-请重新执行：
+桌面打包：
 
 ```powershell
-cd desktop
-npm run dist
+npm.cmd --prefix desktop run dist
 ```
-
-新版本会优先从 `app.asar/frontend-dist/index.html` 加载前端，通常不再依赖外部 `resources/frontend-dist` 是否完整。
-
-### 打开后黑屏
-
-请确认使用的是最新打包产物。桌面包在 `file://` 环境下使用 Hash 路由，地址应类似：
-
-```text
-file:///.../resources/app.asar/frontend-dist/index.html#/
-```
-
-### 深度分析获取后无数据
-
-首次深度分析会拉取历史价格、财务、分红与同行数据，可能需要几十秒。当前接口已经提升超时并对文件缓存权限问题做了容错；如果仍失败，可关闭应用后重新打开，或清理用户目录下的 `Sentiment Monitor/backend-runtime/cache_data`。
 
 ## 已知事项
 
-- 财务溯源页首次打开某只股票时，外部数据源可能仍然较慢
-- 当前前端构建仍可能出现 Vite 大 chunk 警告，但不影响运行
-- `backend/scripts/` 与 `backend/scratch/` 中仍保留了较多调试脚本，后续可以继续分层整理
+- 当前 exe 未签名，可能被 Windows 安全策略提示风险。
+- Vite 构建可能提示 ECharts chunk 较大，不影响运行。
+- Electron + Python + Django + pandas/numpy/akshare/playwright 的组合会让安装包体积较大。
+- 外部数据源偶发慢响应或限流时，部分分析接口可能需要更久。
 
-## 开发建议
+## 许可
 
-- 功能主逻辑优先收敛到 `backend/api/` 和 `frontend/src/`
-- 诊断、修复、验证脚本尽量放到 `backend/scripts/`
-- 临时调试输出放到 `backend/scratch/debug_outputs/`
-- 新增慢查询或慢抓取路径时，优先考虑缓存拆分，而不是继续放大单次页面请求
-
-## 许可证
-
-当前仓库未单独声明开源许可证；如果需要公开发布，建议补充 `LICENSE`。
+当前仓库未单独声明开源许可证。如需公开发布，建议补充 `LICENSE`。

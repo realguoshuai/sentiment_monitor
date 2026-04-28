@@ -13,11 +13,10 @@ SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-default-key-fo
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DJANGO_DEBUG', 'True') == 'True'
+IS_DESKTOP = os.environ.get('SENTIMENT_MONITOR_DESKTOP') == '1'
 
 
-# 从环境变量读取，默认为 '127.0.0.1,localhost'
-# ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost').split(',')
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost').split(',')
 
 # Application definition
 INSTALLED_APPS = [
@@ -107,11 +106,13 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Caching Configuration
+cache_dir = Path(os.getenv('DJANGO_CACHE_DIR', str(BASE_DIR / 'cache_data')))
+
 CACHES = {
     'default': {
         'BACKEND': 'django.core.cache.backends.filebased.FileBasedCache',
-        'LOCATION': BASE_DIR / 'cache_data',
-        'TIMEOUT': 43200,  # 默认 12 小时 (历史数据变化极慢)
+        'LOCATION': cache_dir,
+        'TIMEOUT': 43200,
         'OPTIONS': {
             'MAX_ENTRIES': 5000
         }
@@ -130,7 +131,11 @@ REST_FRAMEWORK = {
 }
 
 # CORS
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = DEBUG or IS_DESKTOP
+CORS_ALLOWED_ORIGINS = os.environ.get(
+    'DJANGO_CORS_ALLOWED_ORIGINS',
+    'http://127.0.0.1:5173,http://localhost:5173',
+).split(',')
 CORS_ALLOW_CREDENTIALS = True
 
 # Custom settings

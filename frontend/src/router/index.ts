@@ -1,7 +1,12 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHashHistory, createWebHistory } from 'vue-router'
+
+const history =
+  typeof window !== 'undefined' && window.location.protocol === 'file:'
+    ? createWebHashHistory()
+    : createWebHistory(import.meta.env.BASE_URL)
 
 const router = createRouter({
-  history: createWebHistory(import.meta.env.BASE_URL),
+  history,
   routes: [
     {
       path: '/',

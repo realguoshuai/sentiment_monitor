@@ -8,7 +8,7 @@ const desktopDir = path.join(repoRoot, 'desktop');
 const frontendDistIndex = path.join(frontendDir, 'dist', 'index.html');
 const desktopFrontendDist = path.join(desktopDir, 'frontend-dist');
 const desktopFrontendDistIndex = path.join(desktopFrontendDist, 'index.html');
-const backendExe = path.join(repoRoot, 'backend', 'dist', 'SentimentMonitor', 'SentimentMonitor.exe');
+const backendExe = path.join(repoRoot, 'backend', 'dist', 'SentimentMonitor-runtime', 'SentimentMonitor.exe');
 
 function run(command, args, cwd) {
   const result = spawnSync(command, args, {

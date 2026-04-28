@@ -12,6 +12,38 @@ export const useSentimentStore = defineStore('sentiment', () => {
   const error = ref<string | null>(null)
   const lastUpdated = ref<Date | null>(null)
   const realtimePrices = ref<Record<string, RealtimePrice>>({})
+  const backendStarting = ref(false)
+
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+  const isStartupNetworkError = (e: any) => {
+    const message = String(e?.message || '').toLowerCase()
+    const code = String(e?.code || '').toLowerCase()
+    return !e?.response || code === 'econnaborted' || message.includes('network error') || message.includes('timeout')
+  }
+
+  async function retryDuringStartup<T>(request: () => Promise<T>, attempts = 45): Promise<T> {
+    let lastError: any = null
+
+    for (let i = 0; i < attempts; i += 1) {
+      try {
+        const result = await request()
+        backendStarting.value = false
+        return result
+      } catch (e) {
+        lastError = e
+        if (!isStartupNetworkError(e) || i === attempts - 1) {
+          backendStarting.value = false
+          throw e
+        }
+        backendStarting.value = true
+        await sleep(1000)
+      }
+    }
+
+    backendStarting.value = false
+    throw lastError
+  }
 
   // Getters
   const calculateROI = (symbol: string, pe: number, pb: number) => {
@@ -90,10 +122,11 @@ export const useSentimentStore = defineStore('sentiment', () => {
   // Actions
   async function fetchStocks() {
     try {
-      const response = await stockApi.getStocks()
+      const response = await retryDuringStartup(() => stockApi.getStocks())
       stocks.value = response.data
     } catch (e) {
       console.error('Failed to fetch stocks:', e)
+      error.value = '本地服务启动中，请稍候刷新'
     }
   }
 
@@ -137,12 +170,11 @@ export const useSentimentStore = defineStore('sentiment', () => {
     error.value = null
     
     try {
-      const response = await stockApi.getLatestSentiment()
+      const response = await retryDuringStartup(() => stockApi.getLatestSentiment())
       sentimentData.value = response.data
       lastUpdated.value = new Date()
     } catch (e: any) {
       error.value = e.response?.data?.message || '获取数据失败'
-      sentimentData.value = []
     } finally {
       loading.value = false
     }
@@ -164,7 +196,7 @@ export const useSentimentStore = defineStore('sentiment', () => {
 
   async function fetchRealtimePrices() {
     try {
-      const response = await stockApi.getRealtimePrices()
+      const response = await retryDuringStartup(() => stockApi.getRealtimePrices(), 10)
       realtimePrices.value = response.data
     } catch (e) {
       console.error('Failed to fetch realtime prices:', e)
@@ -183,6 +215,7 @@ export const useSentimentStore = defineStore('sentiment', () => {
     error,
     lastUpdated,
     realtimePrices,
+    backendStarting,
     calculateROI,
     roiSortedStocks,
     sortedStocks,

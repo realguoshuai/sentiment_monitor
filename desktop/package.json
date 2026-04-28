@@ -39,7 +39,7 @@
         "to": "frontend-dist"
       },
       {
-        "from": "../backend/dist/SentimentMonitor",
+        "from": "../backend/dist/SentimentMonitor-runtime",
         "to": "backend"
       },
       {
