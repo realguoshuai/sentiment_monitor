@@ -1,4 +1,4 @@
-﻿# Sentiment Monitor
+# Sentiment Monitor
 
 面向 A 股研究场景的本地分析工作台，聚合了实时行情、舆情采集、条件选股、深度估值、历史回测和财务溯源能力。项目当前已经从最初的“舆情看板”扩展成一套可直接用于个股研究的前后端应用。
 
@@ -61,6 +61,14 @@
 
 ## 最近更新
 
+- 桌面端应用启动性能大幅提升：PyInstaller 打包模式由 `--onefile` 切换为 `--onedir` 文件夹模式，消除了后台解压过程，实现 EXE 客户端“秒开”
+- 舆情采集增加后端状态同步与前端全局进度条反馈，提升长任务交互体验
+- 优化数据看板聚合逻辑：通过 ORM Subquery 重写 `latest()` 接口，彻底修复了多标的更新时间不一致导致的数据缺失 Bug
+- 优化长查询交互体验：在深度分析、历史回测等全屏 Loading 界面中统一增加“取消并返回主页”按钮，防止用户在等待中卡死
+- 桌面版打包链路完成：支持 `Setup` 安装包和 `Portable` 便携版
+- 桌面包内置前端产物并优先从 `app.asar/frontend-dist` 加载，避免便携版丢失 `frontend-dist`
+- Electron `file://` 场景下前端自动切换 Hash 路由，修复打包后黑屏问题
+- 深度分析接口超时提升到 120 秒，并对本地文件缓存权限异常做降级处理
 - 新增股票后，后端会自动补采该股票的舆情数据
 - 首页支持展示“待采集”标的，不再只显示已有舆情快照的股票
 - 监控配置页支持行业与同行代码维护，供深度分析横向对比复用
@@ -78,8 +86,9 @@
 
 | 层 | 技术 |
 | --- | --- |
-| 后端 | Django 4.x, Django REST Framework, SQLite |
-| 前端 | Vue 3, TypeScript, Vite, Pinia, Vue Router, ECharts |
+| 后端 | Python 3.12+, Django 6.x, Django REST Framework, SQLite |
+| 前端 | Vue 3, TypeScript 5.9, Vite, Pinia, Vue Router, ECharts |
+| 桌面版 | Electron 原型桌面壳 |
 | 数据源 | 腾讯财经、东方财富、AkShare、新浪财经兜底 |
 | 缓存 | Django FileBasedCache + 文件快照缓存 |
 
@@ -102,6 +111,7 @@ sentiment_monitor/
 ├── docs/
 │   ├── plans/                      # 开发路线图与规划文档
 │   └── screenshots/                # README 展示图片
+├── desktop/                        # Electron 桌面壳原型
 ├── frontend/
 │   ├── src/
 │   │   ├── api/                    # Axios 封装
@@ -178,7 +188,7 @@ start.bat
 
 ```powershell
 cd backend
-python -m venv venv
+py -3.12 -m venv venv
 .\venv\Scripts\activate
 pip install -r requirements.txt
 python manage.py migrate
@@ -192,6 +202,45 @@ cd frontend
 npm install
 npm run dev
 ```
+
+### 方式 3：Electron 桌面原型
+
+```powershell
+cd desktop
+npm install
+npm run generate:icon
+npm run dev
+```
+
+说明：
+
+1. 会自动拉起 Django 后端、Vite 前端和 Electron 窗口
+2. 保留现有 `start.bat` 开发方式，不替换原来的浏览器入口
+3. 已支持 `npm run dist` 生成 Windows 安装版与便携版 exe
+
+### 方式 4：桌面版打包与分发
+
+```powershell
+cd desktop
+npm install
+npm run dist
+```
+
+生成产物位于 `desktop/release/`：
+
+| 文件 | 用途 | 建议 |
+| --- | --- | --- |
+| `SentimentMonitor-Setup-0.1.0-x64.exe` | Windows 安装包 | 推荐发给普通用户 |
+| `SentimentMonitor-Portable-0.1.0-x64.exe` | 免安装便携版 | 适合临时测试或不想安装的电脑 |
+| `SentimentMonitor-Setup-0.1.0-x64.exe.blockmap` | 自动更新差分文件 | 当前不用单独分发 |
+| `win-unpacked/` | 解包后的调试目录 | 仅用于本机调试 |
+
+注意：
+
+- 便携版首次启动会先解压到临时目录，启动速度可能慢于安装版
+- 未签名 exe 可能被 Windows Defender 或企业安全策略提示风险
+- 桌面版默认使用 `127.0.0.1:8000` 启动内置后端，如果该端口被占用，需要先关闭占用进程
+- 如果从终端启动 Electron 包，请确认没有设置 `ELECTRON_RUN_AS_NODE=1`
 
 ## 数据同步
 
@@ -227,6 +276,10 @@ python manage.py run_collector
 
 这样前端不再需要手动拼接主机名或端口。
 
+另外，桌面模式下如果页面从 `file://` 打开，前端会自动回落到 `http://127.0.0.1:8000/api`，方便 Electron 直接加载本地构建产物。
+桌面打包模式还会把数据库与缓存迁移到用户 `userData` 目录，避免写入安装目录。
+便携版还会把前端构建产物内嵌到 `app.asar/frontend-dist`，并保留 `resources/frontend-dist` 作为兼容兜底。
+
 ## 缓存与性能策略
 
 项目当前针对慢路径做了几层拆分：
@@ -241,6 +294,7 @@ python manage.py run_collector
 
 - 首次冷启动或缓存完全失效时，AkShare 与东方财富相关链路仍可能较慢
 - Windows 下如果文件缓存出现偶发权限问题，接口通常会降级为“缓存写失败但继续返回结果”
+- 深度分析首次计算可能需要几十秒，前端会给该接口保留更长超时时间
 
 ## 数据源说明
 
@@ -271,6 +325,52 @@ python manage.py test api.tests api.tests_analysis_cache api.tests_sync_command
 cd frontend
 npm run build
 ```
+
+前端类型检查：
+
+```powershell
+cd frontend
+npm run type-check
+```
+
+桌面打包：
+
+```powershell
+cd desktop
+npm run dist
+```
+
+桌面脚本检查：
+
+```powershell
+cd desktop
+npm run check
+```
+
+## 桌面版排障
+
+### 打开后提示 `Frontend build not found`
+
+请重新执行：
+
+```powershell
+cd desktop
+npm run dist
+```
+
+新版本会优先从 `app.asar/frontend-dist/index.html` 加载前端，通常不再依赖外部 `resources/frontend-dist` 是否完整。
+
+### 打开后黑屏
+
+请确认使用的是最新打包产物。桌面包在 `file://` 环境下使用 Hash 路由，地址应类似：
+
+```text
+file:///.../resources/app.asar/frontend-dist/index.html#/
+```
+
+### 深度分析获取后无数据
+
+首次深度分析会拉取历史价格、财务、分红与同行数据，可能需要几十秒。当前接口已经提升超时并对文件缓存权限问题做了容错；如果仍失败，可关闭应用后重新打开，或清理用户目录下的 `Sentiment Monitor/backend-runtime/cache_data`。
 
 ## 已知事项
 
