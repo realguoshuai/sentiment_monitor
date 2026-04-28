@@ -6,7 +6,11 @@ __pycache__/
 .idea/
 .vscode/
 backend/venv/
+backend/build/
 frontend/node_modules/
+desktop/node_modules/
+desktop/frontend-dist/
+desktop/release/
 backend/cache_data/
 *.djcache
 *.sqlite3
