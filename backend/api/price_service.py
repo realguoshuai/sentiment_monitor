@@ -12,6 +12,8 @@ from .cache_manager import CacheManager
 logger = logging.getLogger('api')
 
 class PriceService:
+    REALTIME_CACHE_KEY = "realtime_prices_last_success_v1"
+    REALTIME_CACHE_TTL = 30 * 60
     HEADERS = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Referer': 'https://gu.qq.com/',
@@ -56,7 +58,13 @@ class PriceService:
         import pandas as pd
 
         if isinstance(value, pd.DataFrame):
-            return value.to_dict(orient='records')
+            normalized = value.copy()
+            for column in ['date', 'time']:
+                if column in normalized.columns:
+                    normalized[column] = normalized[column].apply(
+                        lambda item: item.strftime('%Y-%m-%d') if hasattr(item, 'strftime') else item
+                    )
+            return normalized.to_dict(orient='records')
         return value
 
     @classmethod
@@ -106,13 +114,97 @@ class PriceService:
             pb = float(pb) if pd.notnull(pb) else 0.0
 
             result[fixed] = {
+                'name': fixed,
                 'price': price,
+                'change_amount': 0.0,
+                'change_percent': 0.0,
                 'market_cap': market_cap,
                 'pe': pe,
                 'pb': pb,
+                'dividend_yield': 0.0,
                 'total_shares': (market_cap / price) if price > 0 and market_cap > 0 else 0.0,
+                'time': datetime.now().strftime('%Y%m%d%H%M%S'),
             }
 
+        return result
+
+    @classmethod
+    def _normalize_realtime_payload(cls, symbol, payload, *, source='fallback'):
+        data = dict(payload or {})
+        fixed = cls._fix_symbol(symbol)
+        return {
+            'name': data.get('name') or fixed,
+            'price': cls._safe_float(data.get('price')),
+            'change_amount': cls._safe_float(data.get('change_amount')),
+            'change_percent': cls._safe_float(data.get('change_percent')),
+            'pe': cls._safe_float(data.get('pe')),
+            'pb': cls._safe_float(data.get('pb')),
+            'dividend_yield': cls._safe_float(data.get('dividend_yield')),
+            'market_cap': cls._safe_float(data.get('market_cap')),
+            'total_shares': cls._safe_float(data.get('total_shares')),
+            'time': str(data.get('time') or datetime.now().strftime('%Y%m%d%H%M%S')),
+            'source': data.get('source') or source,
+        }
+
+    @staticmethod
+    def _safe_float(value):
+        try:
+            return float(value or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @classmethod
+    def _merge_realtime_payload(cls, symbol, primary, fallback, *, source='fallback'):
+        merged = cls._normalize_realtime_payload(symbol, primary, source=source)
+        fallback_payload = cls._normalize_realtime_payload(symbol, fallback, source=source)
+        for field in ['price', 'market_cap', 'total_shares', 'pe', 'pb', 'dividend_yield']:
+            if merged.get(field, 0) <= 0 < fallback_payload.get(field, 0):
+                merged[field] = fallback_payload[field]
+        if not merged.get('name') or merged['name'] == cls._fix_symbol(symbol):
+            merged['name'] = fallback_payload.get('name') or merged['name']
+        return merged
+
+    @classmethod
+    def _get_last_realtime_map(cls, symbols):
+        cached = cls._cache_get(cls.REALTIME_CACHE_KEY)
+        if not isinstance(cached, dict):
+            return {}
+
+        result = {}
+        for symbol in symbols:
+            fixed = cls._fix_symbol(symbol)
+            payload = cached.get(fixed)
+            if payload:
+                result[fixed] = cls._normalize_realtime_payload(fixed, payload, source='last_success')
+        return result
+
+    @classmethod
+    def _cache_realtime_success(cls, realtime_map):
+        if not realtime_map:
+            return
+
+        cached = cls._cache_get(cls.REALTIME_CACHE_KEY)
+        if not isinstance(cached, dict):
+            cached = {}
+
+        for symbol, payload in realtime_map.items():
+            cached[cls._fix_symbol(symbol)] = cls._normalize_realtime_payload(symbol, payload, source='tencent')
+
+        cls._cache_set(cls.REALTIME_CACHE_KEY, cached, cls.REALTIME_CACHE_TTL)
+
+    @classmethod
+    def _build_realtime_fallback(cls, symbols, spot_fallback=None):
+        spot_fallback = spot_fallback or cls._get_spot_snapshot_map(symbols)
+        last_success = cls._get_last_realtime_map(symbols)
+
+        result = {}
+        for symbol in symbols:
+            fixed = cls._fix_symbol(symbol)
+            primary = last_success.get(fixed) or spot_fallback.get(fixed)
+            fallback = spot_fallback.get(fixed) or last_success.get(fixed)
+            if primary or fallback:
+                source = 'last_success' if fixed in last_success else 'spot_snapshot'
+                result[fixed] = cls._merge_realtime_payload(fixed, primary, fallback, source=source)
         return result
 
     @classmethod
@@ -120,32 +212,30 @@ class PriceService:
         """获取腾讯实时行情 (批量)"""
         if not symbols:
             return {}
+
+        fixed_symbols = [cls._fix_symbol(s) for s in symbols]
         
         # 腾讯 API 要求小写前缀 (sz000423)
-        tencent_symbols = [s.lower() for s in symbols]
+        tencent_symbols = [s.lower() for s in fixed_symbols]
         url = f"http://qt.gtimg.cn/q={','.join(tencent_symbols)}"
         
         try:
             response = cls._session.get(url, timeout=5)
             response.encoding = 'gbk'
             rt_data = cls._parse_tencent_rt(response.text)
-            spot_fallback = cls._get_spot_snapshot_map(symbols)
+            spot_fallback = cls._get_spot_snapshot_map(fixed_symbols)
+            cached_fallback = cls._build_realtime_fallback(fixed_symbols, spot_fallback)
+
+            if not rt_data:
+                logger.warning("Tencent realtime returned no rows, using fallback data.")
+                return cached_fallback
             
             # 强化实时行情：使用 FundamentalService 替换腾讯接口中常常滞后的股息率
             from .fundamental_service import FundamentalService
             import pandas as pd
             for sym, data in rt_data.items():
-                fallback = spot_fallback.get(sym, {})
-                if data.get('price', 0) <= 0 and fallback.get('price', 0) > 0:
-                    data['price'] = fallback['price']
-                if data.get('market_cap', 0) <= 0 and fallback.get('market_cap', 0) > 0:
-                    data['market_cap'] = fallback['market_cap']
-                if data.get('total_shares', 0) <= 0 and fallback.get('total_shares', 0) > 0:
-                    data['total_shares'] = fallback['total_shares']
-                if data.get('pe', 0) <= 0 and fallback.get('pe', 0) > 0:
-                    data['pe'] = fallback['pe']
-                if data.get('pb', 0) <= 0 and fallback.get('pb', 0) > 0:
-                    data['pb'] = fallback['pb']
+                fallback = cached_fallback.get(sym) or spot_fallback.get(sym, {})
+                data.update(cls._merge_realtime_payload(sym, data, fallback, source='tencent'))
                 # 核心改进：解耦高耗时的 AkShare 股息计算
                 if fetch_fundamentals and data.get('price', 0) > 0:
                     try:
@@ -155,11 +245,16 @@ class PriceService:
                             data['dividend_yield'] = round((ltm_div_sum / data['price']) * 100, 2)
                     except Exception as div_e:
                         logger.warning(f"Secondary calculation failed for {sym}: {div_e}")
-                    
+
+            for fixed in fixed_symbols:
+                if fixed not in rt_data and fixed in cached_fallback:
+                    rt_data[fixed] = cached_fallback[fixed]
+
+            cls._cache_realtime_success(rt_data)
             return rt_data
         except Exception as e:
             logger.error(f"PriceService Realtime Error: {e}")
-            return {}
+            return cls._build_realtime_fallback(fixed_symbols)
 
     @classmethod
     def _parse_tencent_rt(cls, text):
@@ -200,6 +295,10 @@ class PriceService:
     def _historical_single_cache_key(cls, symbol, requested_period, period, limit):
         fixed_symbol = cls._fix_symbol(symbol)
         return f"hist_single_v1_{fixed_symbol}_{requested_period}_{period}_{limit}"
+
+    @classmethod
+    def _historical_single_stale_cache_key(cls, symbol, requested_period, period, limit):
+        return f"{cls._historical_single_cache_key(symbol, requested_period, period, limit)}_stale"
 
     @classmethod
     def _build_single_historical_data(cls, symbol, requested_period, period, limit, rt_data, spot_fallback):
@@ -326,13 +425,13 @@ class PriceService:
 
         norm_symbols = [cls._fix_symbol(s) for s in symbols]
         cache_key = f"hist_v9_{'_'.join(sorted(norm_symbols))}_{requested_period}_{period}_{limit}"
+        stale_cache_key = f"{cache_key}_stale"
         cached_data = cls._cache_get(cache_key)
         if cached_data is not None:
             return cached_data
 
-        rt_data = cls.get_realtime_price(norm_symbols)
-        spot_fallback = cls._get_spot_snapshot_map(norm_symbols)
         results = {}
+        missing_symbols = []
 
         for orig_symbol in symbols:
             single_cache_key = cls._historical_single_cache_key(orig_symbol, requested_period, period, limit)
@@ -341,7 +440,16 @@ class PriceService:
                 cached_history = cls._normalize_historical_cache_value(cached_history)
                 results[orig_symbol] = cached_history
                 continue
+            missing_symbols.append(orig_symbol)
 
+        rt_data = {}
+        spot_fallback = {}
+        if missing_symbols:
+            fixed_missing_symbols = [cls._fix_symbol(symbol) for symbol in missing_symbols]
+            rt_data = cls.get_realtime_price(fixed_missing_symbols)
+            spot_fallback = cls._get_spot_snapshot_map(fixed_missing_symbols)
+
+        for orig_symbol in missing_symbols:
             symbol = cls._fix_symbol(orig_symbol)
             try:
                 history = cls._build_single_historical_data(
@@ -358,14 +466,23 @@ class PriceService:
                     if period == 'day':
                         single_ttl = 3600 * 2
                     cls._cache_set(single_cache_key, history, single_ttl)
+                    cls._cache_set(cls._historical_single_stale_cache_key(orig_symbol, requested_period, period, limit), history, 7 * 24 * 3600)
             except Exception as e:
                 logger.error(f"PriceService Valuation Error for {symbol}: {e}")
+                stale_history = cls._cache_get(cls._historical_single_stale_cache_key(orig_symbol, requested_period, period, limit))
+                if stale_history is not None:
+                    results[orig_symbol] = cls._normalize_historical_cache_value(stale_history)
 
         if results and len(results) == len(symbols):
             ttl = 3600 * 12
             if period == 'day':
                 ttl = 3600 * 2
             cls._cache_set(cache_key, results, ttl)
+            cls._cache_set(stale_cache_key, results, 7 * 24 * 3600)
+        else:
+            stale_data = cls._cache_get(stale_cache_key)
+            if stale_data is not None:
+                return stale_data
         return results
 
     @classmethod
@@ -389,74 +506,39 @@ class PriceService:
             
     @classmethod
     def get_intraday_data(cls, symbols):
-        """获取分时数据 (含动态估值投影)"""
-        import pandas as pd
-        from .fundamental_service import FundamentalService
+        """获取当日分时价格数据。
+
+        The comparison frontend only needs minute price points for 1D Price mode
+        and derives intraday valuation projections from the latest realtime
+        metrics. Keeping this endpoint price-only avoids slow financial and
+        dividend fetches blocking the chart on cold startup.
+        """
         
         results = {}
-        rt_data = cls.get_realtime_price(symbols, fetch_fundamentals=False)
         
-        for idx, symbol in enumerate(symbols):
-            # no sleep
+        for symbol in symbols:
             symbol = cls._fix_symbol(symbol)
             s = symbol.lower()
             url = f"http://ifzq.gtimg.cn/appstock/app/minute/query?code={s}"
             
             try:
-                # 获取基础数据用于估值
-                df_fund = FundamentalService.get_ttm_fundamentals(symbol)
-                df_divs = FundamentalService.get_historical_dividends(symbol)
-                rt = rt_data.get(symbol.upper(), {})
-                total_shares = rt.get('total_shares', 0)
-                
                 resp = cls._session.get(url, timeout=5)
                 data = resp.json()
                 if data.get('code') != 0: continue
                 
                 stock_data = data['data'].get(s, {})
                 minutes = stock_data.get('data', {}).get('data', [])
-                
-                # 获取最新财报
-                latest_f = df_fund.iloc[-1] if (df_fund is not None and not df_fund.empty) else None
-                
                 history = []
-                today_dt = pd.Timestamp.now().normalize()
                 
                 for m in minutes:
                     fields = m.split(' ')
                     if len(fields) >= 2:
                         price = float(fields[1])
                         time_str = fields[0] # HHMM
-                        
-                        # 动态投影估值
-                        pe = 0; pb = 0; dy = 0; roi = 0
-                        if latest_f is not None and total_shares > 0:
-                            pe = (price * total_shares) / latest_f['ttm_profit'] if latest_f['ttm_profit'] > 0 else 0
-                            pb = (price * total_shares) / latest_f['TOTAL_PARENT_EQUITY'] if latest_f['TOTAL_PARENT_EQUITY'] > 0 else 0
-                            
-                            # 估值计算逻辑 (ROE / PB)
-                            roe = (latest_f['ttm_profit'] / latest_f['TOTAL_PARENT_EQUITY'] * 100) if latest_f['TOTAL_PARENT_EQUITY'] > 0 else 0
-                            
-                            # Apply dynamic valuation config
-                            from .utils import get_valuation_config
-                            val_config = get_valuation_config(symbol)
-                            roe_floor = val_config.get('roe_floor')
-                            if roe_floor and roe < roe_floor:
-                                roe = roe_floor
-                                
-                            roi = roe / pb if pb > 0 else 0
-                            
-                            # 股息率建议直接用 LTM
-                            div_sum = FundamentalService.calculate_dividend_at_date(df_divs, today_dt)
-                            dy = (div_sum / price * 100) if price > 0 else 0
 
                         history.append({
                             'time': time_str,
                             'price': round(price, 2),
-                            'pe': round(pe, 2),
-                            'pb': round(pb, 2),
-                            'dy': round(dy, 2),
-                            'roi': round(roi, 2)
                         })
                 results[symbol.upper()] = history
             except Exception as e:

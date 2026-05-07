@@ -1,5 +1,14 @@
 import axios from 'axios'
 
+declare global {
+  interface Window {
+    desktopMeta?: {
+      backendUrl?: string
+      apiBaseUrl?: string
+    }
+  }
+}
+
 /**
  * 动态获取 API 基础路径
  * 优先级: 环境变量 > 自动探测 (本地 vs 远程)
@@ -13,7 +22,7 @@ const getBaseURL = () => {
   if (typeof window !== 'undefined') {
     const { hostname, protocol, port } = window.location
     if (protocol === 'file:') {
-      return 'http://127.0.0.1:8000/api'
+      return window.desktopMeta?.apiBaseUrl || 'http://127.0.0.1:8000/api'
     }
     // 如果是开发环境或本地访问，指向开发服务器
     if (hostname === 'localhost' || hostname === '127.0.0.1') {
@@ -175,9 +184,15 @@ export const stockApi = {
   triggerCollection: () => api.post<{ status: string, message: string }>('/collect/'),
   getRealtimePrices: () => api.get<Record<string, RealtimePrice>>('/sentiment/realtime_prices/'),
   getComparisonRealtime: (symbols: string[], type: 'last' | 'minute' = 'last') =>
-    api.get<Record<string, any>>(`/sentiment/comparison_realtime/?symbols=${symbols.join(',')}&type=${type}`),
+    api.get<Record<string, any>>(
+      `/sentiment/comparison_realtime/?symbols=${symbols.join(',')}&type=${type}`,
+      { timeout: type === 'minute' ? 30000 : 15000 },
+    ),
   getComparisonHistorical: (symbols: string[], limit: number = 30, period: string = 'day') =>
-    api.get<Record<string, any[]>>(`/sentiment/comparison_historical/?symbols=${symbols.join(',')}&limit=${limit}&period=${period}`),
+    api.get<Record<string, any[]>>(
+      `/sentiment/comparison_historical/?symbols=${symbols.join(',')}&limit=${limit}&period=${period}`,
+      { timeout: 60000 },
+    ),
   searchStocks: (q: string) => api.get<any[]>('/sentiment/search/', { params: { q } }),
   getAnalysis: (symbol: string) => api.get<any>('/sentiment/analysis/', { params: { symbol }, timeout: 60000 }),
   getHistoryBacktest: (symbol: string) => api.get<any>(`/sentiment/history-backtest/?symbol=${symbol}`),

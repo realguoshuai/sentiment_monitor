@@ -62,7 +62,7 @@
         </div>
         <div class="flex flex-wrap gap-3">
           <button
-            v-for="stock in store.sentimentData"
+            v-for="stock in store.dashboardStocks"
             :key="stock.stock_symbol"
             @click="toggleStock(stock.stock_symbol)"
             :class="[
@@ -311,7 +311,7 @@ const priceSpreadRef = ref<HTMLElement>()
 let priceChart: ECharts | null = null
 
 function getStockName(symbol: string) {
-  return store.sentimentData.find(s => s.stock_symbol === symbol)?.stock_name || symbol
+  return store.getStockBySymbol(symbol)?.stock_name || symbol
 }
 
 function getRoiValue(symbol: string) {
@@ -329,7 +329,7 @@ function getMetricLabel(val: string) {
 }
 
 function getStockColor(symbol: string) {
-  const index = store.sentimentData.findIndex(s => s.stock_symbol === symbol)
+  const index = store.dashboardStocks.findIndex(s => s.stock_symbol === symbol)
   return colors[index % colors.length]
 }
 
@@ -387,22 +387,34 @@ async function fetchComparisonData() {
   loadingPrice.value = true
   try {
     const symbols = selectedSymbols.value
-    const rtLastResp = await stockApi.getComparisonRealtime(symbols, 'last')
-    rtPrices.value = rtLastResp.data as any
+    const rtLastPromise = stockApi.getComparisonRealtime(symbols, 'last')
     
     if (currentTimeScale.value === 'minute') {
-      const rtMinResp = await stockApi.getComparisonRealtime(symbols, 'minute')
+      const [rtLastResp, rtMinResp] = await Promise.all([
+        rtLastPromise,
+        stockApi.getComparisonRealtime(symbols, 'minute'),
+      ])
+      rtPrices.value = rtLastResp.data as any
       historicalCache.value[`${[...symbols].sort().join(',')}_minute`] = rtMinResp.data
     } else {
       const scale = currentTimeScale.value
       const cacheKey = `${[...symbols].sort().join(',')}_${scale}`
+      let histPromise: Promise<any> | null = null
       if (!historicalCache.value[cacheKey]) {
         let limit = 30, period = 'day'
         if (scale === '30d') { limit = 30; period = 'day' }
         else if (scale === '1y_week') { limit = 52; period = '1y_week' }
         else if (scale === '5y') { limit = 60; period = 'month' }
         else if (scale === '10y') { limit = 120; period = 'month' }
-        const histResp = await stockApi.getComparisonHistorical([ ...symbols ], limit, period)
+        histPromise = stockApi.getComparisonHistorical([ ...symbols ], limit, period)
+      }
+
+      const [rtLastResp, histResp] = await Promise.all([
+        rtLastPromise,
+        histPromise ?? Promise.resolve(null),
+      ])
+      rtPrices.value = rtLastResp.data as any
+      if (histResp) {
         historicalCache.value[cacheKey] = histResp.data
       }
     }
@@ -431,6 +443,7 @@ function remapComparisonData() {
 
   comparisonData.value = s1.map((item: any, idx: number) => {
     const item2 = s2[idx]
+    if (!item || !item2) return null
     
     if (scale === 'minute') {
        const rt = rtPrices.value[symbols[0]], rt2 = rtPrices.value[symbols[1]]
@@ -460,7 +473,7 @@ function remapComparisonData() {
           m2: item2 ? { price: item2.price, pe: item2.pe, pb: item2.pb, dividend_yield: item2.dividend_yield, roi: item2.roi } : {}
         }
     }
-  })
+  }).filter(Boolean)
   updatePriceChart()
 }
 
@@ -682,15 +695,16 @@ function updatePriceChart() {
 }
 
 onMounted(async () => {
+  if (!store.stocks.length) await store.fetchStocks()
   if (!store.sentimentData.length) await store.fetchLatestSentiment()
   
-  const hasDonge = store.sentimentData.find(s => s.stock_symbol === 'SZ000423')
-  const hasYanghe = store.sentimentData.find(s => s.stock_symbol === 'SZ002304')
+  const hasDonge = store.dashboardStocks.find(s => s.stock_symbol === 'SZ000423')
+  const hasYanghe = store.dashboardStocks.find(s => s.stock_symbol === 'SZ002304')
   
   if (hasDonge && hasYanghe) {
     selectedSymbols.value = ['SZ000423', 'SZ002304']
-  } else if (store.sentimentData.length >= 2) {
-    selectedSymbols.value = [store.sentimentData[0].stock_symbol, store.sentimentData[1].stock_symbol]
+  } else if (store.dashboardStocks.length >= 2) {
+    selectedSymbols.value = [store.dashboardStocks[0].stock_symbol, store.dashboardStocks[1].stock_symbol]
   }
   
   window.addEventListener('resize', () => priceChart?.resize())

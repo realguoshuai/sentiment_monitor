@@ -3,6 +3,7 @@ Django settings for sentiment_monitor project.
 """
 
 import os
+import tempfile
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -106,7 +107,27 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Caching Configuration
-cache_dir = Path(os.getenv('DJANGO_CACHE_DIR', str(BASE_DIR / 'cache_data')))
+def resolve_cache_dir() -> Path:
+    requested_dir = Path(os.getenv('DJANGO_CACHE_DIR', str(BASE_DIR / 'cache_data')))
+    candidates = [
+        requested_dir,
+        Path(tempfile.gettempdir()) / 'sentiment_monitor_cache',
+    ]
+
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / '.write_probe'
+            probe.write_text('ok', encoding='utf-8')
+            probe.unlink(missing_ok=True)
+            return candidate
+        except OSError:
+            continue
+
+    return requested_dir
+
+
+cache_dir = resolve_cache_dir()
 
 CACHES = {
     'default': {

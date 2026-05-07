@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 
 import pandas as pd
 from django.core.cache import cache
@@ -8,6 +9,8 @@ from django.core.cache import cache
 from .analysis_service import AnalysisService
 from .models import SentimentData
 from .price_service import PriceService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -39,12 +42,19 @@ class HistoryBacktestService:
     @classmethod
     def get_history_backtest(cls, symbol: str) -> dict:
         key = cls.cache_key(symbol)
-        cached = cache.get(key)
+        try:
+            cached = cache.get(key)
+        except Exception as exc:
+            logger.warning("History backtest cache read failed for %s: %s", symbol, exc)
+            cached = None
         if cached is not None:
             return cached
 
         payload = cls.build_payload(symbol)
-        cache.set(key, payload, cls.CACHE_TTL)
+        try:
+            cache.set(key, payload, cls.CACHE_TTL)
+        except Exception as exc:
+            logger.warning("History backtest cache write failed for %s: %s", symbol, exc)
         return payload
 
     @classmethod
