@@ -1600,6 +1600,12 @@ class SentimentApiTests(APITestCase):
         self.assertEqual(result['SZ000001']['pb'], 0.7)
         self.assertEqual(result['SZ000001']['dividend_yield'], 0.0)
 
+    def test_safe_float_rejects_non_finite_values(self):
+        self.assertEqual(PriceService._safe_float('nan'), 0.0)
+        self.assertEqual(PriceService._safe_float('inf'), 0.0)
+        self.assertEqual(PriceService._safe_float('-inf'), 0.0)
+        self.assertEqual(PriceService._safe_float('10.25'), 10.25)
+
     @patch('api.price_service.PriceService._session.get')
     def test_intraday_data_caches_successful_minute_points(self, mock_get):
         class FakeResponse:
@@ -1648,6 +1654,45 @@ class SentimentApiTests(APITestCase):
         self.assertEqual(len(result['SZ000001']), 1)
         self.assertEqual(result['SZ000001'][0]['time'], '0931')
         self.assertEqual(result['SZ000001'][0]['price'], 10.2)
+
+    @patch('api.fundamental_service.FundamentalService.get_historical_dividends', return_value=pd.DataFrame())
+    @patch('api.fundamental_service.FundamentalService.get_ttm_fundamentals', side_effect=RuntimeError('fundamental down'))
+    @patch('api.price_service.PriceService._get_spot_snapshot_map', return_value={})
+    @patch(
+        'api.price_service.PriceService.get_realtime_price',
+        return_value={'SZ000001': {'price': 11.0, 'pe': 10.0, 'pb': 1.0}},
+    )
+    @patch('api.price_service.PriceService._session.get')
+    def test_historical_data_skips_malformed_price_rows(
+        self,
+        mock_get,
+        mock_realtime,
+        mock_snapshot,
+        mock_get_fundamentals,
+        mock_get_dividends,
+    ):
+        class FakeResponse:
+            def json(self):
+                return {
+                    'code': 0,
+                    'data': {
+                        'sz000001': {
+                            'qfqday': [
+                                ['2026-04-08', '10.00', 'nan'],
+                                ['bad-row'],
+                                ['2026-04-10', '10.50', '11.00'],
+                            ]
+                        }
+                    }
+                }
+
+        mock_get.return_value = FakeResponse()
+
+        result = PriceService.get_historical_data(['SZ000001'], limit=30, period='day')
+
+        self.assertEqual(len(result['SZ000001']), 1)
+        self.assertEqual(result['SZ000001'][0]['date'], '2026-04-10')
+        self.assertEqual(result['SZ000001'][0]['price'], 11.0)
 
     @patch('api.price_service.PriceService._session.get', side_effect=requests.exceptions.ConnectTimeout('minute timeout'))
     def test_intraday_data_uses_stale_cache_when_minute_fetch_fails(self, mock_get):

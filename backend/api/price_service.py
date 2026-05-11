@@ -2,6 +2,7 @@ import requests
 from requests.adapters import HTTPAdapter
 import re
 import logging
+import math
 import pandas as pd
 from datetime import datetime
 from django.core.cache import cache
@@ -140,9 +141,10 @@ class PriceService:
     @staticmethod
     def _safe_float(value):
         try:
-            return float(value or 0.0)
+            result = float(value or 0.0)
         except (TypeError, ValueError):
             return 0.0
+        return result if math.isfinite(result) else 0.0
 
     @classmethod
     def _field_float(cls, fields, index):
@@ -338,6 +340,18 @@ class PriceService:
         return history
 
     @classmethod
+    def _parse_historical_prices(cls, days):
+        price_list = []
+        for day in days:
+            if not isinstance(day, (list, tuple)) or len(day) < 3:
+                continue
+            price = cls._safe_float(day[2])
+            if price <= 0:
+                continue
+            price_list.append({'date': day[0], 'price': price})
+        return price_list
+
+    @classmethod
     def _build_single_historical_data(cls, symbol, requested_period, period, limit, rt_data, spot_fallback):
         from .fundamental_service import FundamentalService
 
@@ -361,10 +375,7 @@ class PriceService:
         key = f"qfq{fetch_period}"
         days = stock_data.get(key) or stock_data.get(fetch_period) or []
 
-        price_list = []
-        for day in days:
-            if len(day) >= 3:
-                price_list.append({'date': day[0], 'price': float(day[2])})
+        price_list = cls._parse_historical_prices(days)
         df_prices = pd.DataFrame(price_list)
         if df_prices.empty:
             return []
