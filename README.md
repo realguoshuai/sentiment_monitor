@@ -40,7 +40,7 @@ desktop/release/
 - 安装版启动速度通常优于便携版。
 - 便携版启动前会先自解压，且可能被 Windows Defender 扫描，因此首次打开可能较慢。
 - 未签名 exe 可能触发 Windows 安全提示。
-- 桌面端默认在本机 `127.0.0.1:8000` 启动内置后端。
+- 桌面端默认从 `127.0.0.1:8000` 开始寻找可用端口启动内置后端，避免与本机已有服务冲突。
 
 ## 启动方式
 
@@ -95,12 +95,11 @@ npm.cmd --prefix desktop run dist
 Get-ChildItem -Path desktop\release | Select-Object Name,Length,LastWriteTime
 ```
 
-打包会临时生成 `frontend/dist` 和 `backend/dist/SentimentMonitor-runtime`。这些是构建中间产物，不应提交到 Git。
+打包会临时生成 `frontend/dist` 和 `backend/dist/SentimentMonitor-runtime`。这些是构建中间产物，已在 `.gitignore` 中忽略，不应提交到 Git。
 
 清理建议：
 
 ```powershell
-git restore frontend/dist
 git clean -fd -- backend/dist/SentimentMonitor-runtime frontend/dist
 git status --short --untracked-files=all
 ```
@@ -120,7 +119,7 @@ sentiment_monitor/
 │  ├─ desktop_backend.spec       # PyInstaller 打包配置
 │  ├─ manage.py
 │  ├─ requirements.txt
-│  └─ db.sqlite3
+│  └─ db.sqlite3                  # 打包 seed 数据库
 ├─ desktop/                      # Electron 桌面壳和打包脚本
 ├─ frontend/
 │  ├─ src/
@@ -168,7 +167,8 @@ sentiment_monitor/
 ## 最近更新
 
 - 桌面端支持先打开前端页面，再后台等待 Python 后端服务启动。
-- 前端在桌面 `file://` 环境下自动使用 `http://127.0.0.1:8000/api`。
+- 桌面端支持自动选择可用后端端口，并通过 preload 注入给前端 API。
+- 前端在桌面 `file://` 环境下自动使用 preload 注入的后端 API 地址。
 - Vite 打包使用 `base: './'`，Electron 文件加载使用 Hash 路由，修复打包后黑屏。
 - 新增启动遮罩，避免安装包打开时短暂出现无样式布局。
 - 新增「更新与快速开始」弹窗，并按版本记录是否已读。
@@ -178,6 +178,7 @@ sentiment_monitor/
 - 桌面端后端运行时数据库和缓存迁移到用户目录，避免写入安装目录。
 - PyInstaller 输出目录改为 `backend/dist/SentimentMonitor-runtime`，规避旧目录权限锁问题。
 - 支持生成 `Setup` 安装包和 `Portable` 便携版。
+- 构建产物和调试输出从 Git 跟踪中移除，后续只保留源代码和必要资源。
 
 ## 数据同步
 

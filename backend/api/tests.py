@@ -110,6 +110,43 @@ class SentimentApiTests(APITestCase):
         self.assertEqual(result, {'ok': True})
         self.assertEqual(observed['timeout'], FundamentalService.AKSHARE_TIMEOUT)
 
+    @patch('api.fundamental_service.requests.sessions.Session.request')
+    def test_akshare_wrapper_extends_eastmoney_finance_timeout(self, mock_request):
+        observed = {}
+
+        def fake_request(*args, **kwargs):
+            observed['timeout'] = kwargs.get('timeout')
+            return {'ok': True}
+
+        mock_request.side_effect = fake_request
+
+        def fake_fetcher():
+            return requests.Session().get(
+                'https://emweb.securities.eastmoney.com/PC_HSF10/NewFinanceAnalysis/zcfzbAjaxNew',
+                timeout=5,
+            )
+
+        result = FundamentalService._call_akshare(fake_fetcher)
+
+        self.assertEqual(result, {'ok': True})
+        self.assertEqual(observed['timeout'], FundamentalService.AKSHARE_EASTMONEY_TIMEOUT)
+
+    @patch('api.fundamental_service.time.sleep')
+    def test_akshare_wrapper_retries_transient_request_errors(self, mock_sleep):
+        calls = {'count': 0}
+
+        def fake_fetcher():
+            calls['count'] += 1
+            if calls['count'] == 1:
+                raise requests.exceptions.ConnectTimeout('temporary timeout')
+            return {'ok': True}
+
+        result = FundamentalService._call_akshare(fake_fetcher)
+
+        self.assertEqual(result, {'ok': True})
+        self.assertEqual(calls['count'], 2)
+        mock_sleep.assert_called_once()
+
     @patch('api.views.StockViewSet._trigger_single_stock_collection')
     def test_stock_create_and_update_support_industry_and_peer_symbols(self, mock_trigger_single_stock_collection):
         create_response = self.client.post(
@@ -1292,6 +1329,41 @@ class SentimentApiTests(APITestCase):
         self.assertGreaterEqual(len(payload['quality_combo_performance']['samples']), 1)
         self.assertGreaterEqual(len(payload['sentiment_value_signal']['samples']), 1)
 
+    @patch('api.history_backtest_service.PriceService.get_historical_data')
+    @patch('api.history_backtest_service.AnalysisService.get_analysis')
+    def test_history_backtest_tolerates_history_without_valuation_metrics(self, mock_get_analysis, mock_get_history):
+        mock_get_analysis.return_value = {
+            'history': [
+                {'date': '2025-01-31', 'price': 10},
+                {'date': '2025-02-28', 'price': 11},
+            ]
+        }
+        mock_get_history.return_value = {
+            'SZ000001': [
+                {'date': '2026-04-09', 'price': 10},
+                {'date': '2026-04-10', 'price': 10.5},
+            ]
+        }
+
+        payload = HistoryBacktestService.build_payload('SZ000001')
+
+        self.assertEqual(payload['sample_summary']['monthly_points'], 2)
+        self.assertEqual(payload['sample_summary']['daily_points'], 2)
+        self.assertEqual(payload['low_valuation_returns']['signal_count'], 0)
+        self.assertEqual(payload['sentiment_value_signal']['sample_count'], 0)
+
+    @patch('api.history_backtest_service.HistoryBacktestService.build_payload', side_effect=RuntimeError('upstream down'))
+    def test_history_backtest_uses_stale_cache_when_rebuild_fails(self, mock_build_payload):
+        key = HistoryBacktestService.cache_key('SZ000001')
+        stale_key = HistoryBacktestService.stale_cache_key('SZ000001')
+        cache.delete(key)
+        cache.set(stale_key, {'symbol': 'SZ000001', 'source': 'stale'}, 60)
+
+        payload = HistoryBacktestService.get_history_backtest('SZ000001')
+
+        self.assertEqual(payload['source'], 'stale')
+        mock_build_payload.assert_called_once_with('SZ000001')
+
     @patch('api.price_service.PriceService._build_single_historical_data')
     @patch('api.price_service.PriceService._get_spot_snapshot_map', return_value={})
     @patch('api.price_service.PriceService.get_realtime_price', return_value={})
@@ -1313,6 +1385,239 @@ class SentimentApiTests(APITestCase):
         self.assertEqual(result['SZ000001'][0]['date'], '2026-04-10')
         self.assertEqual(result['SZ000001'][0]['price'], 10.0)
         mock_build_single.assert_not_called()
+
+    @patch('api.price_service.PriceService._build_single_historical_data')
+    @patch('api.price_service.PriceService._get_spot_snapshot_map')
+    @patch('api.price_service.PriceService.get_realtime_price')
+    def test_historical_data_uses_single_cache_before_network(
+        self,
+        mock_realtime,
+        mock_snapshot,
+        mock_build_single,
+    ):
+        single_key = PriceService._historical_single_cache_key('SZ000001', 'day', 'day', 30)
+        PriceService._cache_set(
+            single_key,
+            [{'date': '2026-04-10', 'price': 10.0, 'pe': 12.0, 'pb': 1.2}],
+            60,
+        )
+
+        result = PriceService.get_historical_data(['SZ000001'], limit=30, period='day')
+
+        self.assertEqual(result['SZ000001'][0]['date'], '2026-04-10')
+        mock_realtime.assert_not_called()
+        mock_snapshot.assert_not_called()
+        mock_build_single.assert_not_called()
+
+    @patch('api.price_service.PriceService._get_spot_snapshot_map', return_value={})
+    @patch('api.price_service.PriceService.get_realtime_price', return_value={})
+    @patch('api.price_service.PriceService._build_single_historical_data', side_effect=RuntimeError('upstream down'))
+    def test_historical_data_uses_stale_single_cache_when_refresh_fails(
+        self,
+        mock_build_single,
+        mock_realtime,
+        mock_snapshot,
+    ):
+        stale_key = PriceService._historical_single_stale_cache_key('SZ000001', 'day', 'day', 30)
+        PriceService._cache_set(
+            stale_key,
+            [{'date': '2026-04-09', 'price': 9.8, 'pe': 11.0, 'pb': 1.1}],
+            60,
+        )
+
+        result = PriceService.get_historical_data(['SZ000001'], limit=30, period='day')
+
+        self.assertEqual(result['SZ000001'][0]['date'], '2026-04-09')
+        mock_build_single.assert_called_once()
+
+    @patch('api.price_service.PriceService._cache_get', return_value=None)
+    @patch('api.price_service.PriceService._cache_set')
+    @patch('api.price_service.PriceService._get_spot_snapshot_map', return_value={})
+    @patch('api.price_service.PriceService.get_realtime_price', return_value={})
+    @patch('api.price_service.PriceService._build_single_historical_data')
+    def test_historical_data_writes_each_missing_symbol_to_its_own_cache_key(
+        self,
+        mock_build_single,
+        mock_realtime,
+        mock_snapshot,
+        mock_cache_set,
+        mock_cache_get,
+    ):
+        mock_build_single.side_effect = [
+            [{'date': '2026-04-10', 'price': 11.0}],
+            [{'date': '2026-04-10', 'price': 22.0}],
+        ]
+
+        result = PriceService.get_historical_data(['SZ000001', 'SZ000002'], limit=30, period='day')
+
+        self.assertEqual(result['SZ000001'][0]['price'], 11.0)
+        self.assertEqual(result['SZ000002'][0]['price'], 22.0)
+        cache_keys = [call.args[0] for call in mock_cache_set.call_args_list]
+        self.assertIn(
+            PriceService._historical_single_cache_key('SZ000001', 'day', 'day', 30),
+            cache_keys,
+        )
+        self.assertIn(
+            PriceService._historical_single_cache_key('SZ000002', 'day', 'day', 30),
+            cache_keys,
+        )
+
+    @patch('api.fundamental_service.FundamentalService.get_historical_dividends', side_effect=RuntimeError('dividend down'))
+    @patch('api.fundamental_service.FundamentalService.get_ttm_fundamentals', side_effect=RuntimeError('fundamental down'))
+    @patch('api.price_service.PriceService._get_spot_snapshot_map', return_value={})
+    @patch(
+        'api.price_service.PriceService.get_realtime_price',
+        return_value={'SZ000001': {'price': 11.0, 'pe': 10.0, 'pb': 1.0, 'dividend_yield': 2.0}},
+    )
+    @patch('api.price_service.PriceService._session.get')
+    def test_historical_data_returns_price_history_when_fundamentals_fail(
+        self,
+        mock_get,
+        mock_realtime,
+        mock_snapshot,
+        mock_get_fundamentals,
+        mock_get_dividends,
+    ):
+        class FakeResponse:
+            def json(self):
+                return {
+                    'code': 0,
+                    'data': {
+                        'sz000001': {
+                            'qfqday': [
+                                ['2026-04-09', '10.00', '10.50'],
+                                ['2026-04-10', '10.50', '11.00'],
+                            ]
+                        }
+                    }
+                }
+
+        mock_get.return_value = FakeResponse()
+
+        result = PriceService.get_historical_data(['SZ000001'], limit=30, period='day')
+
+        self.assertEqual(len(result['SZ000001']), 2)
+        self.assertEqual(result['SZ000001'][0]['date'], '2026-04-09')
+        self.assertEqual(result['SZ000001'][1]['price'], 11.0)
+        self.assertEqual(result['SZ000001'][0]['pe'], 9.55)
+        self.assertEqual(result['SZ000001'][0]['pb'], 0.95)
+        self.assertEqual(result['SZ000001'][0]['dividend_yield'], 2.0)
+
+    @patch('api.price_service.PriceService._get_spot_snapshot_map', return_value={})
+    @patch('api.price_service.PriceService.get_realtime_price', return_value={})
+    @patch('api.price_service.PriceService._build_single_historical_data', side_effect=RuntimeError('upstream down'))
+    def test_historical_data_uses_pair_stale_cache_when_result_is_partial(
+        self,
+        mock_build_single,
+        mock_realtime,
+        mock_snapshot,
+    ):
+        pair_key = "hist_v9_SZ000001_SZ000002_day_day_30_stale"
+        PriceService._cache_set(
+            pair_key,
+            {
+                'SZ000001': [{'date': '2026-04-08', 'price': 10.0}],
+                'SZ000002': [{'date': '2026-04-08', 'price': 20.0}],
+            },
+            60,
+        )
+        single_key = PriceService._historical_single_cache_key('SZ000001', 'day', 'day', 30)
+        PriceService._cache_set(single_key, [{'date': '2026-04-10', 'price': 11.0}], 60)
+
+        result = PriceService.get_historical_data(['SZ000001', 'SZ000002'], limit=30, period='day')
+
+        self.assertEqual(result['SZ000001'][0]['date'], '2026-04-08')
+        self.assertEqual(result['SZ000002'][0]['price'], 20.0)
+
+    @patch('api.price_service.PriceService._get_spot_snapshot_map')
+    @patch('api.price_service.PriceService._session.get')
+    def test_realtime_price_falls_back_to_last_success_cache(self, mock_get, mock_spot_snapshot):
+        PriceService._cache_set(
+            PriceService.REALTIME_CACHE_KEY,
+            {
+                'SZ000001': {
+                    'name': '平安银行',
+                    'price': 10.5,
+                    'pe': 8.2,
+                    'pb': 0.7,
+                    'market_cap': 1000000000,
+                    'time': '20260410150000',
+                }
+            },
+            60,
+        )
+        mock_get.side_effect = requests.exceptions.ConnectTimeout('tencent timeout')
+        mock_spot_snapshot.return_value = {}
+
+        result = PriceService.get_realtime_price(['SZ000001'], fetch_fundamentals=False)
+
+        self.assertEqual(result['SZ000001']['name'], '平安银行')
+        self.assertEqual(result['SZ000001']['price'], 10.5)
+        self.assertEqual(result['SZ000001']['source'], 'last_success')
+
+    @patch('api.price_service.PriceService._get_spot_snapshot_map')
+    @patch('api.price_service.PriceService._session.get')
+    def test_realtime_price_falls_back_to_spot_snapshot_when_tencent_empty(self, mock_get, mock_spot_snapshot):
+        class FakeResponse:
+            encoding = ''
+            text = ''
+
+        mock_get.return_value = FakeResponse()
+        mock_spot_snapshot.return_value = {
+            'SZ000001': {
+                'name': '平安银行',
+                'price': 11.2,
+                'pe': 7.5,
+                'pb': 0.6,
+                'market_cap': 1200000000,
+            }
+        }
+
+        result = PriceService.get_realtime_price(['SZ000001'], fetch_fundamentals=False)
+
+        self.assertEqual(result['SZ000001']['price'], 11.2)
+        self.assertEqual(result['SZ000001']['source'], 'spot_snapshot')
+
+    @patch('api.price_service.PriceService._session.get')
+    def test_intraday_data_caches_successful_minute_points(self, mock_get):
+        class FakeResponse:
+            def json(self):
+                return {
+                    'code': 0,
+                    'data': {
+                        'sz000001': {
+                            'data': {
+                                'data': ['0930 10.10 100', '0931 10.20 200']
+                            }
+                        }
+                    }
+                }
+
+        mock_get.return_value = FakeResponse()
+
+        result = PriceService.get_intraday_data(['SZ000001'])
+
+        self.assertEqual(result['SZ000001'][0]['time'], '0930')
+        self.assertEqual(result['SZ000001'][1]['price'], 10.2)
+        fresh = PriceService._cache_get(PriceService._intraday_single_cache_key('SZ000001'))
+        stale = PriceService._cache_get(PriceService._intraday_single_stale_cache_key('SZ000001'))
+        self.assertEqual(fresh['points'][0]['price'], 10.1)
+        self.assertEqual(stale['points'][1]['time'], '0931')
+
+    @patch('api.price_service.PriceService._session.get', side_effect=requests.exceptions.ConnectTimeout('minute timeout'))
+    def test_intraday_data_uses_stale_cache_when_minute_fetch_fails(self, mock_get):
+        stale_key = PriceService._intraday_single_stale_cache_key('SZ000001')
+        PriceService._cache_set(
+            stale_key,
+            {'points': [{'time': '0930', 'price': 10.1}, {'time': '0931', 'price': 10.2}]},
+            60,
+        )
+
+        result = PriceService.get_intraday_data(['SZ000001'])
+
+        self.assertEqual(result['SZ000001'][0]['time'], '0930')
+        self.assertEqual(result['SZ000001'][1]['price'], 10.2)
+        mock_get.assert_called_once()
 
     def test_cache_manager_restores_shareholder_date_columns(self):
         key = 'shareholder-history-cache-test'
@@ -1641,6 +1946,56 @@ class EastMoneySourceTests(TestCase):
         mock_analyze_batch.assert_called_once()
         mock_get_label.assert_called_once_with(0.5)
 
+    @patch('collector.collector.SentimentEngine.get_label', return_value='neutral')
+    @patch('collector.collector.SentimentEngine.analyze_batch', return_value=0.5)
+    @patch(
+        'collector.collector.eastmoney.fetch_notices_from_akshare',
+        return_value=[{
+            'title': '东方财富备用公告',
+            'pub_date': '2026-04-21',
+            'url': 'https://example.com/eastmoney-notice',
+        }],
+    )
+    @patch('collector.collector.cninfo.get_announcements', return_value=[])
+    @patch(
+        'collector.collector._get_fhyanbao_reports',
+        return_value=[{
+            'title': '发现研报备用报告',
+            'pub_date': '2026-04-21',
+            'org': '备用机构',
+            'rating': '增持',
+            'url': 'https://example.com/fh-report',
+        }],
+    )
+    @patch('collector.collector.eastmoney.get_reports', return_value=[])
+    @patch('collector.collector.xueqiu.get_news', return_value=[])
+    @patch('collector.collector.eastmoney.get_news', return_value=[])
+    def test_collect_stock_data_uses_report_and_announcement_fallback_sources(
+        self,
+        mock_em_news,
+        mock_xq_news,
+        mock_em_reports,
+        mock_fh_reports,
+        mock_cninfo_announcements,
+        mock_em_notices,
+        mock_analyze_batch,
+        mock_get_label,
+    ):
+        from collector.collector import collect_stock_data
+
+        sentiment = collect_stock_data(self.stock)
+
+        saved_report = Report.objects.get(sentiment_data=sentiment)
+        saved_announcement = Announcement.objects.get(sentiment_data=sentiment)
+
+        self.assertEqual(saved_report.title, '发现研报备用报告')
+        self.assertEqual(saved_report.org, '备用机构')
+        self.assertEqual(saved_announcement.title, '东方财富备用公告')
+        mock_em_reports.assert_called_once_with('000001')
+        mock_fh_reports.assert_called_once_with('000001')
+        mock_cninfo_announcements.assert_called_once_with('000001')
+        mock_em_notices.assert_called_once_with('000001')
+
     @patch('collector.collector.Report.objects.bulk_create', side_effect=RuntimeError('bulk insert failed'))
     @patch('collector.collector.SentimentEngine.get_label', return_value='positive')
     @patch('collector.collector.SentimentEngine.analyze_batch', return_value=0.8)
@@ -1746,3 +2101,26 @@ class EastMoneySourceTests(TestCase):
         mock_announcements.assert_called_once_with('000001')
         mock_analyze_batch.assert_called_once()
         mock_get_label.assert_called_once_with(0.8)
+
+
+class SchedulerConfigTests(TestCase):
+    @patch('api.scheduler.register_events')
+    @patch('api.scheduler.DjangoJobStore')
+    @patch('api.scheduler.BackgroundScheduler')
+    def test_scheduler_collector_job_does_not_overlap(self, mock_scheduler_cls, mock_jobstore_cls, mock_register_events):
+        from . import scheduler
+
+        scheduler_instance = mock_scheduler_cls.return_value
+
+        result = scheduler.start()
+
+        self.assertIs(result, scheduler_instance)
+        scheduler_instance.add_jobstore.assert_called_once_with(mock_jobstore_cls.return_value, "default")
+        scheduler_instance.add_job.assert_called_once()
+        _, kwargs = scheduler_instance.add_job.call_args
+        self.assertEqual(kwargs['id'], 'run_collector_job')
+        self.assertEqual(kwargs['max_instances'], 1)
+        self.assertTrue(kwargs['coalesce'])
+        self.assertEqual(kwargs['misfire_grace_time'], 15 * 60)
+        mock_register_events.assert_called_once_with(scheduler_instance)
+        scheduler_instance.start.assert_called_once()

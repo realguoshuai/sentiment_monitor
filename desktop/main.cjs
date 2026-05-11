@@ -2,6 +2,7 @@ const { app, BrowserWindow, dialog } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
+const net = require('net');
 const path = require('path');
 
 const isDev = process.env.SM_DESKTOP_DEV === '1';
@@ -22,7 +23,9 @@ const packagedBackendExe = isPackaged
 const packagedSeedDb = isPackaged
   ? path.join(packagedResourcesDir, 'backend', 'db.sqlite3')
   : path.join(repoRoot, 'backend', 'db.sqlite3');
-const backendUrl = process.env.SM_BACKEND_URL || 'http://127.0.0.1:8000';
+const defaultBackendHost = '127.0.0.1';
+const defaultBackendPort = 8000;
+let backendUrl = process.env.SM_BACKEND_URL || `http://${defaultBackendHost}:${defaultBackendPort}`;
 const frontendDevUrl = process.env.SM_DESKTOP_URL || 'http://127.0.0.1:5173';
 
 let mainWindow = null;
@@ -170,6 +173,7 @@ function resolvePythonCommand() {
 }
 
 function resolveBackendLaunch() {
+  const backendPort = new URL(backendUrl).port || String(defaultBackendPort);
   if (!isDev && fs.existsSync(packagedBackendExe)) {
     return {
       command: packagedBackendExe,
@@ -187,12 +191,37 @@ function resolveBackendLaunch() {
       'uvicorn',
       'sentiment_monitor.asgi:application',
       '--host',
-      '127.0.0.1',
+      defaultBackendHost,
       '--port',
-      '8000',
+      backendPort,
     ],
     cwd: backendDir,
   };
+}
+
+function isPortAvailable(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.once('listening', () => {
+      server.close(() => resolve(true));
+    });
+    server.listen(port, defaultBackendHost);
+  });
+}
+
+async function findAvailableBackendUrl(startPort = defaultBackendPort) {
+  if (process.env.SM_BACKEND_URL) {
+    return process.env.SM_BACKEND_URL;
+  }
+
+  for (let port = startPort; port < startPort + 50; port += 1) {
+    if (await isPortAvailable(port)) {
+      return `http://${defaultBackendHost}:${port}`;
+    }
+  }
+
+  throw new Error(`No available backend port found from ${startPort} to ${startPort + 49}`);
 }
 
 function ensureRuntimePaths() {
@@ -275,6 +304,7 @@ function killProcessTree(child) {
 
 function spawnBackend() {
   const launch = resolveBackendLaunch();
+  const backendPort = new URL(backendUrl).port || String(defaultBackendPort);
   logDesktop(
     [
       `Starting backend: ${launch.command} ${launch.args.join(' ')}`.trim(),
@@ -289,12 +319,14 @@ function spawnBackend() {
     cwd: launch.cwd,
     env: {
       ...process.env,
-      ENABLE_STARTUP_WARM: isDev ? (process.env.ENABLE_STARTUP_WARM || '1') : '0',
+      ENABLE_STARTUP_WARM: process.env.ENABLE_STARTUP_WARM || '1',
+      ENABLE_SCHEDULER: process.env.ENABLE_SCHEDULER || '1',
       SENTIMENT_MONITOR_DESKTOP: '1',
       DJANGO_DEBUG: isDev ? 'True' : 'False',
       SENTIMENT_MONITOR_HOME: runtimePaths ? runtimePaths.runtimeDir : backendDir,
       DJANGO_DB_PATH: runtimePaths ? runtimePaths.dbPath : path.join(backendDir, 'db.sqlite3'),
       DJANGO_CACHE_DIR: runtimePaths ? runtimePaths.cacheDir : path.join(backendDir, 'cache_data'),
+      SENTIMENT_MONITOR_BACKEND_PORT: backendPort,
     },
     stdio: 'pipe',
     windowsHide: true,
@@ -386,6 +418,7 @@ function createMainWindow() {
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
+      additionalArguments: [`--sm-backend-url=${backendUrl}`],
       contextIsolation: true,
       nodeIntegration: false,
     },
@@ -451,6 +484,7 @@ async function loadAppWindow() {
 
 async function bootstrap() {
   runtimePaths = ensureRuntimePaths();
+  backendUrl = await findAvailableBackendUrl();
   const frontendDist = resolveFrontendDist();
   logDesktop(
     [

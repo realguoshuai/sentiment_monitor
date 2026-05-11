@@ -427,8 +427,7 @@ let balanceRiskChart: ECharts | null = null
 let shareholderChart: ECharts | null = null
 
 const stockName = computed(() => {
-  const stock = sentimentStore.sentimentData.find(item => item.stock_symbol === symbol)
-  return stock ? stock.stock_name : symbol
+  return sentimentStore.getStockBySymbol(symbol)?.stock_name || symbol
 })
 
 const latestStats = computed(() => {
@@ -1072,7 +1071,10 @@ const handleResize = () => {
   shareholderChart?.resize()
 }
 
-onMounted(() => {
+onMounted(async () => {
+  if (!sentimentStore.stocks.length) {
+    await sentimentStore.fetchStocks()
+  }
   fetchData()
   window.addEventListener('resize', handleResize)
 })

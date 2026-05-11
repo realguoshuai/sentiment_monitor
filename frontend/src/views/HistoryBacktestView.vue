@@ -296,7 +296,7 @@ const bucketChartRef = ref<HTMLElement | null>(null)
 let bucketChart: ECharts | null = null
 
 const stockName = computed(() => {
-  return store.sentimentData.find(item => item.stock_symbol === symbol)?.stock_name || symbol
+  return store.getStockBySymbol(symbol)?.stock_name || symbol
 })
 
 const methodologyItems = computed(() => {
@@ -421,6 +421,9 @@ function handleResize() {
 
 onMounted(async () => {
   try {
+    if (!store.stocks.length) {
+      await store.fetchStocks()
+    }
     if (!store.sentimentData.length) {
       await store.fetchLatestSentiment()
     }

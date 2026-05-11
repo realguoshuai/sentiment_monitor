@@ -67,7 +67,7 @@
             @click="toggleStock(stock.stock_symbol)"
             :class="[
               'px-4 py-2 rounded-xl border transition-all flex items-center gap-2 font-bold',
-              selectedSymbols.includes(stock.stock_symbol)
+              selectedSymbols.includes(normalizeSymbol(stock.stock_symbol))
                 ? 'bg-indigo-50 border-indigo-200 text-indigo-700 shadow-sm'
                 : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'
             ]"
@@ -186,16 +186,42 @@
               <p class="text-[10px] text-slate-500 font-bold uppercase mt-1 tracking-widest">{{ currentTimeScale === 'minute' ? 'Intraday Hedge Pulse' : 'Historical Valuation Dynamics' }}</p>
             </div>
             
-            <div class="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-xl border border-slate-200">
-               <span class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Status:</span>
-               <div class="flex items-center gap-1.5">
-                  <span class="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.3)] animate-pulse"></span>
-                  <span class="text-[11px] font-mono font-bold text-emerald-700 uppercase tracking-tighter">Live ISO-GRID</span>
-               </div>
+            <div class="flex flex-wrap items-center justify-end gap-3">
+              <button
+                @click="refreshComparisonData"
+                :disabled="loadingPrice || selectedSymbols.length !== 2"
+                class="inline-flex h-9 items-center gap-2 rounded-xl border border-indigo-100 bg-white px-3 text-[11px] font-black uppercase tracking-widest text-indigo-600 shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
+                title="刷新当前对比数据"
+              >
+                <svg
+                  class="h-4 w-4"
+                  :class="{ 'animate-spin': loadingPrice }"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M5 19A9 9 0 0019 5M19 5h-4M5 19h4" />
+                </svg>
+                刷新
+              </button>
+              <div class="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-xl border border-slate-200">
+                 <span class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Status:</span>
+                 <div class="flex items-center gap-1.5">
+                    <span class="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.3)] animate-pulse"></span>
+                    <span class="text-[11px] font-mono font-bold text-emerald-700 uppercase tracking-tighter">Live ISO-GRID</span>
+                 </div>
+              </div>
             </div>
           </div>
 
           <div ref="priceSpreadRef" class="w-full h-[450px]"></div>
+
+          <div
+            v-if="dataNotice"
+            class="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-[11px] font-bold text-amber-700"
+          >
+            {{ dataNotice }}
+          </div>
           
           <!-- Spread Intelligence Insight -->
           <div v-if="comparisonData.length > 0" class="mt-8 pt-8 border-t border-slate-100">
@@ -273,7 +299,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useSentimentStore } from '@/stores/sentiment'
 import { stockApi, type RealtimePrice } from '@/api'
 import { echarts, type ECharts } from '@/lib/echarts'
@@ -302,16 +328,78 @@ const selectedSymbols = ref<string[]>([])
 const loadingPrice = ref(false)
 const rtPrices = ref<Record<string, RealtimePrice>>({})
 const comparisonData = ref<any[]>([])
+const lastGoodComparisonData = ref<any[]>([])
+const lastGoodCacheKey = ref('')
+const dataNotice = ref('')
 const historicalCache = ref<Record<string, any>>({})
 
 const colors = ['#6366f1', '#14b8a6', '#f43f5e', '#f59e0b', '#8b5cf6', '#22c55e']
+const defaultComparisonSymbols = ['SZ000423', 'SZ002304']
 
 // Chart refs
 const priceSpreadRef = ref<HTMLElement>()
 let priceChart: ECharts | null = null
 
+function normalizeSymbol(symbol: string) {
+  const raw = String(symbol || '').trim().toUpperCase()
+  if (/^(SH|SZ|BJ)\d{6}$/.test(raw)) return raw
+  const match = raw.match(/\d{6}/)
+  if (!match) return raw
+  const code = match[0]
+  if (raw.includes('BJ') || code.startsWith('92') || code.startsWith('4') || code.startsWith('8')) return `BJ${code}`
+  if (raw.includes('SH') || code.startsWith('6') || code.startsWith('9')) return `SH${code}`
+  return `SZ${code}`
+}
+
+function getSeriesForSymbol(data: Record<string, any[]>, symbol: string) {
+  const fixed = normalizeSymbol(symbol)
+  return data?.[symbol] || data?.[fixed] || data?.[symbol.toUpperCase()] || []
+}
+
+function getCurrentCacheKey() {
+  const symbols = selectedSymbols.value.map(normalizeSymbol)
+  return `${[...symbols].sort().join(',')}_${currentTimeScale.value}`
+}
+
+function restoreLastGoodData(message: string) {
+  if (lastGoodComparisonData.value.length && lastGoodCacheKey.value === getCurrentCacheKey()) {
+    comparisonData.value = [...lastGoodComparisonData.value]
+    dataNotice.value = message
+    updatePriceChart()
+    return true
+  }
+  dataNotice.value = message
+  comparisonData.value = []
+  updatePriceChart()
+  return false
+}
+
+function buildRealtimeFallbackSeries(symbols: string[]) {
+  const rt1 = rtPrices.value[symbols[0]]
+  const rt2 = rtPrices.value[symbols[1]]
+  if (!rt1?.price || !rt2?.price) return []
+
+  const now = new Date()
+  const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+  const metrics1 = calculateIntradayMetrics({ time, price: rt1.price }, rt1, symbols[0])
+  const metrics2 = calculateIntradayMetrics({ time, price: rt2.price }, rt2, symbols[1])
+  const m = currentMetricMode.value
+  const val1 = (metrics1 as any)[m] || 0
+  const val2 = (metrics2 as any)[m] || 0
+
+  return [{
+    time,
+    p1: val1,
+    p2: val2,
+    diff: val1 - val2,
+    m1: metrics1,
+    m2: metrics2,
+  }]
+}
+
 function getStockName(symbol: string) {
-  return store.getStockBySymbol(symbol)?.stock_name || symbol
+  const fixed = normalizeSymbol(symbol)
+  return store.getStockBySymbol(fixed)?.stock_name || symbol
 }
 
 function getRoiValue(symbol: string) {
@@ -329,20 +417,68 @@ function getMetricLabel(val: string) {
 }
 
 function getStockColor(symbol: string) {
-  const index = store.dashboardStocks.findIndex(s => s.stock_symbol === symbol)
+  const fixed = normalizeSymbol(symbol)
+  const index = store.dashboardStocks.findIndex(s => normalizeSymbol(s.stock_symbol) === fixed)
   return colors[index % colors.length]
 }
 
 function toggleStock(symbol: string) {
-  if (selectedSymbols.value.includes(symbol)) {
-    selectedSymbols.value = selectedSymbols.value.filter(s => s !== symbol)
+  const fixed = normalizeSymbol(symbol)
+  if (selectedSymbols.value.includes(fixed)) {
+    selectedSymbols.value = selectedSymbols.value.filter(s => s !== fixed)
   } else {
     if (selectedSymbols.value.length >= 2) {
-      selectedSymbols.value = [selectedSymbols.value[1], symbol]
+      selectedSymbols.value = [selectedSymbols.value[1], fixed]
     } else {
-      selectedSymbols.value.push(symbol)
+      selectedSymbols.value.push(fixed)
     }
   }
+}
+
+function getAvailableComparisonSymbols() {
+  const sourceStocks = store.stocks.length
+    ? store.stocks.map(stock => stock.symbol)
+    : store.dashboardStocks.map(stock => stock.stock_symbol)
+
+  return [...new Set(sourceStocks.map(normalizeSymbol))]
+}
+
+function buildDefaultComparisonSelection(availableSymbols: string[], currentSymbols: string[] = []) {
+  if (!availableSymbols.length) {
+    return []
+  }
+
+  const availableSet = new Set(availableSymbols)
+  const normalizedSelected = currentSymbols.map(normalizeSymbol)
+  const kept = normalizedSelected.filter(symbol => availableSet.has(symbol))
+  const nextSelected = [...kept]
+
+  for (const symbol of defaultComparisonSymbols) {
+    if (nextSelected.length >= 2) break
+    if (availableSet.has(symbol) && !nextSelected.includes(symbol)) {
+      nextSelected.push(symbol)
+    }
+  }
+
+  for (const symbol of availableSymbols) {
+    if (nextSelected.length >= 2) break
+    if (!nextSelected.includes(symbol)) {
+      nextSelected.push(symbol)
+    }
+  }
+
+  return nextSelected.slice(0, 2)
+}
+
+function reconcileSelectedSymbols() {
+  const availableSymbols = getAvailableComparisonSymbols()
+  const nextSelected = buildDefaultComparisonSelection(availableSymbols, selectedSymbols.value)
+
+  if (nextSelected.length === selectedSymbols.value.length && nextSelected.every((symbol, index) => symbol === selectedSymbols.value[index])) {
+    return
+  }
+
+  selectedSymbols.value = nextSelected.slice(0, 2)
 }
 
 const currentDiff = computed(() => {
@@ -386,16 +522,24 @@ async function fetchComparisonData() {
   if (selectedSymbols.value.length !== 2) return
   loadingPrice.value = true
   try {
-    const symbols = selectedSymbols.value
+    dataNotice.value = ''
+    const symbols = selectedSymbols.value.map(normalizeSymbol)
+    if (symbols.some((symbol, index) => symbol !== selectedSymbols.value[index])) {
+      selectedSymbols.value = symbols
+    }
     const rtLastPromise = stockApi.getComparisonRealtime(symbols, 'last')
     
     if (currentTimeScale.value === 'minute') {
-      const [rtLastResp, rtMinResp] = await Promise.all([
+      const [rtLastResp, rtMinResp] = await Promise.allSettled([
         rtLastPromise,
         stockApi.getComparisonRealtime(symbols, 'minute'),
       ])
-      rtPrices.value = rtLastResp.data as any
-      historicalCache.value[`${[...symbols].sort().join(',')}_minute`] = rtMinResp.data
+      if (rtLastResp.status === 'fulfilled') {
+        rtPrices.value = rtLastResp.value.data as any
+      }
+      if (rtMinResp.status === 'fulfilled') {
+        historicalCache.value[`${[...symbols].sort().join(',')}_minute`] = rtMinResp.value.data
+      }
     } else {
       const scale = currentTimeScale.value
       const cacheKey = `${[...symbols].sort().join(',')}_${scale}`
@@ -409,19 +553,22 @@ async function fetchComparisonData() {
         histPromise = stockApi.getComparisonHistorical([ ...symbols ], limit, period)
       }
 
-      const [rtLastResp, histResp] = await Promise.all([
+      const [rtLastResp, histResp] = await Promise.allSettled([
         rtLastPromise,
         histPromise ?? Promise.resolve(null),
       ])
-      rtPrices.value = rtLastResp.data as any
-      if (histResp) {
-        historicalCache.value[cacheKey] = histResp.data
+      if (rtLastResp.status === 'fulfilled') {
+        rtPrices.value = rtLastResp.value.data as any
+      }
+      if (histResp.status === 'fulfilled' && histResp.value) {
+        historicalCache.value[cacheKey] = histResp.value.data
       }
     }
+    await nextTick()
     remapComparisonData()
   } catch (e) {
     console.error('Fetch Comparison Error', e)
-    comparisonData.value = []
+    restoreLastGoodData('本次刷新暂未拿到完整数据，已保留上一轮有效走势。')
   } finally {
     loadingPrice.value = false
   }
@@ -431,15 +578,29 @@ function remapComparisonData() {
   const symbols = selectedSymbols.value
   const scale = currentTimeScale.value
   const m = currentMetricMode.value
-  const cacheKey = `${[...symbols].sort().join(',')}_${scale}`
+  const cacheKey = getCurrentCacheKey()
   const data = historicalCache.value[cacheKey]
   if (!data) {
-    comparisonData.value = []
+    restoreLastGoodData('当前组合暂未返回走势数据，已保留上一轮有效图表。')
     return
   }
 
-  const s1 = data[symbols[0]] || []
-  const s2 = data[symbols[1]] || []
+  const s1 = getSeriesForSymbol(data, symbols[0])
+  const s2 = getSeriesForSymbol(data, symbols[1])
+
+  if (!s1.length || !s2.length) {
+    const fallbackSeries = scale === 'minute' ? buildRealtimeFallbackSeries(symbols) : []
+    if (fallbackSeries.length) {
+      comparisonData.value = fallbackSeries
+      lastGoodComparisonData.value = [...fallbackSeries]
+      dataNotice.value = '分时接口暂未返回完整分钟线，已用实时价生成当前点位。'
+      updatePriceChart()
+      return
+    }
+
+    restoreLastGoodData('当前组合返回的数据不完整，已保留上一轮有效走势。')
+    return
+  }
 
   comparisonData.value = s1.map((item: any, idx: number) => {
     const item2 = s2[idx]
@@ -474,11 +635,28 @@ function remapComparisonData() {
         }
     }
   }).filter(Boolean)
+
+  if (!comparisonData.value.length) {
+    restoreLastGoodData('当前指标没有可绘制的数据，已保留上一轮有效走势。')
+    return
+  }
+
+  lastGoodComparisonData.value = [...comparisonData.value]
+  lastGoodCacheKey.value = cacheKey
+  dataNotice.value = ''
   updatePriceChart()
 }
 
+async function refreshComparisonData() {
+  if (selectedSymbols.value.length !== 2) return
+  const cacheKey = getCurrentCacheKey()
+  delete historicalCache.value[cacheKey]
+  await fetchComparisonData()
+}
+
 function calculateIntradayMetrics(item: any, rt: any, sym: string) {
-  if (!item || !rt || !item.price) return { price: 0, pe: 0, pb: 0, dividend_yield: 0, roi: 0 }
+  if (!item || !item.price) return { price: 0, pe: 0, pb: 0, dividend_yield: 0, roi: 0 }
+  if (!rt) return { price: item.price, pe: 0, pb: 0, dividend_yield: 0, roi: 0 }
   
   // Dynamic Intraday Projection
   const pe = item.price * ((rt.pe || 0) / (rt.price || 1))
@@ -500,7 +678,12 @@ function calculateIntradayMetrics(item: any, rt: any, sym: string) {
 }
 
 function updatePriceChart() {
-  if (!priceSpreadRef.value) return
+  if (!priceSpreadRef.value) {
+    nextTick(() => {
+      if (priceSpreadRef.value) updatePriceChart()
+    })
+    return
+  }
   if (!priceChart) priceChart = echarts.init(priceSpreadRef.value)
   if (!comparisonData.value.length) {
     priceChart.clear()
@@ -697,15 +880,8 @@ function updatePriceChart() {
 onMounted(async () => {
   if (!store.stocks.length) await store.fetchStocks()
   if (!store.sentimentData.length) await store.fetchLatestSentiment()
-  
-  const hasDonge = store.dashboardStocks.find(s => s.stock_symbol === 'SZ000423')
-  const hasYanghe = store.dashboardStocks.find(s => s.stock_symbol === 'SZ002304')
-  
-  if (hasDonge && hasYanghe) {
-    selectedSymbols.value = ['SZ000423', 'SZ002304']
-  } else if (store.dashboardStocks.length >= 2) {
-    selectedSymbols.value = [store.dashboardStocks[0].stock_symbol, store.dashboardStocks[1].stock_symbol]
-  }
+
+  selectedSymbols.value = buildDefaultComparisonSelection(getAvailableComparisonSymbols())
   
   window.addEventListener('resize', () => priceChart?.resize())
 })
@@ -721,6 +897,10 @@ watch([selectedSymbols, currentTimeScale], () => {
 
 watch(currentMetricMode, () => {
   remapComparisonData()
+})
+
+watch(() => store.dashboardStocks.map(stock => stock.stock_symbol), () => {
+  reconcileSelectedSymbols()
 })
 </script>
 

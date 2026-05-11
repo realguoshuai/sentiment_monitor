@@ -20,7 +20,7 @@
         </div>
       </div>
       <div class="header-actions hero-tools">
-        <div class="compare-selector" v-if="sentimentStore.sentimentData.length > 1">
+        <div class="compare-selector" v-if="sentimentStore.dashboardStocks.length > 1">
           <div class="glass-header compare-header">
             <div>
               <span class="label compare-title">叠加对比</span>
@@ -64,6 +64,9 @@
             <p>“{{ loadingQuote.text }}”</p>
             <span>{{ loadingQuote.author }}</span>
           </div>
+          <button type="button" class="loading-back-btn" @click="goDashboard">
+            返回首页
+          </button>
           <div class="engine-tag">QUANT ENGINE V4.0</div>
         </div>
       </div>
@@ -550,7 +553,7 @@
 </template>
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { echarts, type ECharts } from '@/lib/echarts';
 import { stockApi } from '@/api';
 import { useSentimentStore } from '@/stores/sentiment';
@@ -748,6 +751,7 @@ interface AnalysisPayload {
 }
 
 const route = useRoute();
+const router = useRouter();
 const sentimentStore = useSentimentStore();
 const symbol = route.params.symbol as string;
 
@@ -782,7 +786,7 @@ const steps = [
 
 // 计算属性
 const availableStocks = computed(() => {
-  return sentimentStore.sentimentData.filter(s => s.stock_symbol !== symbol);
+  return sentimentStore.dashboardStocks.filter(s => s.stock_symbol !== symbol);
 });
 
 const isMultiView = computed(() => compareSymbols.value.length > 0);
@@ -814,6 +818,12 @@ const analysisCacheNotice = computed(() => {
     ? `${prefix}，后台正在刷新最新分析。`
     : `${prefix}。`;
 });
+
+const goDashboard = () => {
+  clearAnalysisRefreshRetry();
+  loading.value = false;
+  router.push('/');
+};
 const manualFairPb = computed(() => {
   const expectedRoe = Number(calcParams.value.expectedRoe || 0);
   const requiredReturn = Number(calcParams.value.requiredReturn || 0);
@@ -835,6 +845,9 @@ const manualValuationLabel = computed(() => {
 });
 
 onMounted(async () => {
+  if (sentimentStore.stocks.length === 0) {
+    await sentimentStore.fetchStocks();
+  }
   if (sentimentStore.sentimentData.length === 0) {
     await sentimentStore.fetchLatestSentiment();
   }
@@ -951,7 +964,7 @@ const getMetricLabel = (metric: string) => {
 };
 
 const getSymbolName = (s: string) => {
-  return sentimentStore.sentimentData.find(item => item.stock_symbol === s)?.stock_name || s;
+  return sentimentStore.getStockBySymbol(s)?.stock_name || s;
 };
 
 const formatCacheTimestamp = (value?: string | null) => {
@@ -1958,6 +1971,26 @@ onUnmounted(() => {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   font-weight: 800;
+}
+
+.loading-back-btn {
+  margin-top: 18px;
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  background: #0f172a;
+  color: #ffffff;
+  border-radius: 14px;
+  padding: 12px 16px;
+  font-size: 0.9rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.loading-back-btn:hover {
+  background: #1e293b;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.16);
+  transform: translateY(-1px);
 }
 
 @keyframes spin {

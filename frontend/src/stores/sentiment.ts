@@ -57,16 +57,6 @@ export const useSentimentStore = defineStore('sentiment', () => {
     return roe / pb
   }
 
-  const roiSortedStocks = computed(() => {
-    return [...sentimentData.value].sort((a, b) => {
-      const pA = realtimePrices.value[a.stock_symbol]
-      const pB = realtimePrices.value[b.stock_symbol]
-      const roiA = pA ? calculateROI(a.stock_symbol, pA.pe, pA.pb) : 0
-      const roiB = pB ? calculateROI(b.stock_symbol, pB.pe, pB.pb) : 0
-      return roiB - roiA
-    })
-  })
-
   const sortedStocks = computed(() => {
     return [...sentimentData.value].sort((a, b) => b.sentiment_score - a.sentiment_score)
   })
@@ -99,6 +89,16 @@ export const useSentimentStore = defineStore('sentiment', () => {
     }
 
     return merged
+  })
+
+  const roiSortedStocks = computed(() => {
+    return [...dashboardStocks.value].sort((a, b) => {
+      const pA = realtimePrices.value[a.stock_symbol]
+      const pB = realtimePrices.value[b.stock_symbol]
+      const roiA = pA ? calculateROI(a.stock_symbol, pA.pe, pA.pb) : 0
+      const roiB = pB ? calculateROI(b.stock_symbol, pB.pe, pB.pb) : 0
+      return roiB - roiA
+    })
   })
 
   const totalNews = computed(() => 
@@ -204,7 +204,7 @@ export const useSentimentStore = defineStore('sentiment', () => {
   }
 
   function getStockBySymbol(symbol: string) {
-    return sentimentData.value.find(s => s.stock_symbol === symbol)
+    return dashboardStocks.value.find(s => s.stock_symbol === symbol)
   }
 
   return {

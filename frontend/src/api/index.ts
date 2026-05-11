@@ -20,9 +20,13 @@ const getBaseURL = () => {
 
   // 2. 自动探测逻辑
   if (typeof window !== 'undefined') {
+    if (window.desktopMeta?.apiBaseUrl) {
+      return window.desktopMeta.apiBaseUrl
+    }
+
     const { hostname, protocol, port } = window.location
     if (protocol === 'file:') {
-      return window.desktopMeta?.apiBaseUrl || 'http://127.0.0.1:8000/api'
+      return 'http://127.0.0.1:8000/api'
     }
     // 如果是开发环境或本地访问，指向开发服务器
     if (hostname === 'localhost' || hostname === '127.0.0.1') {
@@ -42,6 +46,27 @@ const api = axios.create({
   },
 })
 
+const RETRYABLE_METHODS = new Set(['get', 'head', 'options'])
+const RETRYABLE_STATUS = new Set([408, 429, 502, 503, 504])
+
+const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
+
+const shouldRetryRequest = (error: any) => {
+  const config = error.config
+  if (!config) return false
+
+  const method = String(config.method || 'get').toLowerCase()
+  if (!RETRYABLE_METHODS.has(method)) return false
+
+  const retryCount = config.__retryCount || 0
+  if (retryCount >= 1) return false
+
+  const status = error.response?.status
+  if (status && RETRYABLE_STATUS.has(status)) return true
+
+  return !error.response || error.code === 'ECONNABORTED' || error.code === 'ERR_NETWORK'
+}
+
 // --- 全局拦截器 ---
 
 // 请求拦截器
@@ -60,7 +85,13 @@ api.interceptors.response.use(
   (response) => {
     return response
   },
-  (error) => {
+  async (error) => {
+    if (shouldRetryRequest(error)) {
+      error.config.__retryCount = (error.config.__retryCount || 0) + 1
+      await delay(450)
+      return api(error.config)
+    }
+
     // 统一处理后端错误响应
     const message = error.response?.data?.message || error.message || '网络请求故障'
     console.error(`[API Error] ${error.config?.url}:`, message)

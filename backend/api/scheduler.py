@@ -20,9 +20,13 @@ def start():
         hours=1,
         id="run_collector_job",
         name="run_collector_job",
-        replace_existing=True
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=15 * 60,
     )
 
     register_events(scheduler)
     scheduler.start()
     logger.info("Scheduler started...")
+    return scheduler

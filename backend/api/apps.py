@@ -6,6 +6,7 @@ class ApiConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
     name = 'api'
     _warm_started = False
+    _scheduler_started = False
 
     def ready(self):
         connection_created.connect(self._configure_sqlite_connection, dispatch_uid='api.sqlite.pragmas')
@@ -15,7 +16,12 @@ class ApiConfig(AppConfig):
         os.environ['NO_PROXY'] = ','.join(no_proxy_list)
 
         # 确保只在主进程中启动定时任务
-        if os.environ.get('RUN_MAIN') == 'true':
+        scheduler_requested = (
+            os.environ.get('RUN_MAIN') == 'true'
+            or os.environ.get('ENABLE_SCHEDULER') == '1'
+        )
+        if scheduler_requested and not ApiConfig._scheduler_started:
+            ApiConfig._scheduler_started = True
             from . import scheduler
             scheduler.start()
 
@@ -34,8 +40,10 @@ class ApiConfig(AppConfig):
         if connection.vendor != 'sqlite':
             return
         cursor = connection.cursor()
-        cursor.execute('PRAGMA journal_mode=MEMORY;')
+        cursor.execute('PRAGMA journal_mode=WAL;')
         cursor.execute('PRAGMA synchronous=NORMAL;')
+        cursor.execute('PRAGMA busy_timeout=5000;')
+        cursor.execute('PRAGMA temp_store=MEMORY;')
 
     def warm_valuation_cache(self):
         """后台预热常用估值、深度分析与回测缓存，不阻塞服务启动"""

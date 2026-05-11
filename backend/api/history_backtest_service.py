@@ -22,6 +22,7 @@ class Horizon:
 
 class HistoryBacktestService:
     CACHE_TTL = 6 * 3600
+    STALE_CACHE_TTL = 7 * 24 * 3600
     CACHE_VERSION = 'v2'
     SAMPLE_LIMIT = 8
     LONG_HORIZONS = (
@@ -40,21 +41,49 @@ class HistoryBacktestService:
         return f'history_backtest_{cls.CACHE_VERSION}_{fixed_symbol}'
 
     @classmethod
+    def stale_cache_key(cls, symbol: str) -> str:
+        return f'{cls.cache_key(symbol)}_stale'
+
+    @classmethod
+    def _cache_get(cls, key: str):
+        try:
+            return cache.get(key)
+        except Exception as exc:
+            logger.warning("History backtest cache read failed for %s: %s", key, exc)
+            try:
+                cache.delete(key)
+            except Exception:
+                pass
+            return None
+
+    @classmethod
+    def _cache_set(cls, key: str, payload: dict, ttl: int) -> bool:
+        try:
+            cache.set(key, payload, ttl)
+            return True
+        except Exception as exc:
+            logger.warning("History backtest cache write failed for %s: %s", key, exc)
+            return False
+
+    @classmethod
     def get_history_backtest(cls, symbol: str) -> dict:
         key = cls.cache_key(symbol)
-        try:
-            cached = cache.get(key)
-        except Exception as exc:
-            logger.warning("History backtest cache read failed for %s: %s", symbol, exc)
-            cached = None
+        cached = cls._cache_get(key)
         if cached is not None:
             return cached
 
-        payload = cls.build_payload(symbol)
+        stale_key = cls.stale_cache_key(symbol)
         try:
-            cache.set(key, payload, cls.CACHE_TTL)
+            payload = cls.build_payload(symbol)
         except Exception as exc:
-            logger.warning("History backtest cache write failed for %s: %s", symbol, exc)
+            stale = cls._cache_get(stale_key)
+            if stale is not None:
+                logger.warning("History backtest build failed for %s, using stale cache: %s", symbol, exc)
+                return stale
+            raise
+
+        cls._cache_set(key, payload, cls.CACHE_TTL)
+        cls._cache_set(stale_key, payload, cls.STALE_CACHE_TTL)
         return payload
 
     @classmethod
@@ -83,15 +112,23 @@ class HistoryBacktestService:
 
     @classmethod
     def _prepare_monthly_history(cls, symbol: str) -> pd.DataFrame:
-        analysis = AnalysisService.get_analysis(symbol, '10y')
-        df = pd.DataFrame(analysis.get('history', []))
-        return cls._enrich_history_frame(df, horizons=cls.LONG_HORIZONS)
+        try:
+            analysis = AnalysisService.get_analysis(symbol, '10y')
+            df = pd.DataFrame(analysis.get('history', []))
+            return cls._enrich_history_frame(df, horizons=cls.LONG_HORIZONS)
+        except Exception as exc:
+            logger.warning("History backtest monthly history unavailable for %s: %s", symbol, exc)
+            return pd.DataFrame()
 
     @classmethod
     def _prepare_daily_history(cls, symbol: str) -> pd.DataFrame:
-        history = PriceService.get_historical_data([symbol], limit=365, period='day').get(symbol, [])
-        df = pd.DataFrame(history)
-        return cls._enrich_history_frame(df, horizons=cls.SHORT_HORIZONS)
+        try:
+            history = PriceService.get_historical_data([symbol], limit=365, period='day').get(symbol, [])
+            df = pd.DataFrame(history)
+            return cls._enrich_history_frame(df, horizons=cls.SHORT_HORIZONS)
+        except Exception as exc:
+            logger.warning("History backtest daily history unavailable for %s: %s", symbol, exc)
+            return pd.DataFrame()
 
     @classmethod
     def _enrich_history_frame(cls, df: pd.DataFrame, horizons: tuple[Horizon, ...]) -> pd.DataFrame:
@@ -99,10 +136,21 @@ class HistoryBacktestService:
             return df
 
         working = df.copy()
-        working['date'] = pd.to_datetime(working['date'])
+        if 'date' not in working.columns or 'price' not in working.columns:
+            return pd.DataFrame()
+
+        working['date'] = pd.to_datetime(working['date'], errors='coerce')
+        working['price'] = pd.to_numeric(working['price'], errors='coerce')
+        working = working.dropna(subset=['date', 'price'])
+        if working.empty:
+            return pd.DataFrame()
+
         working = working.sort_values('date').reset_index(drop=True)
 
         for column in ['pe', 'pb', 'dividend_yield', 'roi']:
+            if column not in working.columns:
+                working[column] = 0.0
+            working[column] = pd.to_numeric(working[column], errors='coerce').fillna(0.0)
             percentile_column = f'{column}_pct'
             values = []
             for idx, value in enumerate(working[column].tolist()):
@@ -180,6 +228,23 @@ class HistoryBacktestService:
         horizons: tuple[Horizon, ...],
         sample_columns: list[str],
     ) -> dict:
+        if df.empty or 'date' not in df.columns:
+            return {
+                'signal_count': 0,
+                'signal_dates': [],
+                'horizons': {
+                    horizon.key: {
+                        'label': horizon.label,
+                        'count': 0,
+                        'avg_return': None,
+                        'median_return': None,
+                        'win_rate': None,
+                    }
+                    for horizon in horizons
+                },
+                'samples': [],
+            }
+
         signal_df = df[mask].copy()
         summary = {
             'signal_count': int(len(signal_df)),
@@ -246,6 +311,15 @@ class HistoryBacktestService:
             return {'metric': 'pb_pct', 'buckets': [], 'samples': []}
 
         bucketed = df.copy()
+        bucketed['pb_pct'] = pd.to_numeric(bucketed.get('pb_pct'), errors='coerce')
+        if bucketed['pb_pct'].dropna().empty:
+            return {
+                'metric': 'pb_pct',
+                'metric_label': 'PB Percentile',
+                'buckets': [],
+                'samples': [],
+            }
+
         bucketed['bucket_index'] = pd.cut(
             bucketed['pb_pct'],
             bins=[0, 10, 20, 40, 60, 80, 100],

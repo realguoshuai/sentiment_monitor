@@ -1480,8 +1480,44 @@ class AnalysisService:
         return '分歧较大'
 
     @classmethod
+    def _cache_get(cls, key: str):
+        try:
+            return cache.get(key)
+        except Exception as exc:
+            logger.warning("Analysis cache read failed for %s: %s", key, exc)
+            try:
+                cache.delete(key)
+            except Exception:
+                pass
+            return None
+
+    @classmethod
+    def _cache_set(cls, key: str, value, ttl: int) -> bool:
+        try:
+            cache.set(key, value, ttl)
+            return True
+        except Exception as exc:
+            logger.warning("Analysis cache write failed for %s: %s", key, exc)
+            return False
+
+    @classmethod
+    def _cache_add(cls, key: str, value, ttl: int) -> bool:
+        try:
+            return bool(cache.add(key, value, ttl))
+        except Exception as exc:
+            logger.warning("Analysis cache lock failed for %s: %s", key, exc)
+            return False
+
+    @classmethod
+    def _cache_delete(cls, key: str) -> None:
+        try:
+            cache.delete(key)
+        except Exception as exc:
+            logger.warning("Analysis cache delete failed for %s: %s", key, exc)
+
+    @classmethod
     def get_analysis(cls, symbol: str, period: str = '10y') -> dict:
-        cached_entry = cls._normalize_cache_entry(cache.get(cls.cache_key(symbol, period)))
+        cached_entry = cls._normalize_cache_entry(cls._cache_get(cls.cache_key(symbol, period)))
         if cached_entry is not None:
             return cached_entry['payload']
 
@@ -1491,7 +1527,7 @@ class AnalysisService:
 
     @classmethod
     def get_analysis_response(cls, symbol: str, period: str = '10y') -> dict:
-        fresh_entry = cls._normalize_cache_entry(cache.get(cls.cache_key(symbol, period)))
+        fresh_entry = cls._normalize_cache_entry(cls._cache_get(cls.cache_key(symbol, period)))
         if fresh_entry is not None:
             return cls._build_response_payload(
                 fresh_entry,
@@ -1499,9 +1535,9 @@ class AnalysisService:
                 background_refreshing=False,
             )
 
-        stale_entry = cls._normalize_cache_entry(cache.get(cls.stale_cache_key(symbol, period)))
+        stale_entry = cls._normalize_cache_entry(cls._cache_get(cls.stale_cache_key(symbol, period)))
         if stale_entry is not None:
-            background_refreshing = bool(cache.get(cls.refresh_lock_key(symbol, period)))
+            background_refreshing = bool(cls._cache_get(cls.refresh_lock_key(symbol, period)))
             if not background_refreshing:
                 background_refreshing = cls._schedule_background_refresh(symbol, period)
 
@@ -1561,8 +1597,8 @@ class AnalysisService:
             'payload': cls._sanitize_payload(payload),
             'cached_at': cached_at,
         }
-        cache.set(cls.cache_key(symbol, period), entry, cls.CACHE_TTL)
-        cache.set(cls.stale_cache_key(symbol, period), entry, cls.STALE_CACHE_TTL)
+        cls._cache_set(cls.cache_key(symbol, period), entry, cls.CACHE_TTL)
+        cls._cache_set(cls.stale_cache_key(symbol, period), entry, cls.STALE_CACHE_TTL)
         return cached_at
 
     @classmethod
@@ -1581,7 +1617,7 @@ class AnalysisService:
 
     @classmethod
     def _schedule_background_refresh(cls, symbol: str, period: str) -> bool:
-        if not cache.add(cls.refresh_lock_key(symbol, period), True, cls.REFRESH_LOCK_TTL):
+        if not cls._cache_add(cls.refresh_lock_key(symbol, period), True, cls.REFRESH_LOCK_TTL):
             return False
 
         thread = threading.Thread(
@@ -1600,6 +1636,6 @@ class AnalysisService:
         except Exception as exc:
             logger.warning('Background analysis refresh failed for %s: %s', symbol, exc)
         finally:
-            cache.delete(cls.refresh_lock_key(symbol, period))
+            cls._cache_delete(cls.refresh_lock_key(symbol, period))
 
 

@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 class FundamentalService:
     AKSHARE_TIMEOUT = (5, 12)
+    AKSHARE_EASTMONEY_TIMEOUT = (10, 20)
+    AKSHARE_RETRY_ATTEMPTS = 2
+    AKSHARE_RETRY_DELAY = 0.8
     _request_patch_lock = threading.RLock()
     _request_patch_refcount = 0
     _original_session_request = None
@@ -312,8 +315,11 @@ class FundamentalService:
                 cls._original_session_request = requests.sessions.Session.request
 
                 def _request_with_timeout(session, method, url, **kwargs):
-                    if kwargs.get('timeout') in (None, 0):
+                    timeout = kwargs.get('timeout')
+                    if timeout in (None, 0):
                         kwargs['timeout'] = cls.AKSHARE_TIMEOUT
+                    elif cls._is_eastmoney_finance_url(url) and cls._is_short_timeout(timeout):
+                        kwargs['timeout'] = cls.AKSHARE_EASTMONEY_TIMEOUT
                     return cls._original_session_request(session, method, url, **kwargs)
 
                 requests.sessions.Session.request = _request_with_timeout
@@ -331,11 +337,57 @@ class FundamentalService:
 
     @classmethod
     def _call_akshare(cls, fetcher, *args, use_no_proxy=False, **kwargs):
-        if use_no_proxy:
-            with cls._without_proxy_env(), cls._with_akshare_timeout():
-                return fetcher(*args, **kwargs)
-        with cls._with_akshare_timeout():
-            return fetcher(*args, **kwargs)
+        last_error = None
+        fetcher_name = getattr(fetcher, '__name__', 'akshare_fetcher')
+
+        for attempt in range(1, cls.AKSHARE_RETRY_ATTEMPTS + 1):
+            try:
+                if use_no_proxy:
+                    with cls._without_proxy_env(), cls._with_akshare_timeout():
+                        return fetcher(*args, **kwargs)
+                with cls._with_akshare_timeout():
+                    return fetcher(*args, **kwargs)
+            except cls._transient_request_errors() as exc:
+                last_error = exc
+                if attempt >= cls.AKSHARE_RETRY_ATTEMPTS:
+                    break
+                logger.warning(
+                    "AkShare transient error via %s, retrying %s/%s: %s",
+                    fetcher_name,
+                    attempt,
+                    cls.AKSHARE_RETRY_ATTEMPTS,
+                    exc,
+                )
+                time.sleep(cls.AKSHARE_RETRY_DELAY * attempt)
+
+        raise last_error
+
+    @staticmethod
+    def _is_eastmoney_finance_url(url):
+        return isinstance(url, str) and (
+            'emweb.securities.eastmoney.com' in url
+            or 'NewFinanceAnalysis' in url
+        )
+
+    @staticmethod
+    def _is_short_timeout(timeout):
+        if isinstance(timeout, (int, float)):
+            return timeout <= 5
+        if isinstance(timeout, tuple) and timeout:
+            try:
+                return float(timeout[0]) <= 5
+            except (TypeError, ValueError):
+                return False
+        return False
+
+    @staticmethod
+    def _transient_request_errors():
+        return (
+            requests.exceptions.ConnectTimeout,
+            requests.exceptions.ReadTimeout,
+            requests.exceptions.Timeout,
+            requests.exceptions.ConnectionError,
+        )
 
     @staticmethod
     def _classify_holder_trend(change_pct):

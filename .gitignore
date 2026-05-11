@@ -7,11 +7,14 @@ __pycache__/
 .vscode/
 backend/venv/
 backend/build/
+backend/dist/
 frontend/node_modules/
+frontend/dist/
 desktop/node_modules/
 desktop/frontend-dist/
 desktop/release/
 backend/cache_data/
+backend/scratch/debug_outputs/
 *.djcache
 *.sqlite3
 *.sqlite3-journal
@@ -24,5 +27,7 @@ backend/final_*.py
 backend/cleanup_*.py
 backend/db_*.sqlite3
 backend/write_probe.tmp
+backend/sina_page.html
+backend/test_out.txt
 frontend/patch_*.py
 .DS_Store

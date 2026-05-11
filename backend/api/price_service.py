@@ -1,7 +1,9 @@
 import requests
+from requests.adapters import HTTPAdapter
 import re
 import time
 import logging
+import pandas as pd
 from datetime import datetime
 from django.conf import settings
 from django.core.cache import cache
@@ -14,6 +16,8 @@ logger = logging.getLogger('api')
 class PriceService:
     REALTIME_CACHE_KEY = "realtime_prices_last_success_v1"
     REALTIME_CACHE_TTL = 30 * 60
+    INTRADAY_CACHE_TTL = 60
+    INTRADAY_STALE_CACHE_TTL = 4 * 3600
     HEADERS = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Referer': 'https://gu.qq.com/',
@@ -22,17 +26,17 @@ class PriceService:
     _session = requests.Session()
     _session.trust_env = False  # Bypass system proxy
     _session.headers.update(HEADERS)
+    _adapter = HTTPAdapter(pool_connections=20, pool_maxsize=50)
+    _session.mount('http://', _adapter)
+    _session.mount('https://', _adapter)
 
     @staticmethod
     def _cache_get(key):
-        """委托给 CacheManager，并兼容普通 dict/list 缓存。"""
-        cached_df = CacheManager.get_df(key)
-        if cached_df is not None:
-            return cached_df
+        """读取缓存（PriceService 仅缓存 dict/list，直接走 Django cache）"""
         try:
             return cache.get(key)
         except Exception as e:
-            logger.warning(f"Payload cache retrieval failed for {key}: {e}")
+            logger.warning(f"Cache retrieval failed for {key}: {e}")
             try:
                 cache.delete(key)
             except Exception:
@@ -41,22 +45,16 @@ class PriceService:
 
     @staticmethod
     def _cache_set(key, value, ttl):
-        """委托给 CacheManager，并兼容普通 dict/list 缓存。"""
-        import pandas as pd
-
-        if isinstance(value, pd.DataFrame):
-            return CacheManager.set_df(key, value, ttl)
+        """写入缓存"""
         try:
             cache.set(key, value, ttl)
             return True
         except Exception as e:
-            logger.warning(f"Payload cache storage failed for {key}: {e}")
+            logger.warning(f"Cache storage failed for {key}: {e}")
             return False
 
     @staticmethod
     def _normalize_historical_cache_value(value):
-        import pandas as pd
-
         if isinstance(value, pd.DataFrame):
             normalized = value.copy()
             for column in ['date', 'time']:
@@ -84,9 +82,7 @@ class PriceService:
 
     @classmethod
     def _get_spot_snapshot_map(cls, symbols):
-        from django.core.cache import cache
         import akshare as ak
-        import pandas as pd
 
         cache_key = "a_share_spot_snapshot_for_valuation"
         snapshot = cls._cache_get(cache_key)
@@ -232,7 +228,6 @@ class PriceService:
             
             # 强化实时行情：使用 FundamentalService 替换腾讯接口中常常滞后的股息率
             from .fundamental_service import FundamentalService
-            import pandas as pd
             for sym, data in rt_data.items():
                 fallback = cached_fallback.get(sym) or spot_fallback.get(sym, {})
                 data.update(cls._merge_realtime_payload(sym, data, fallback, source='tencent'))
@@ -301,8 +296,25 @@ class PriceService:
         return f"{cls._historical_single_cache_key(symbol, requested_period, period, limit)}_stale"
 
     @classmethod
+    def _intraday_single_cache_key(cls, symbol):
+        fixed_symbol = cls._fix_symbol(symbol)
+        trade_date = datetime.now().strftime('%Y%m%d')
+        return f"intraday_single_v1_{fixed_symbol}_{trade_date}"
+
+    @classmethod
+    def _intraday_single_stale_cache_key(cls, symbol):
+        return f"{cls._intraday_single_cache_key(symbol)}_stale"
+
+    @classmethod
+    def _normalize_intraday_cache_value(cls, cached):
+        if isinstance(cached, dict) and isinstance(cached.get('points'), list):
+            return cached['points']
+        if isinstance(cached, list):
+            return cached
+        return []
+
+    @classmethod
     def _build_single_historical_data(cls, symbol, requested_period, period, limit, rt_data, spot_fallback):
-        import pandas as pd
         from .fundamental_service import FundamentalService
 
         fixed_symbol = cls._fix_symbol(symbol)
@@ -330,10 +342,29 @@ class PriceService:
             if len(day) >= 3:
                 price_list.append({'date': day[0], 'price': float(day[2])})
         df_prices = pd.DataFrame(price_list)
+        if df_prices.empty:
+            return []
 
-        df_fund = FundamentalService.get_ttm_fundamentals(fixed_symbol)
-        df_aligned = FundamentalService.align_to_prices(df_fund, df_prices, fixed_symbol)
-        df_divs = FundamentalService.get_historical_dividends(fixed_symbol)
+        try:
+            df_fund = FundamentalService.get_ttm_fundamentals(fixed_symbol)
+        except Exception as e:
+            logger.warning(f"Historical fundamentals unavailable for {fixed_symbol}, using price-only history: {e}")
+            df_fund = pd.DataFrame()
+
+        try:
+            df_aligned = FundamentalService.align_to_prices(df_fund, df_prices, fixed_symbol)
+        except Exception as e:
+            logger.warning(f"Historical alignment unavailable for {fixed_symbol}, using price-only history: {e}")
+            df_aligned = df_prices.copy()
+            df_aligned['date_dt'] = pd.to_datetime(df_aligned['date'], errors='coerce')
+            df_aligned['ttm_profit'] = 0
+            df_aligned['TOTAL_PARENT_EQUITY'] = 0
+
+        try:
+            df_divs = FundamentalService.get_historical_dividends(fixed_symbol)
+        except Exception as e:
+            logger.warning(f"Historical dividends unavailable for {fixed_symbol}, using zero dividend yield: {e}")
+            df_divs = pd.DataFrame()
 
         rt = rt_data.get(fixed_symbol, {})
         fallback = spot_fallback.get(fixed_symbol, {})
@@ -352,6 +383,13 @@ class PriceService:
                 if total_shares > 0:
                     curr_pb = (curr_price * total_shares) / latest_f['TOTAL_PARENT_EQUITY']
                     curr_pe = (curr_price * total_shares) / latest_f['ttm_profit'] if latest_f['ttm_profit'] > 0 else 0
+
+        try:
+            from .utils import get_valuation_config
+            val_config = get_valuation_config(fixed_symbol)
+        except Exception as e:
+            logger.warning(f"Valuation config unavailable for {fixed_symbol}: {e}")
+            val_config = {}
 
         history = []
         for _, row in df_aligned.iterrows():
@@ -373,8 +411,6 @@ class PriceService:
             calc_roe = (pb / pe * 100) if pe > 0 else 0
             
             # Apply dynamic valuation config (e.g. ROE floor)
-            from .utils import get_valuation_config
-            val_config = get_valuation_config(fixed_symbol)
             roe_floor = val_config.get('roe_floor')
             if roe_floor and calc_roe < roe_floor:
                 calc_roe = roe_floor
@@ -451,6 +487,8 @@ class PriceService:
 
         for orig_symbol in missing_symbols:
             symbol = cls._fix_symbol(orig_symbol)
+            single_cache_key = cls._historical_single_cache_key(orig_symbol, requested_period, period, limit)
+            single_stale_cache_key = cls._historical_single_stale_cache_key(orig_symbol, requested_period, period, limit)
             try:
                 history = cls._build_single_historical_data(
                     symbol,
@@ -466,10 +504,10 @@ class PriceService:
                     if period == 'day':
                         single_ttl = 3600 * 2
                     cls._cache_set(single_cache_key, history, single_ttl)
-                    cls._cache_set(cls._historical_single_stale_cache_key(orig_symbol, requested_period, period, limit), history, 7 * 24 * 3600)
+                    cls._cache_set(single_stale_cache_key, history, 7 * 24 * 3600)
             except Exception as e:
                 logger.error(f"PriceService Valuation Error for {symbol}: {e}")
-                stale_history = cls._cache_get(cls._historical_single_stale_cache_key(orig_symbol, requested_period, period, limit))
+                stale_history = cls._cache_get(single_stale_cache_key)
                 if stale_history is not None:
                     results[orig_symbol] = cls._normalize_historical_cache_value(stale_history)
 
@@ -515,16 +553,32 @@ class PriceService:
         """
         
         results = {}
-        
-        for symbol in symbols:
-            symbol = cls._fix_symbol(symbol)
+        missing_symbols = []
+
+        for raw_symbol in symbols:
+            symbol = cls._fix_symbol(raw_symbol)
+            cached = cls._normalize_intraday_cache_value(
+                cls._cache_get(cls._intraday_single_cache_key(symbol))
+            )
+            if cached:
+                results[symbol] = cached
+            else:
+                missing_symbols.append(symbol)
+
+        for symbol in missing_symbols:
             s = symbol.lower()
             url = f"http://ifzq.gtimg.cn/appstock/app/minute/query?code={s}"
             
             try:
                 resp = cls._session.get(url, timeout=5)
                 data = resp.json()
-                if data.get('code') != 0: continue
+                if data.get('code') != 0:
+                    stale = cls._normalize_intraday_cache_value(
+                        cls._cache_get(cls._intraday_single_stale_cache_key(symbol))
+                    )
+                    if stale:
+                        results[symbol] = stale
+                    continue
                 
                 stock_data = data['data'].get(s, {})
                 minutes = stock_data.get('data', {}).get('data', [])
@@ -540,9 +594,24 @@ class PriceService:
                             'time': time_str,
                             'price': round(price, 2),
                         })
-                results[symbol.upper()] = history
+                if history:
+                    results[symbol] = history
+                    payload = {'points': history}
+                    cls._cache_set(cls._intraday_single_cache_key(symbol), payload, cls.INTRADAY_CACHE_TTL)
+                    cls._cache_set(cls._intraday_single_stale_cache_key(symbol), payload, cls.INTRADAY_STALE_CACHE_TTL)
+                else:
+                    stale = cls._normalize_intraday_cache_value(
+                        cls._cache_get(cls._intraday_single_stale_cache_key(symbol))
+                    )
+                    if stale:
+                        results[symbol] = stale
             except Exception as e:
                 logger.error(f"PriceService Intraday Error for {symbol}: {e}")
+                stale = cls._normalize_intraday_cache_value(
+                    cls._cache_get(cls._intraday_single_stale_cache_key(symbol))
+                )
+                if stale:
+                    results[symbol] = stale
         
         return cls._align_intraday(results)
 

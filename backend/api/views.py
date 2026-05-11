@@ -10,6 +10,7 @@ import pandas as pd
 import logging
 import json
 import re
+from collections import deque
 
 from .models import Stock, SentimentData, News, Report, Announcement
 from .serializers import (
@@ -30,6 +31,10 @@ logger = logging.getLogger(__name__)
 COLLECTION_LOCK_KEY = 'manual_collection_lock'
 COLLECTION_STATUS_KEY = 'manual_collection_status'
 COLLECTION_LOCK_TTL = 60 * 30
+SINGLE_STOCK_COLLECTION_LOCK = threading.Lock()
+SINGLE_STOCK_COLLECTION_QUEUE = deque()
+SINGLE_STOCK_COLLECTION_PENDING_IDS = set()
+SINGLE_STOCK_COLLECTION_THREAD = None
 
 
 class StockViewSet(viewsets.ModelViewSet):
@@ -62,10 +67,10 @@ class StockViewSet(viewsets.ModelViewSet):
 
     @classmethod
     def _normalize_peer_symbols(cls, value, current_symbol=''):
-        current_fixed = PriceService._fix_symbol(current_symbol) if current_symbol else ''
+        current_fixed = format_symbol(current_symbol) if current_symbol else ''
         normalized = []
         for item in cls._coerce_list(value):
-            fixed_symbol = PriceService._fix_symbol(item)
+            fixed_symbol = format_symbol(item)
             if fixed_symbol == current_fixed or fixed_symbol in normalized:
                 continue
             normalized.append(fixed_symbol)
@@ -73,12 +78,12 @@ class StockViewSet(viewsets.ModelViewSet):
 
     def _normalize_stock_payload(self, raw_data, *, partial=False, current_symbol=''):
         data = raw_data.copy()
-        current_fixed = PriceService._fix_symbol(current_symbol) if current_symbol else ''
+        current_fixed = format_symbol(current_symbol) if current_symbol else ''
         symbol = str(data.get('symbol', '') or '').strip().upper()
         fixed_symbol = current_fixed
 
         if symbol:
-            fixed_symbol = PriceService._fix_symbol(symbol)
+            fixed_symbol = format_symbol(symbol)
             data['symbol'] = fixed_symbol
         elif not partial:
             raise ValueError('股票代码不能为空')
@@ -123,15 +128,39 @@ class StockViewSet(viewsets.ModelViewSet):
     def _trigger_single_stock_collection(stock: Stock) -> None:
         """新增股票后在后台补采该标的，避免必须手动全量采集。"""
 
-        def task():
-            try:
-                collect_stock_data(stock)
-                logger.info("Auto collected sentiment data for newly added stock %s", stock.symbol)
-            except Exception:
-                logger.exception("Auto collection failed for newly added stock %s", stock.symbol)
+        def worker():
+            global SINGLE_STOCK_COLLECTION_THREAD
 
-        thread = threading.Thread(target=task, daemon=True)
-        thread.start()
+            while True:
+                with SINGLE_STOCK_COLLECTION_LOCK:
+                    if not SINGLE_STOCK_COLLECTION_QUEUE:
+                        SINGLE_STOCK_COLLECTION_THREAD = None
+                        return
+                    stock_id = SINGLE_STOCK_COLLECTION_QUEUE.popleft()
+                    SINGLE_STOCK_COLLECTION_PENDING_IDS.discard(stock_id)
+
+                queued_stock = Stock.objects.filter(pk=stock_id).first()
+                if queued_stock is None:
+                    logger.info("Skip auto collection for deleted stock id=%s", stock_id)
+                    continue
+
+                try:
+                    collect_stock_data(queued_stock)
+                    logger.info("Auto collected sentiment data for newly added stock %s", queued_stock.symbol)
+                except Exception:
+                    logger.exception("Auto collection failed for newly added stock %s", queued_stock.symbol)
+
+        global SINGLE_STOCK_COLLECTION_THREAD
+        with SINGLE_STOCK_COLLECTION_LOCK:
+            if stock.pk in SINGLE_STOCK_COLLECTION_PENDING_IDS:
+                return
+
+            SINGLE_STOCK_COLLECTION_QUEUE.append(stock.pk)
+            SINGLE_STOCK_COLLECTION_PENDING_IDS.add(stock.pk)
+
+            if SINGLE_STOCK_COLLECTION_THREAD is None or not SINGLE_STOCK_COLLECTION_THREAD.is_alive():
+                SINGLE_STOCK_COLLECTION_THREAD = threading.Thread(target=worker, daemon=True)
+                SINGLE_STOCK_COLLECTION_THREAD.start()
 
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -224,7 +253,16 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
     
     @action(detail=True, methods=['get'])
     def get_announcements(self, request, **kwargs):
-        sentiment = self.get_object()
+        symbol = kwargs.get(self.lookup_url_kwarg or self.lookup_field)
+        sentiment = (
+            SentimentData.objects
+            .filter(stock__symbol=symbol)
+            .order_by('-date', '-updated_at', '-id')
+            .first()
+        )
+        if sentiment is None:
+            return Response({'message': '暂无该股票数据，请先运行采集脚本'}, status=status.HTTP_404_NOT_FOUND)
+
         announcements = sentiment.announcements.order_by('-pub_date')[:20]
         serializer = AnnouncementSerializer(announcements, many=True)
         return Response(serializer.data)
@@ -277,7 +315,7 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
         if mode == 'minute':
             data = PriceService.get_intraday_data(symbols)
         else:
-            data = PriceService.get_realtime_price(symbols, fetch_fundamentals=True)
+            data = PriceService.get_realtime_price(symbols, fetch_fundamentals=False)
         return Response(data)
 
     @action(detail=False, methods=['get'])

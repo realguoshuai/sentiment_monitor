@@ -6,6 +6,7 @@ import os
 import sys
 import django
 import math
+import logging
 
 # 设置Django环境
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -19,6 +20,8 @@ from django.utils.dateparse import parse_date
 from api.models import Stock, SentimentData, News, Report, Announcement
 from collector.sources import eastmoney, cninfo, xueqiu
 from analyzer.engine import SentimentEngine
+
+logger = logging.getLogger(__name__)
 
 # Legacy keywords were removed in favor of SnowNLP analysis.
 
@@ -43,6 +46,55 @@ def _safe_pub_date(value, fallback: date) -> date:
 
     parsed = parse_date(text[:10])
     return parsed or fallback
+
+
+def _dedupe_items(items, *, title_length=60):
+    seen = set()
+    unique_items = []
+    for item in items:
+        title = _normalize_title(item.get('title'))
+        if len(title) <= 5:
+            continue
+
+        dedupe_key = (title[:title_length], str(item.get('pub_date') or '')[:10])
+        if dedupe_key in seen:
+            continue
+
+        seen.add(dedupe_key)
+        unique_items.append({
+            **item,
+            'title': title,
+        })
+    return unique_items
+
+
+def _get_fhyanbao_reports(symbol_code: str) -> list:
+    try:
+        from collector.sources import fhyanbao
+        return fhyanbao.get_reports(symbol_code, days=90)
+    except Exception as exc:
+        logger.warning("FHYanBao report fallback failed for %s: %s", symbol_code, exc)
+        return []
+
+
+def _collect_reports(symbol_code: str) -> list:
+    primary_reports = eastmoney.get_reports(symbol_code)
+    fallback_reports = []
+
+    if not primary_reports:
+        fallback_reports = _get_fhyanbao_reports(symbol_code)
+
+    return _dedupe_items([*primary_reports, *fallback_reports])
+
+
+def _collect_announcements(symbol_code: str) -> list:
+    primary_announcements = cninfo.get_announcements(symbol_code)
+    fallback_announcements = []
+
+    if not primary_announcements:
+        fallback_announcements = eastmoney.fetch_notices_from_akshare(symbol_code)
+
+    return _dedupe_items([*primary_announcements, *fallback_announcements])
 
 
 def _build_news_records(sentiment, items, fallback_date: date):
@@ -109,36 +161,9 @@ def collect_stock_data(stock: Stock):
     xq_news = xueqiu.get_news(stock.symbol) # 雪球通常需要带 SH/SZ 前缀
     
     # 合并新闻并去重
-    seen_titles = set()
-    news_data = []
-    for item in em_news + xq_news:
-        title = _normalize_title(item.get('title'))
-        if len(title) <= 5:
-            continue
-        normalized_title = title[:60] # 取前60个字符去重
-        if normalized_title not in seen_titles:
-            seen_titles.add(normalized_title)
-            news_data.append({
-                **item,
-                'title': title,
-            })
-            
-    report_data = [
-        {
-            **item,
-            'title': _normalize_title(item.get('title')),
-        }
-        for item in eastmoney.get_reports(symbol_code)
-        if len(_normalize_title(item.get('title'))) > 5
-    ]
-    announcement_data = [
-        {
-            **item,
-            'title': _normalize_title(item.get('title')),
-        }
-        for item in cninfo.get_announcements(symbol_code)
-        if len(_normalize_title(item.get('title'))) > 5
-    ]
+    news_data = _dedupe_items([*em_news, *xq_news])
+    report_data = _collect_reports(symbol_code)
+    announcement_data = _collect_announcements(symbol_code)
     
     print(f"  [OK] Consolidated News: {len(news_data)} items (EM: {len(em_news)}, XQ: {len(xq_news)})")
     print(f"  [OK] Reports: {len(report_data)} items")
