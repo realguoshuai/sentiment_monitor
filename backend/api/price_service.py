@@ -1,15 +1,12 @@
 import requests
 from requests.adapters import HTTPAdapter
 import re
-import time
 import logging
 import pandas as pd
 from datetime import datetime
-from django.conf import settings
 from django.core.cache import cache
 
 from .utils import format_symbol
-from .cache_manager import CacheManager
 
 logger = logging.getLogger('api')
 
@@ -82,8 +79,6 @@ class PriceService:
 
     @classmethod
     def _get_spot_snapshot_map(cls, symbols):
-        import akshare as ak
-
         cache_key = "a_share_spot_snapshot_for_valuation"
         snapshot = cls._cache_get(cache_key)
         if snapshot is None:
@@ -470,11 +465,12 @@ class PriceService:
         missing_symbols = []
 
         for orig_symbol in symbols:
+            symbol = cls._fix_symbol(orig_symbol)
             single_cache_key = cls._historical_single_cache_key(orig_symbol, requested_period, period, limit)
             cached_history = cls._cache_get(single_cache_key)
             if cached_history is not None:
                 cached_history = cls._normalize_historical_cache_value(cached_history)
-                results[orig_symbol] = cached_history
+                results[symbol] = cached_history
                 continue
             missing_symbols.append(orig_symbol)
 
@@ -498,7 +494,7 @@ class PriceService:
                     rt_data,
                     spot_fallback,
                 )
-                results[orig_symbol] = history
+                results[symbol] = history
                 if history:
                     single_ttl = 3600 * 12
                     if period == 'day':
@@ -509,7 +505,7 @@ class PriceService:
                 logger.error(f"PriceService Valuation Error for {symbol}: {e}")
                 stale_history = cls._cache_get(single_stale_cache_key)
                 if stale_history is not None:
-                    results[orig_symbol] = cls._normalize_historical_cache_value(stale_history)
+                    results[symbol] = cls._normalize_historical_cache_value(stale_history)
 
         if results and len(results) == len(symbols):
             ttl = 3600 * 12
