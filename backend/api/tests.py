@@ -962,6 +962,38 @@ class SentimentApiTests(APITestCase):
 
         self.assertEqual(cached, payload)
 
+    def test_spot_snapshot_map_ignores_corrupt_cache_payload(self):
+        PriceService._cache_set('a_share_spot_snapshot_for_valuation', ['not-a-snapshot'], 60)
+
+        result = PriceService._get_spot_snapshot_map(['SH600000'])
+
+        self.assertEqual(result, {})
+
+    def test_spot_snapshot_map_skips_bad_rows_and_sanitizes_numbers(self):
+        PriceService._cache_set(
+            'a_share_spot_snapshot_for_valuation',
+            {
+                '600000': {
+                    '最新价': 'nan',
+                    '总市值': 'bad-market-cap',
+                    '市盈率-动态': '5.5',
+                    '市净率': 'inf',
+                },
+                '000001': 'bad-row',
+            },
+            60,
+        )
+
+        result = PriceService._get_spot_snapshot_map(['SH600000', 'SZ000001'])
+
+        self.assertIn('SH600000', result)
+        self.assertNotIn('SZ000001', result)
+        self.assertEqual(result['SH600000']['price'], 0.0)
+        self.assertEqual(result['SH600000']['market_cap'], 0.0)
+        self.assertEqual(result['SH600000']['pe'], 5.5)
+        self.assertEqual(result['SH600000']['pb'], 0.0)
+        self.assertEqual(result['SH600000']['total_shares'], 0.0)
+
     def test_format_symbol_supports_snapshot_prefixes_and_bj(self):
         self.assertEqual(format_symbol('sh600000'), 'SH600000')
         self.assertEqual(format_symbol('sz000001'), 'SZ000001')

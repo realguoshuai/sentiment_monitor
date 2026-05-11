@@ -82,7 +82,7 @@ class PriceService:
     def _get_spot_snapshot_map(cls, symbols):
         cache_key = "a_share_spot_snapshot_for_valuation"
         snapshot = cls._cache_get(cache_key)
-        if snapshot is None:
+        if not isinstance(snapshot, dict):
             # 强化非阻塞逻辑：跳过同步爬取全量 A 股快照，由 scheduler 或 warm_valuation_cache 异步填充
             logger.debug("Spot snapshot cache miss, skipping synchronous fetch to maintain low latency.")
             return {}
@@ -92,18 +92,13 @@ class PriceService:
             fixed = cls._fix_symbol(symbol)
             code = fixed[2:]
             row = snapshot.get(code)
-            if not row:
+            if not isinstance(row, dict):
                 continue
 
-            price = pd.to_numeric(row.get('最新价'), errors='coerce')
-            market_cap = pd.to_numeric(row.get('总市值'), errors='coerce')
-            pe = pd.to_numeric(row.get('市盈率-动态'), errors='coerce')
-            pb = pd.to_numeric(row.get('市净率'), errors='coerce')
-
-            price = float(price) if pd.notnull(price) else 0.0
-            market_cap = float(market_cap) if pd.notnull(market_cap) else 0.0
-            pe = float(pe) if pd.notnull(pe) else 0.0
-            pb = float(pb) if pd.notnull(pb) else 0.0
+            price = cls._safe_float(row.get('最新价'))
+            market_cap = cls._safe_float(row.get('总市值'))
+            pe = cls._safe_float(row.get('市盈率-动态'))
+            pb = cls._safe_float(row.get('市净率'))
 
             result[fixed] = {
                 'name': fixed,
