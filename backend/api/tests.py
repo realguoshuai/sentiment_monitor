@@ -1578,6 +1578,28 @@ class SentimentApiTests(APITestCase):
         self.assertEqual(result['SZ000001']['price'], 11.2)
         self.assertEqual(result['SZ000001']['source'], 'spot_snapshot')
 
+    def test_tencent_realtime_parser_tolerates_bad_numeric_fields(self):
+        fields = [''] * 50
+        fields[1] = '平安银行'
+        fields[3] = 'bad-price'
+        fields[30] = '20260410150000'
+        fields[31] = 'bad-change'
+        fields[32] = '1.23'
+        fields[45] = 'bad-market-cap'
+        fields[46] = '0.7'
+        fields[49] = 'bad-dividend'
+        text = f'v_sz000001="{"~".join(fields)}";'
+
+        result = PriceService._parse_tencent_rt(text)
+
+        self.assertEqual(result['SZ000001']['name'], '平安银行')
+        self.assertEqual(result['SZ000001']['price'], 0.0)
+        self.assertEqual(result['SZ000001']['change_amount'], 0.0)
+        self.assertEqual(result['SZ000001']['change_percent'], 1.23)
+        self.assertEqual(result['SZ000001']['market_cap'], 0.0)
+        self.assertEqual(result['SZ000001']['pb'], 0.7)
+        self.assertEqual(result['SZ000001']['dividend_yield'], 0.0)
+
     @patch('api.price_service.PriceService._session.get')
     def test_intraday_data_caches_successful_minute_points(self, mock_get):
         class FakeResponse:
@@ -1603,6 +1625,29 @@ class SentimentApiTests(APITestCase):
         stale = PriceService._cache_get(PriceService._intraday_single_stale_cache_key('SZ000001'))
         self.assertEqual(fresh['points'][0]['price'], 10.1)
         self.assertEqual(stale['points'][1]['time'], '0931')
+
+    @patch('api.price_service.PriceService._session.get')
+    def test_intraday_data_skips_malformed_minute_points(self, mock_get):
+        class FakeResponse:
+            def json(self):
+                return {
+                    'code': 0,
+                    'data': {
+                        'sz000001': {
+                            'data': {
+                                'data': ['0930 bad 100', 'badline', '0931 10.20 200']
+                            }
+                        }
+                    }
+                }
+
+        mock_get.return_value = FakeResponse()
+
+        result = PriceService.get_intraday_data(['SZ000001'])
+
+        self.assertEqual(len(result['SZ000001']), 1)
+        self.assertEqual(result['SZ000001'][0]['time'], '0931')
+        self.assertEqual(result['SZ000001'][0]['price'], 10.2)
 
     @patch('api.price_service.PriceService._session.get', side_effect=requests.exceptions.ConnectTimeout('minute timeout'))
     def test_intraday_data_uses_stale_cache_when_minute_fetch_fails(self, mock_get):

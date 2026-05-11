@@ -145,6 +145,12 @@ class PriceService:
             return 0.0
 
     @classmethod
+    def _field_float(cls, fields, index):
+        if len(fields) <= index:
+            return 0.0
+        return cls._safe_float(fields[index])
+
+    @classmethod
     def _merge_realtime_payload(cls, symbol, primary, fallback, *, source='fallback'):
         merged = cls._normalize_realtime_payload(symbol, primary, source=source)
         fallback_payload = cls._normalize_realtime_payload(symbol, fallback, source=source)
@@ -261,17 +267,18 @@ class PriceService:
             fields = match.group(2).split('~')
             if len(fields) < 33: continue
             
-            price = float(fields[3]) if fields[3] else 0.0
+            price = cls._field_float(fields, 3)
+            market_cap = cls._field_float(fields, 45) * 100000000
             results[symbol] = {
                 'name': fields[1],
                 'price': price,
-                'change_amount': float(fields[31]) if len(fields) > 31 and fields[31] else 0.0,
-                'change_percent': float(fields[32]) if len(fields) > 32 and fields[32] else 0.0,
-                'pe': float(fields[39]) if len(fields) > 39 and fields[39] else 0.0,
-                'pb': float(fields[46]) if len(fields) > 46 and fields[46] else 0.0,
-                'dividend_yield': float(fields[49]) if len(fields) > 49 and fields[49] else 0.0,
-                'market_cap': float(fields[45]) * 100000000 if len(fields) > 45 and fields[45] else 0.0, # 总市值 (元)
-                'total_shares': (float(fields[45]) * 100000000 / price) if len(fields) > 45 and price > 0 else 0.0,
+                'change_amount': cls._field_float(fields, 31),
+                'change_percent': cls._field_float(fields, 32),
+                'pe': cls._field_float(fields, 39),
+                'pb': cls._field_float(fields, 46),
+                'dividend_yield': cls._field_float(fields, 49),
+                'market_cap': market_cap, # 总市值 (元)
+                'total_shares': (market_cap / price) if price > 0 and market_cap > 0 else 0.0,
                 'time': fields[30] if len(fields) > 30 else datetime.now().strftime('%Y%m%d%H%M%S')
             }
         return results
@@ -307,6 +314,28 @@ class PriceService:
         if isinstance(cached, list):
             return cached
         return []
+
+    @classmethod
+    def _get_intraday_stale(cls, symbol):
+        return cls._normalize_intraday_cache_value(
+            cls._cache_get(cls._intraday_single_stale_cache_key(symbol))
+        )
+
+    @classmethod
+    def _parse_intraday_minutes(cls, minutes):
+        history = []
+        for minute in minutes:
+            fields = str(minute).split(' ')
+            if len(fields) < 2:
+                continue
+            price = cls._safe_float(fields[1])
+            if price <= 0:
+                continue
+            history.append({
+                'time': fields[0],
+                'price': round(price, 2),
+            })
+        return history
 
     @classmethod
     def _build_single_historical_data(cls, symbol, requested_period, period, limit, rt_data, spot_fallback):
@@ -569,43 +598,26 @@ class PriceService:
                 resp = cls._session.get(url, timeout=5)
                 data = resp.json()
                 if data.get('code') != 0:
-                    stale = cls._normalize_intraday_cache_value(
-                        cls._cache_get(cls._intraday_single_stale_cache_key(symbol))
-                    )
+                    stale = cls._get_intraday_stale(symbol)
                     if stale:
                         results[symbol] = stale
                     continue
                 
-                stock_data = data['data'].get(s, {})
+                stock_data = data.get('data', {}).get(s, {})
                 minutes = stock_data.get('data', {}).get('data', [])
-                history = []
-                
-                for m in minutes:
-                    fields = m.split(' ')
-                    if len(fields) >= 2:
-                        price = float(fields[1])
-                        time_str = fields[0] # HHMM
-
-                        history.append({
-                            'time': time_str,
-                            'price': round(price, 2),
-                        })
+                history = cls._parse_intraday_minutes(minutes)
                 if history:
                     results[symbol] = history
                     payload = {'points': history}
                     cls._cache_set(cls._intraday_single_cache_key(symbol), payload, cls.INTRADAY_CACHE_TTL)
                     cls._cache_set(cls._intraday_single_stale_cache_key(symbol), payload, cls.INTRADAY_STALE_CACHE_TTL)
                 else:
-                    stale = cls._normalize_intraday_cache_value(
-                        cls._cache_get(cls._intraday_single_stale_cache_key(symbol))
-                    )
+                    stale = cls._get_intraday_stale(symbol)
                     if stale:
                         results[symbol] = stale
             except Exception as e:
                 logger.error(f"PriceService Intraday Error for {symbol}: {e}")
-                stale = cls._normalize_intraday_cache_value(
-                    cls._cache_get(cls._intraday_single_stale_cache_key(symbol))
-                )
+                stale = cls._get_intraday_stale(symbol)
                 if stale:
                     results[symbol] = stale
         
