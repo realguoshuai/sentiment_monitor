@@ -7,12 +7,18 @@ export const useSentimentStore = defineStore('sentiment', () => {
   // State
   const stocks = ref<Stock[]>([])
   const sentimentData = ref<SentimentData[]>([])
+  const sentimentTrend = ref<any[]>([])
   const loading = ref(false)
   const isCollecting = ref(false)
   const error = ref<string | null>(null)
   const lastUpdated = ref<Date | null>(null)
   const realtimePrices = ref<Record<string, RealtimePrice>>({})
   const backendStarting = ref(false)
+  
+  // 新增：Session 级缓存，切换标的秒开
+  const analysisCache = ref<Record<string, any>>({})
+  const qualityCache = ref<Record<string, any>>({})
+  const backtestCache = ref<Record<string, any>>({})
 
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -46,15 +52,10 @@ export const useSentimentStore = defineStore('sentiment', () => {
   }
 
   // Getters
-  const calculateROI = (symbol: string, pe: number, pb: number) => {
+  const calculateROI = (symbol: string, pe: number, pb: number, dividend_yield: number = 0) => {
     if (pe <= 0 || pb <= 0) return 0
     let roe = (pb / pe) * 100
-    // 洋河股份(002304) ROE 不足 20% 时按 20% 计算
-    const isYanghe = symbol.includes('002304')
-    if (isYanghe && roe < 20) {
-      roe = 20
-    }
-    return roe / pb
+    return (roe / pb) + dividend_yield
   }
 
   const sortedStocks = computed(() => {
@@ -95,8 +96,8 @@ export const useSentimentStore = defineStore('sentiment', () => {
     return [...dashboardStocks.value].sort((a, b) => {
       const pA = realtimePrices.value[a.stock_symbol]
       const pB = realtimePrices.value[b.stock_symbol]
-      const roiA = pA ? calculateROI(a.stock_symbol, pA.pe, pA.pb) : 0
-      const roiB = pB ? calculateROI(b.stock_symbol, pB.pe, pB.pb) : 0
+      const roiA = pA ? calculateROI(a.stock_symbol, pA.pe, pA.pb, pA.dividend_yield) : 0
+      const roiB = pB ? calculateROI(b.stock_symbol, pB.pe, pB.pb, pB.dividend_yield) : 0
       return roiB - roiA
     })
   })
@@ -170,7 +171,8 @@ export const useSentimentStore = defineStore('sentiment', () => {
     error.value = null
     
     try {
-      const response = await retryDuringStartup(() => stockApi.getLatestSentiment())
+      // 使用 mini=1 模式，只获取基础统计数据，不获取新闻详情列表，大幅加速首页加载
+      const response = await retryDuringStartup(() => stockApi.getLatestSentiment({ mini: '1' }))
       sentimentData.value = response.data
       lastUpdated.value = new Date()
     } catch (e: any) {
@@ -180,11 +182,19 @@ export const useSentimentStore = defineStore('sentiment', () => {
     }
   }
 
+  async function fetchSentimentTrend() {
+    try {
+      const response = await stockApi.getOverallSentimentTrend(7)
+      sentimentTrend.value = response.data
+    } catch (e) {
+      console.error('Failed to fetch sentiment trend:', e)
+    }
+  }
+
   async function triggerCollection() {
     isCollecting.value = true
     try {
       await stockApi.triggerCollection()
-      // 给后台一点启动时间，然后开始轮询或等待
       return true
     } catch (e: any) {
       console.error('Failed to trigger collection:', e)
@@ -203,6 +213,43 @@ export const useSentimentStore = defineStore('sentiment', () => {
     }
   }
 
+  // --- 新增：带缓存的获取方法 ---
+  async function getAnalysis(symbol: string, force = false) {
+    if (!force && analysisCache.value[symbol]) return analysisCache.value[symbol]
+    try {
+      const res = await stockApi.getAnalysis(symbol)
+      analysisCache.value[symbol] = res.data
+      return res.data
+    } catch (e) {
+      console.error(`Failed to fetch analysis for ${symbol}:`, e)
+      throw e
+    }
+  }
+
+  async function getQuality(symbol: string, force = false) {
+    if (!force && qualityCache.value[symbol]) return qualityCache.value[symbol]
+    try {
+      const res = await stockApi.getQualityAnalysis(symbol)
+      qualityCache.value[symbol] = res.data
+      return res.data
+    } catch (e) {
+      console.error(`Failed to fetch quality for ${symbol}:`, e)
+      throw e
+    }
+  }
+
+  async function getBacktest(symbol: string, force = false) {
+    if (!force && backtestCache.value[symbol]) return backtestCache.value[symbol]
+    try {
+      const res = await stockApi.getHistoryBacktest(symbol)
+      backtestCache.value[symbol] = res.data
+      return res.data
+    } catch (e) {
+      console.error(`Failed to fetch backtest for ${symbol}:`, e)
+      throw e
+    }
+  }
+
   function getStockBySymbol(symbol: string) {
     return dashboardStocks.value.find(s => s.stock_symbol === symbol)
   }
@@ -210,6 +257,7 @@ export const useSentimentStore = defineStore('sentiment', () => {
   return {
     stocks,
     sentimentData,
+    sentimentTrend,
     loading,
     isCollecting,
     error,
@@ -229,8 +277,16 @@ export const useSentimentStore = defineStore('sentiment', () => {
     updateStock,
     removeStock,
     fetchLatestSentiment,
+    fetchSentimentTrend,
     triggerCollection,
     fetchRealtimePrices,
     getStockBySymbol,
+    // Caches & New Actions
+    analysisCache,
+    qualityCache,
+    backtestCache,
+    getAnalysis,
+    getQuality,
+    getBacktest,
   }
 })

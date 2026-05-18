@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="quality-view">
     <header class="page-header">
       <div v-if="latestStats" class="stock-info">
@@ -9,15 +9,15 @@
         <div class="badges">
           <div class="badge-item" @mouseenter="showTooltip($event, 'roe')" @mouseleave="hideTooltip">
             <span class="label">最新 ROE <i class="info-icon">i</i></span>
-            <span class="value">{{ latestStats.roe.toFixed(2) }}%</span>
+            <span class="value">{{ formatPct(latestStats.roe) }}</span>
           </div>
           <div class="badge-item" @mouseenter="showTooltip($event, 'net_margin')" @mouseleave="hideTooltip">
             <span class="label">净利率 <i class="info-icon">i</i></span>
-            <span class="value">{{ latestStats.net_margin.toFixed(2) }}%</span>
+            <span class="value">{{ formatPct(latestStats.net_margin) }}</span>
           </div>
           <div class="badge-item" @mouseenter="showTooltip($event, 'payout_ratio')" @mouseleave="hideTooltip">
             <span class="label">派息率 <i class="info-icon">i</i></span>
-            <span class="value">{{ latestStats.payout_ratio.toFixed(2) }}%</span>
+            <span class="value">{{ formatPct(latestStats.payout_ratio) }}</span>
           </div>
         </div>
       </div>
@@ -29,7 +29,7 @@
     <div v-if="loading" class="loading-overlay">
       <div class="loader-box">
         <div class="spinner"></div>
-        <p>正在深度挖掘 10 年财务数据...</p>
+        <p>正在追根溯源 10 年财务数据...</p>
         <div class="loading-quote">
           <p>“{{ loadingQuote.text }}”</p>
           <span>{{ loadingQuote.author }}</span>
@@ -512,6 +512,18 @@ const applyShareholderPayload = (payload: any) => {
 }
 
 const fetchData = async () => {
+  if (sentimentStore.qualityCache[symbol]) {
+    const cached = sentimentStore.qualityCache[symbol]
+    applyQualityPayload(cached)
+    loading.value = false
+    setTimeout(() => initCharts(), 0)
+    if (cached.cache_status === 'stale') {
+      void sentimentStore.getQuality(symbol, true).then(res => applyQualityPayload(res))
+    }
+    void fetchShareholderStructure()
+    return
+  }
+
   loading.value = true
   shareholderLoading.value = true
   shareholderError.value = ''
@@ -539,6 +551,15 @@ const fetchData = async () => {
     shareholderLoading.value = false
   }
 }
+
+const applyQualityPayload = (data: any) => {
+  qualityData.value = data.quality_history || []
+  cashflowSummary.value = data.cashflow_summary || null
+  capitalAllocationSummary.value = data.capital_allocation_summary || null
+  stabilitySummary.value = data.stability_summary || null
+  balanceSheetSummary.value = data.balance_sheet_summary || null
+}
+
 
 const fetchShareholderStructure = async () => {
   shareholderLoading.value = true
@@ -1011,12 +1032,18 @@ const initCharts = () => {
     shareholderChart.setOption(
       {
         backgroundColor: 'transparent',
+        title: {
+          text: `${stockName.value} 筹码结构对齐`,
+          left: 'center',
+          top: 0,
+          textStyle: { color: '#1e293b', fontSize: 16, fontWeight: 800 }
+        },
         tooltip: {
           trigger: 'axis',
           formatter: tooltipFormatter,
         },
         legend: { bottom: 0, textStyle: { color: '#64748b' } },
-        grid: { top: 40, left: 50, right: 60, bottom: 60 },
+        grid: { top: 60, left: 50, right: 60, bottom: 60 },
         xAxis: {
           type: 'category',
           data: dates,

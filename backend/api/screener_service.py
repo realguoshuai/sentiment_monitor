@@ -30,7 +30,7 @@ class ScreenerService:
     SNAPSHOT_FETCH_RETRIES = 3
     VALUATION_CACHE_KEY = 'a_share_spot_snapshot_for_valuation'
     ROE_CACHE_KEY = 'screener_latest_roe_map_v2'
-    DIVIDEND_CACHE_KEY = 'screener_latest_dividend_yield_map_v2'
+    DIVIDEND_CACHE_KEY = 'screener_latest_dividend_yield_map_v3'
     ROE_CACHE_TTL = 60 * 60 * 12
     DIVIDEND_CACHE_TTL = 60 * 60 * 12
 
@@ -103,7 +103,8 @@ class ScreenerService:
         roe_map: Dict[str, dict] = {}
         for report_date in cls._annual_report_dates():
             try:
-                df = FundamentalService._call_akshare(ak.stock_yjbb_em, date=report_date, use_no_proxy=True)
+                from .fundamental.fetcher import FundamentalFetcher as Fetcher
+                df = Fetcher.call_akshare(ak.stock_yjbb_em, date=report_date, use_no_proxy=True)
             except Exception as exc:
                 logger.warning("Screener ROE fetch failed for report date %s: %s", report_date, exc)
                 continue
@@ -162,11 +163,12 @@ class ScreenerService:
         latest_event_dates: Dict[str, pd.Timestamp] = {}
         today = timezone.localdate()
 
-        for report_date in cls._recent_report_dates():
+        for report_date_str in cls._recent_report_dates():
+            report_year = int(report_date_str[:4])
             try:
-                df = FundamentalService._call_akshare(ak.stock_fhps_em, date=report_date, use_no_proxy=True)
+                df = FundamentalService._call_akshare(ak.stock_fhps_em, date=report_date_str, use_no_proxy=True)
             except Exception as exc:
-                logger.warning("Screener dividend fetch failed for report date %s: %s", report_date, exc)
+                logger.warning("Screener dividend fetch failed for report date %s: %s", report_date_str, exc)
                 continue
 
             if df is None or df.empty:
@@ -192,17 +194,16 @@ class ScreenerService:
                     continue
 
                 event_date = cls._resolve_dividend_event_date(row)
-                if pd.isna(event_date):
-                    continue
-
-                event_year = event_date.year
+                
+                # 分红金额归属于报告期所在年份 (report_year)，而非公告年份
                 cash_per_share = float(cash_ratio) / 10.0
                 payout_yearly_cash.setdefault(symbol, {})
-                payout_yearly_cash[symbol][event_year] = payout_yearly_cash[symbol].get(event_year, 0.0) + cash_per_share
+                payout_yearly_cash[symbol][report_year] = payout_yearly_cash[symbol].get(report_year, 0.0) + cash_per_share
 
-                latest_existing = latest_event_dates.get(symbol)
-                if latest_existing is None or event_date > latest_existing:
-                    latest_event_dates[symbol] = event_date
+                if not pd.isna(event_date):
+                    latest_existing = latest_event_dates.get(symbol)
+                    if latest_existing is None or event_date > latest_existing:
+                        latest_event_dates[symbol] = event_date
 
         dividend_map: Dict[str, dict] = {}
         current_year = today.year
@@ -364,10 +365,13 @@ class ScreenerService:
 
         normalized_symbols = working['_normalized_symbol'].tolist()
 
+        monitored_symbols_set = {format_symbol(s.symbol) for s in Stock.objects.all()}
         realtime_map: Dict[str, dict] = {}
-        for batch in cls._chunked(normalized_symbols, cls.BATCH_SIZE):
-            batch_map = PriceService.get_realtime_price(batch, fetch_fundamentals=False)
-            realtime_map.update(batch_map)
+        target_monitored = [s for s in normalized_symbols if s in monitored_symbols_set]
+        if target_monitored:
+            for batch in cls._chunked(target_monitored, cls.BATCH_SIZE):
+                batch_map = PriceService.get_realtime_price(batch, fetch_fundamentals=False)
+                realtime_map.update(batch_map)
 
         rows: List[StockScreenerSnapshot] = []
         for _, row in working.iterrows():
@@ -520,7 +524,7 @@ class ScreenerService:
         queryset = StockScreenerSnapshot.objects.filter(snapshot_date=latest_snapshot_date).annotate(
             roi_pct=Case(
                 When(pb=0, then=Value(0.0)),
-                default=ExpressionWrapper(F('roe_proxy_pct') / F('pb'), output_field=FloatField()),
+                default=ExpressionWrapper(F('roe_proxy_pct') / F('pb') + F('dividend_yield'), output_field=FloatField()),
                 output_field=FloatField(),
             ),
         )

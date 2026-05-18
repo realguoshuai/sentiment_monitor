@@ -60,7 +60,7 @@
               <div class="text-lg font-black font-mono text-slate-800">{{ roeText }}</div>
             </div>
             <div class="text-center">
-              <div class="text-[10px] text-slate-500 uppercase tracking-widest font-bold mb-1 text-indigo-600">投资 ROI</div>
+              <div class="text-[10px] text-slate-500 uppercase tracking-widest font-bold mb-1 text-indigo-600" title="ROI = ROE / PB + 股息率">投资 ROI</div>
               <div class="text-lg font-black font-mono text-indigo-600">{{ roiText }}</div>
             </div>
             <div class="text-center">
@@ -240,11 +240,11 @@ const roeText = computed(() => {
 
 const roiValue = computed(() => {
   if (roeValue.value === null || !rtPrice.value || rtPrice.value.pb <= 0) return null
-  return roeValue.value / rtPrice.value.pb
+  return store.calculateROI(symbol, rtPrice.value.pe, rtPrice.value.pb, rtPrice.value.dividend_yield)
 })
 
 const roiText = computed(() => {
   if (roiValue.value === null) return '--'
-  return (roiValue.value * 100).toFixed(1) + '%'
+  return roiValue.value.toFixed(2) + '%'
 })
 </script>

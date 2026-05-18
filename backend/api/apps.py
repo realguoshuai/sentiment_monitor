@@ -59,13 +59,13 @@ class ApiConfig(AppConfig):
         monitored_symbols = list(Stock.objects.order_by('symbol').values_list('symbol', flat=True))
         core_symbols = monitored_symbols or ['SZ000423', 'SZ002304']
         try:
-            print(f"[Cache Warming] Warming valuation cache for {len(core_symbols)} symbols...")
+            print(f"[Cache Warming] Fast-warming price and basic fundamentals for {len(core_symbols)} symbols...")
             PriceService.refresh_snapshot_cache()
-            for symbol in core_symbols:
+            # 基础数据预热：只预热 TTM 核心指标，不涉及 10 年深度溯源
+            for symbol in core_symbols[:20]: # 扩展到前 20 只
+                FundamentalService.get_ttm_fundamentals(symbol)
                 PriceService.get_historical_data([symbol], limit=120, period='month')
-            AnalysisService.warm_cache(core_symbols, period='10y')
-            for symbol in core_symbols:
-                HistoryBacktestService.get_history_backtest(symbol)
-            print("[Cache Warming] Valuation and analysis cache warmed successfully.")
+            
+            print("[Cache Warming] Lightweight pre-warming completed.")
         except Exception as e:
             print(f"[Cache Warming] Skip warming: {e}")

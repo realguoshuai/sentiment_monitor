@@ -1,4 +1,4 @@
-﻿from rest_framework import viewsets, status
+from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 from django.core.cache import cache
@@ -213,15 +213,14 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
         return SentimentData.objects.filter(date__gte=thirty_days_ago).select_related('stock')
 
     def _latest_per_stock_queryset(self):
-        latest_ids = (
-            SentimentData.objects
-            .filter(stock=OuterRef('stock'))
-            .order_by('-date', '-updated_at', '-id')
-            .values('id')[:1]
-        )
+        from .models import Stock
+        latest_sentiment_sub = SentimentData.objects.filter(stock_id=OuterRef('id')).order_by('-date', '-updated_at', '-id').values('id')[:1]
+        stocks = Stock.objects.annotate(latest_id=Subquery(latest_sentiment_sub))
+        latest_ids = [s.latest_id for s in stocks if s.latest_id]
+        
         return (
             SentimentData.objects
-            .filter(id__in=Subquery(latest_ids))
+            .filter(id__in=latest_ids)
             .select_related('stock')
             .order_by('stock__symbol')
         )
@@ -262,33 +261,151 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
         )
         if sentiment is None:
             return Response({'message': '暂无该股票数据，请先运行采集脚本'}, status=status.HTTP_404_NOT_FOUND)
-
         announcements = sentiment.announcements.order_by('-pub_date')[:20]
         serializer = AnnouncementSerializer(announcements, many=True)
         return Response(serializer.data)
     
     @action(detail=False, methods=['get'])
-    def latest(self, request):
-        """获取每只监控股票各自最新的舆情数据（限制每只股票最多返回50条研报）"""
-        queryset = self._latest_per_stock_queryset()
-        if not queryset.exists():
-            return Response(
-                {'message': '暂无数据，请先运行采集脚本'},
-                status=status.HTTP_404_NOT_FOUND
-            )
+    def overall_trend(self, request):
+        """获取最近7天每只股票的情感走势及全场均值 (优化版：移除重度预取)"""
+        days = int(request.GET.get('days', 7))
+        start_date = timezone.now().date() - timedelta(days=days-1)
+        
+        # 1. 获取情感基础数据 (不再预取新闻详情，避免内存爆炸)
+        queryset = (
+            SentimentData.objects
+            .filter(date__gte=start_date)
+            .select_related('stock')
+            .order_by('date')
+        )
+        
+        # 2. 准备日期序列
+        date_list = [start_date + timedelta(days=i) for i in range(days)]
+        date_iso_list = [d.isoformat() for d in date_list]
+            
+        # 3. 按日期分组处理
+        from collections import defaultdict
+        daily_records = defaultdict(list)
+        for r in queryset:
+            daily_records[r.date].append(r)
+            
+        stock_data = defaultdict(lambda: [None] * days)
+        avg_line = []
+        top_items_map = {}
+        
+        monitored_stock_names = set(Stock.objects.values_list('name', flat=True))
+        
+        for idx, d in enumerate(date_list):
+            records = daily_records.get(d, [])
+            if not records:
+                avg_line.append(None)
+                top_items_map[d.isoformat()] = []
+                continue
+                
+            scores = [r.sentiment_score for r in records]
+            avg_line.append(round(sum(scores) / len(scores), 3))
+            
+            for r in records:
+                if r.stock.name in monitored_stock_names:
+                    stock_data[r.stock.name][idx] = r.sentiment_score
+            
+            # 仅对每日热度前 3 的数据获取最新一条标题 (懒加载，比全量 Prefetch 快得多)
+            day_sentiments = sorted(records, key=lambda x: x.hot_score, reverse=True)[:3]
+            day_items = []
+            for s_data in day_sentiments:
+                title = ""
+                url = ""
+                # 这里会产生 LIMIT 1 查询，对于 7天*3条数据=21次查询，总开销远小于 Prefetch 数千条新闻
+                r_all = list(s_data.reports.all()[:1])
+                a_all = list(s_data.announcements.all()[:1])
+                n_all = list(s_data.news.all()[:1])
+                
+                if r_all: 
+                    title = f"[{s_data.stock.name}] {r_all[0].title}"
+                    url = r_all[0].url
+                elif a_all: 
+                    title = f"[{s_data.stock.name}] {a_all[0].title}"
+                    url = a_all[0].url
+                elif n_all: 
+                    title = f"[{s_data.stock.name}] {n_all[0].title}"
+                    url = n_all[0].url
+                
+                if title:
+                    day_items.append({'title': title, 'score': s_data.sentiment_score, 'url': url})
+            top_items_map[d.isoformat()] = day_items
 
-        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'dates': date_iso_list,
+            'avg_line': avg_line,
+            'stock_data': dict(stock_data),
+            'top_items': top_items_map
+        })
+
+    @action(detail=False, methods=['get'])
+    def latest(self, request):
+        """获取最新的舆情数据 (包含所有监控股票，无数据则标记为 pending)"""
+        is_mini = request.GET.get('mini') == '1'
         
-        # 限制每只股票返回的数据量（避免内存溢出）
-        response_data = []
-        for item in serializer.data:
-            # 限制研报最多50条，公告最多30条，新闻最多10条
-            item['reports'] = item['reports'][:50]
-            item['announcements'] = item['announcements'][:30]
-            item['news'] = item['news'][:10]
-            response_data.append(item)
+        # 1. 获取所有股票并附加最新情感 ID
+        latest_sentiment_sub = (
+            SentimentData.objects
+            .filter(stock_id=OuterRef('id'))
+            .order_by('-date', '-updated_at', '-id')
+            .values('id')[:1]
+        )
+        stocks_with_latest = Stock.objects.annotate(latest_id=Subquery(latest_sentiment_sub)).order_by('symbol')
         
-        return Response(response_data)
+        # 2. 批量抓取情感数据对象
+        sentiment_ids = [s.latest_id for s in stocks_with_latest if s.latest_id]
+        sentiments = SentimentData.objects.filter(id__in=sentiment_ids).select_related('stock')
+        sentiment_map = {s.stock_id: s for s in sentiments}
+
+        data = []
+        today = timezone.now().date()
+        for s in stocks_with_latest:
+            sentiment = sentiment_map.get(s.id)
+            if sentiment is None or sentiment.date < today:
+                StockViewSet._trigger_single_stock_collection(s)
+            
+            if sentiment:
+                if is_mini:
+                    data.append({
+                        'id': sentiment.id,
+                        'stock_name': s.name,
+                        'stock_symbol': s.symbol,
+                        'sentiment_score': sentiment.sentiment_score,
+                        'sentiment_label': sentiment.sentiment_label,
+                        'hot_score': sentiment.hot_score,
+                        'news_count': sentiment.news_count,
+                        'report_count': sentiment.report_count,
+                        'announcement_count': sentiment.announcement_count,
+                        'discussion_count': sentiment.discussion_count,
+                        'extra_links': s.extra_links,
+                        'is_pending': False
+                    })
+                else:
+                    s_data = self.get_serializer(sentiment).data
+                    s_data['reports'] = s_data['reports'][:50]
+                    s_data['announcements'] = s_data['announcements'][:30]
+                    s_data['news'] = s_data['news'][:10]
+                    s_data['is_pending'] = False
+                    data.append(s_data)
+            else:
+                data.append({
+                    'id': None,
+                    'stock_name': s.name,
+                    'stock_symbol': s.symbol,
+                    'sentiment_score': 0,
+                    'sentiment_label': '待采集',
+                    'hot_score': 0,
+                    'news_count': 0,
+                    'report_count': 0,
+                    'announcement_count': 0,
+                    'discussion_count': 0,
+                    'extra_links': s.extra_links,
+                    'is_pending': True
+                })
+        return Response(data)
 
     @action(detail=False, methods=['get'])
     def realtime_prices(self, request):
@@ -299,7 +416,7 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
             if not symbols:
                 return Response({})
             
-            data = PriceService.get_realtime_price(symbols, fetch_fundamentals=True)
+            data = PriceService.get_realtime_price(symbols, fetch_fundamentals=False)
             return Response(data)
         except Exception as e:
             return Response({'error': str(e)}, status=500)
@@ -315,7 +432,7 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
         if mode == 'minute':
             data = PriceService.get_intraday_data(symbols)
         else:
-            data = PriceService.get_realtime_price(symbols, fetch_fundamentals=False)
+            data = PriceService.get_realtime_price(symbols, fetch_fundamentals=True)
         return Response(data)
 
     @action(detail=False, methods=['get'])
@@ -340,7 +457,6 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
 
         period = request.GET.get('period', '10y')
         return Response(AnalysisService.get_analysis_response(symbol, period))
-
 
 @api_view(['GET'])
 def search_stocks(request):
@@ -431,9 +547,10 @@ def get_quality_analysis(request):
     
     try:
         from .fundamental_service import FundamentalService
-        quality_data = FundamentalService.get_quality_data(symbol, include_shareholder=include_shareholder)
+        from .fundamental.calculator import FundamentalCalculator as Calc
+        quality_data = FundamentalService.get_quality_response(symbol, include_shareholder=include_shareholder)
         
-        return Response({
+        response_data = {
             'symbol': symbol,
             'quality_history': quality_data.get('history', []),
             'cashflow_summary': quality_data.get('cashflow_summary', {}),
@@ -442,7 +559,9 @@ def get_quality_analysis(request):
             'balance_sheet_summary': quality_data.get('balance_sheet_summary', {}),
             'shareholder_history': quality_data.get('shareholder_history', []),
             'shareholder_summary': quality_data.get('shareholder_summary', {}),
-        })
+        }
+        # 最终防线：对整个响应对象进行递归清理，彻底消除 NaN/Inf
+        return Response(Calc.clean_json_data(response_data))
     except Exception as e:
         logger.error(f"Quality Analysis Error for {symbol}: {e}")
         return Response({'error': str(e)}, status=500)
@@ -457,12 +576,15 @@ def get_quality_shareholder_structure(request):
 
     try:
         from .fundamental_service import FundamentalService
+        from .fundamental.calculator import FundamentalCalculator as Calc
         shareholder_data = FundamentalService.get_shareholder_structure_data(symbol)
-        return Response({
+        response_data = {
             'symbol': symbol,
             'shareholder_history': shareholder_data.get('shareholder_history', []),
             'shareholder_summary': shareholder_data.get('shareholder_summary', {}),
-        })
+        }
+        # 最终防线
+        return Response(Calc.clean_json_data(response_data))
     except Exception as e:
         logger.error(f"Shareholder Structure Error for {symbol}: {e}")
         return Response({'error': str(e)}, status=500)
@@ -490,7 +612,7 @@ def get_history_backtest(request):
         return Response({'error': 'No symbol provided'}, status=400)
 
     try:
-        return Response(HistoryBacktestService.get_history_backtest(symbol))
+        return Response(HistoryBacktestService.get_backtest_response(symbol))
     except Exception as e:
         logger.error(f"History Backtest Error for {symbol}: {e}")
         return Response({'error': str(e)}, status=500)

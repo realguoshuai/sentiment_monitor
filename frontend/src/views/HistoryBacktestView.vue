@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="min-h-screen bg-slate-50 text-slate-900">
     <div class="max-w-7xl mx-auto px-6 py-8">
       <header class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mb-8">
@@ -8,7 +8,7 @@
               @click="router.push(`/analysis/${symbol}`)"
               class="px-4 py-2 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-100 transition"
             >
-              返回深度分析
+              返回估值分析
             </button>
             <button
               @click="router.push('/')"
@@ -18,7 +18,7 @@
             </button>
           </div>
           <h1 class="text-3xl font-black text-slate-900">
-            {{ stockName }} 历史回撤与信号复盘
+            {{ stockName }} 回测复盘
           </h1>
           <p class="text-sm text-slate-500 mt-2">
             展示低估区买入后的 1/3/5 年收益、PB 分位与未来收益关系、高股息 / 高 ROI / 低 PB 组合表现，以及“情绪极弱 + 估值低”联合信号统计。
@@ -38,7 +38,7 @@
 
       <div v-if="loading" class="py-24 text-center">
         <div class="w-12 h-12 mx-auto border-4 border-slate-200 border-t-indigo-500 rounded-full animate-spin"></div>
-        <p class="mt-4 text-slate-500 font-bold">正在计算历史回撤统计...</p>
+        <p class="mt-4 text-slate-500 font-bold">正在复盘历史回测数据...</p>
         <div class="mt-5 max-w-xl mx-auto rounded-2xl border border-slate-200 bg-white/80 px-5 py-4 shadow-sm">
           <p class="text-slate-700 font-bold leading-7">“{{ loadingQuote.text }}”</p>
           <p class="mt-2 text-[11px] tracking-[0.22em] uppercase text-slate-400 font-black">{{ loadingQuote.author }}</p>
@@ -427,8 +427,23 @@ onMounted(async () => {
     if (!store.sentimentData.length) {
       await store.fetchLatestSentiment()
     }
-    const response = await stockApi.getHistoryBacktest(symbol)
-    data.value = response.data
+
+    if (store.backtestCache[symbol]) {
+      data.value = store.backtestCache[symbol]
+      loading.value = false
+      await nextTick()
+      renderBucketChart()
+      if (data.value.cache_status === 'stale') {
+         void store.getBacktest(symbol, true).then(res => {
+            data.value = res
+            renderBucketChart()
+         })
+      }
+      window.addEventListener('resize', handleResize)
+      return
+    }
+    const res = await store.getBacktest(symbol)
+    data.value = res
     await nextTick()
     renderBucketChart()
     window.addEventListener('resize', handleResize)

@@ -1,8 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-
+import threading
+from typing import Dict, List, Optional
+from django.utils import timezone
+from django.db.models import Q
 import pandas as pd
 from django.core.cache import cache
 
@@ -66,25 +69,69 @@ class HistoryBacktestService:
             return False
 
     @classmethod
-    def get_history_backtest(cls, symbol: str) -> dict:
+    def get_backtest_response(cls, symbol: str) -> dict:
         key = cls.cache_key(symbol)
         cached = cls._cache_get(key)
+        
         if cached is not None:
-            return cached
+            return {
+                **cached,
+                'cache_status': 'fresh',
+                'background_refreshing': False
+            }
 
         stale_key = cls.stale_cache_key(symbol)
+        stale = cls._cache_get(stale_key)
+        
+        if stale is not None:
+            refresh_key = f"{key}_refreshing"
+            background_refreshing = bool(cache.get(refresh_key))
+            if not background_refreshing:
+                background_refreshing = cls._schedule_background_refresh(symbol)
+                
+            return {
+                **stale,
+                'cache_status': 'stale',
+                'background_refreshing': background_refreshing
+            }
+
+        # 无缓存，同步构建
+        payload = cls.get_history_backtest(symbol)
+        return {
+            **payload,
+            'cache_status': 'fresh',
+            'background_refreshing': False
+        }
+
+    @classmethod
+    def get_history_backtest(cls, symbol: str) -> dict:
+        key = cls.cache_key(symbol)
+        stale_key = cls.stale_cache_key(symbol)
+        
         try:
             payload = cls.build_payload(symbol)
+            cls._cache_set(key, payload, cls.CACHE_TTL)
+            cls._cache_set(stale_key, payload, cls.STALE_CACHE_TTL)
+            return payload
         except Exception as exc:
-            stale = cls._cache_get(stale_key)
-            if stale is not None:
-                logger.warning("History backtest build failed for %s, using stale cache: %s", symbol, exc)
-                return stale
+            logger.error("History backtest build failed for %s: %s", symbol, exc)
             raise
 
-        cls._cache_set(key, payload, cls.CACHE_TTL)
-        cls._cache_set(stale_key, payload, cls.STALE_CACHE_TTL)
-        return payload
+    @classmethod
+    def _schedule_background_refresh(cls, symbol: str) -> bool:
+        refresh_key = f"{cls.cache_key(symbol)}_refreshing"
+        if not cache.add(refresh_key, True, 600):
+            return False
+
+        def task():
+            try:
+                cls.get_history_backtest(symbol)
+            finally:
+                cache.delete(refresh_key)
+
+        thread = threading.Thread(target=task, daemon=True)
+        thread.start()
+        return True
 
     @classmethod
     def build_payload(cls, symbol: str) -> dict:

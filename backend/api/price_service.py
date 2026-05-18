@@ -7,7 +7,9 @@ import pandas as pd
 from datetime import datetime
 from django.core.cache import cache
 
+import numpy as np
 from .utils import format_symbol
+from .fundamental_service import FundamentalService
 
 logger = logging.getLogger('api')
 
@@ -214,7 +216,7 @@ class PriceService:
         url = f"http://qt.gtimg.cn/q={','.join(tencent_symbols)}"
         
         try:
-            response = cls._session.get(url, timeout=5)
+            response = cls._session.get(url, timeout=5, proxies={"http": None, "https": None})
             response.encoding = 'gbk'
             rt_data = cls._parse_tencent_rt(response.text)
             spot_fallback = cls._get_spot_snapshot_map(fixed_symbols)
@@ -224,24 +226,65 @@ class PriceService:
                 logger.warning("Tencent realtime returned no rows, using fallback data.")
                 return cached_fallback
             
-            # 强化实时行情：使用 FundamentalService 替换腾讯接口中常常滞后的股息率
-            from .fundamental_service import FundamentalService
+            # 强化实时行情：使用统一的股息率计算模型 (逻辑对齐：分红总额 / 当前价)
+            from .screener_service import ScreenerService
+            dividend_map = ScreenerService._get_latest_dividend_yield_map()
+            
             for sym, data in rt_data.items():
                 fallback = cached_fallback.get(sym) or spot_fallback.get(sym, {})
                 data.update(cls._merge_realtime_payload(sym, data, fallback, source='tencent'))
-                # 核心改进：解耦高耗时的 AkShare 股息计算
-                if fetch_fundamentals and data.get('price', 0) > 0:
-                    try:
-                        df_divs = FundamentalService.get_historical_dividends(sym)
-                        ltm_div_sum = FundamentalService.calculate_dividend_at_date(df_divs, pd.Timestamp.now())
-                        if ltm_div_sum > 0:
-                            data['dividend_yield'] = round((ltm_div_sum / data['price']) * 100, 2)
-                    except Exception as div_e:
-                        logger.warning(f"Secondary calculation failed for {sym}: {div_e}")
+                
+                # 注入高准确度股息率：使用 ScreenerService 提供的分红总额动态计算
+                div_info = dividend_map.get(sym)
+                if div_info and data.get('price', 0) > 0:
+                    cash_div = div_info.get('cash_div_total', 0)
+                    if cash_div > 0:
+                        data['dividend_yield'] = round((cash_div / data['price']) * 100, 3)
 
             for fixed in fixed_symbols:
                 if fixed not in rt_data and fixed in cached_fallback:
                     rt_data[fixed] = cached_fallback[fixed]
+
+            if fetch_fundamentals and rt_data:
+                from concurrent.futures import ThreadPoolExecutor
+                
+                def _update_fundamental_task(fixed, data):
+                    try:
+                        price = data.get('price', 0)
+                        if price <= 0: return fixed, {}
+                        
+                        updates = {}
+                        # 1. 获取实时股息率 (并发) - 已统一使用 ScreenerService 计算，此处跳过以保持一致性
+                        pass
+                        
+                        # 2. 获取 TTM 财务数据 (并发)
+                        df_fund = FundamentalService.get_ttm_fundamentals(fixed)
+                        total_shares = data.get('total_shares', 0)
+                        if not df_fund.empty and total_shares > 0:
+                            latest_f = df_fund.iloc[-1]
+                            if latest_f.get('TOTAL_PARENT_EQUITY', 0) > 0:
+                                updates['pb'] = round((price * total_shares) / latest_f['TOTAL_PARENT_EQUITY'], 2)
+                            if latest_f.get('ttm_profit', 0) > 0:
+                                updates['pe'] = round((price * total_shares) / latest_f['ttm_profit'], 2)
+                        return fixed, updates
+                    except Exception as e:
+                        logger.warning(f"Concurrent fundamental task failed for {fixed}: {e}")
+                        # 兜底：尝试从数据库快照读取
+                        try:
+                            from .models import FundamentalSnapshot
+                            snap = FundamentalSnapshot.objects.filter(symbol=fixed).order_by('-report_date').first()
+                            if snap:
+                                return fixed, {'pe': snap.pe_ttm, 'pb': snap.pb_mrq}
+                        except Exception: pass
+                        return fixed, {}
+
+                # 使用线程池并发执行 IO 密集型任务
+                with ThreadPoolExecutor(max_workers=min(len(rt_data), 5)) as executor:
+                    futures = [executor.submit(_update_fundamental_task, sym, data) for sym, data in rt_data.items()]
+                    for future in futures:
+                        sym, updates = future.result()
+                        if updates:
+                            rt_data[sym].update(updates)
 
             cls._cache_realtime_success(rt_data)
             return rt_data
@@ -288,7 +331,7 @@ class PriceService:
     @classmethod
     def _historical_single_cache_key(cls, symbol, requested_period, period, limit):
         fixed_symbol = cls._fix_symbol(symbol)
-        return f"hist_single_v1_{fixed_symbol}_{requested_period}_{period}_{limit}"
+        return f"hist_single_v8_{fixed_symbol}_{requested_period}_{period}_{limit}"
 
     @classmethod
     def _historical_single_stale_cache_key(cls, symbol, requested_period, period, limit):
@@ -335,46 +378,104 @@ class PriceService:
         return history
 
     @classmethod
-    def _parse_historical_prices(cls, days):
+    def _parse_historical_prices(cls, df):
+        """解析 AkShare 历史 K 线数据"""
+        if df is None or df.empty:
+            return []
+            
+        # AkShare 返回的字段: 日期, 开盘, 收盘, 最高, 最低, 成交量, ...
+        # 我们需要 date 和 price (收盘)
         price_list = []
-        for day in days:
-            if not isinstance(day, (list, tuple)) or len(day) < 3:
-                continue
-            price = cls._safe_float(day[2])
-            if price <= 0:
-                continue
-            price_list.append({'date': day[0], 'price': price})
+        for _, row in df.iterrows():
+            date_str = str(row['日期'])
+            price = cls._safe_float(row['收盘'])
+            if price <= 0: continue
+            price_list.append({'date': date_str, 'price': price})
         return price_list
 
     @classmethod
     def _build_single_historical_data(cls, symbol, requested_period, period, limit, rt_data, spot_fallback):
-        from .fundamental_service import FundamentalService
-
         fixed_symbol = cls._fix_symbol(symbol)
+        
+        # 映射周期: Tencent 使用 day, week, month
         fetch_period = 'month' if period == 'year' else period
         fetch_limit = limit * 12 if period == 'year' else limit
         lower_symbol = fixed_symbol.lower()
-        url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={lower_symbol},{fetch_period},,,{fetch_limit},qfq"
+        
+        # [物理对齐策略] 使用不复权 (none) 序列，确保跨标的比值的物理真实性
+        # 我们手动将其放缩到今日价格，以实现类似前复权的平滑效果
+        url_none = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={lower_symbol},{fetch_period},,,{fetch_limit},none"
+        
+        # --- [增量缓存加速核心逻辑] ---
+        # 缓存键包含周期，但不包含 limit (因为我们总是缓存全量并按需裁剪)
+        raw_cache_key = f"price_history_raw_{fixed_symbol}_{fetch_period}"
+        cached_raw = cache.get(raw_cache_key) # [{date, price}, ...]
+        
+        price_list = []
+        if isinstance(cached_raw, list) and cached_raw:
+            price_list = cached_raw
+            last_cached_date = price_list[-1]['date']
+            today_str = timezone.localdate().strftime('%Y-%m-%d')
+            
+            # 如果缓存已经包含今天或昨天的数据，且数量足够，则跳过外部请求
+            if last_cached_date >= today_str:
+                 pass # 已是最新的
+            else:
+                 # 增量抓取：只需抓取极少量数据进行补齐 (腾讯接口 limit 设置小一点)
+                 incremental_url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={lower_symbol},{fetch_period},,,5,none"
+                 try:
+                     resp = cls._session.get(incremental_url, timeout=5)
+                     inc_data = resp.json().get('data', {}).get(lower_symbol, {}).get(fetch_period) or []
+                     if inc_data:
+                         new_points = []
+                         for day in inc_data:
+                             d_str = day[0]
+                             if d_str > last_cached_date:
+                                 new_points.append({'date': d_str, 'price': cls._safe_float(day[2])})
+                         if new_points:
+                             price_list.extend(new_points)
+                             # 更新缓存
+                             cache.set(raw_cache_key, price_list, 86400 * 7) # 存档 7 天
+                 except Exception:
+                     pass # 增量失败不影响，后续 fallback 或使用旧数据
+        
+        # 如果缓存缺失，执行全量抓取
+        if not price_list:
+            try:
+                resp = cls._session.get(url_none, timeout=8)
+                data_json = resp.json()
+                data_res = data_json.get('data', {}).get(lower_symbol, {})
+                days = data_res.get(fetch_period) or []
+                for day in days:
+                    if len(day) < 3: continue
+                    price_list.append({'date': day[0], 'price': cls._safe_float(day[2])})
+                price_list.sort(key=lambda x: x['date'])
+                if price_list:
+                    cache.set(raw_cache_key, price_list, 86400 * 7)
+            except Exception as e:
+                logger.error(f"Full fetch failed for {fixed_symbol}: {e}")
+                return []
 
-        resp = cls._session.get(url, timeout=8)
-        data_json = resp.json()
-        if data_json.get('code') != 0:
+        if not price_list:
             return []
+        
+        # 截断到请求的 limit
+        price_list = price_list[-fetch_limit:]
 
-        data_res = data_json.get('data')
-        if not isinstance(data_res, dict):
-            logger.warning(f"Unexpected response format for {fixed_symbol}: {data_res}")
-            return []
-
-        stock_data = data_res.get(lower_symbol, {})
-        key = f"qfq{fetch_period}"
-        days = stock_data.get(key) or stock_data.get(fetch_period) or []
-
-        price_list = cls._parse_historical_prices(days)
+        # [锚定归一化算法] 强制锚定当前价
+        # 这确保了图表的终点绝对等于实时价，且所有历史点都相对于今天进行折算
+        rt = rt_data.get(fixed_symbol, {})
+        fallback = spot_fallback.get(fixed_symbol, {})
+        curr_price = rt.get('price', 0) or fallback.get('price', 0)
+        
+        if curr_price > 0 and price_list:
+            last_hist_price = price_list[-1]['price']
+            # 计算物理缩放因子，将整条原始价格曲线平移/缩放到今日基准
+            scale_factor = curr_price / last_hist_price
+            for item in price_list:
+                item['price'] = round(item['price'] * scale_factor, 4)
+        
         df_prices = pd.DataFrame(price_list)
-        if df_prices.empty:
-            return []
-
         try:
             df_fund = FundamentalService.get_ttm_fundamentals(fixed_symbol)
         except Exception as e:
@@ -421,40 +522,85 @@ class PriceService:
             logger.warning(f"Valuation config unavailable for {fixed_symbol}: {e}")
             val_config = {}
 
+        # [性能优化] 使用向量化运算替代 iterrows 循环
+        df = df_aligned.copy()
+        df['date_dt'] = pd.to_datetime(df['date'], errors='coerce')
+        df = df.dropna(subset=['date_dt'])
+        
+        # 1. 计算 PE / PB (包含兜底逻辑)
+        # 使用 mask 处理有效数据，fillna 处理缺失数据
+        profit_mask = (df['ttm_profit'] > 0) & (total_shares > 0)
+        equity_mask = (df['TOTAL_PARENT_EQUITY'] > 0) & (total_shares > 0)
+        
+        # 初始化
+        df['pe'] = np.nan
+        df['pb'] = np.nan
+        
+        # 计算有效点
+        df.loc[profit_mask, 'pe'] = (df.loc[profit_mask, 'price'] * total_shares) / df.loc[profit_mask, 'ttm_profit']
+        df.loc[equity_mask, 'pb'] = (df.loc[equity_mask, 'price'] * total_shares) / df.loc[equity_mask, 'TOTAL_PARENT_EQUITY']
+        
+        # 兜底：如果财报数据缺失，按当前估值等比例缩放
+        if curr_price > 0:
+            df['pe'] = df['pe'].fillna(curr_pe * (df['price'] / curr_price))
+            df['pb'] = df['pb'].fillna(curr_pb * (df['price'] / curr_price))
+            
+        df[['pe', 'pb']] = df[['pe', 'pb']].fillna(0)
+        
+        # 2. 计算股息率 (DY) - [性能优化] 预计算分红总额，消除 apply 循环
+        df['year'] = df['date_dt'].dt.year
+        df['month'] = df['date_dt'].dt.month
+        
+        if not df_divs.empty:
+            df_divs_copy = df_divs.copy()
+            df_divs_copy['year'] = df_divs_copy['ann_date'].dt.year
+            # 计算每年的分红总额
+            yearly_divs = df_divs_copy.groupby('year')['cash_div'].sum()
+            
+            # 映射当年和去年的分红总额
+            df['curr_year_div'] = df['year'].map(yearly_divs).fillna(0)
+            df['last_year_div'] = (df['year'] - 1).map(yearly_divs).fillna(0)
+            
+            # 拿到最后一次分红日期 (用于距离判断)
+            last_div_date = df_divs['ann_date'].max()
+            
+            # 默认使用当年分红
+            df['dy_sum'] = df['curr_year_div']
+            
+            # 自然年平滑策略 (对齐 FundamentalService.calculate_dividend_at_date 逻辑)
+            # 策略 A: 9月前且分红不足去年 80%，则大概率还没发完，沿用去年
+            mask_smooth = (df['month'] < 9) & (df['curr_year_div'] < df['last_year_div'] * 0.8)
+            df.loc[mask_smooth, 'dy_sum'] = df['last_year_div']
+            
+            # 策略 B: 9月后当年若为 0，且距离上次分红在 450 天内，尝试沿用去年
+            mask_gap = (df['month'] >= 9) & (df['curr_year_div'] <= 0) & ((df['date_dt'] - last_div_date).dt.days <= 450)
+            df.loc[mask_gap, 'dy_sum'] = df['last_year_div']
+            
+            df['dividend_yield'] = (df['dy_sum'] / df['price'] * 100)
+        else:
+            df['dividend_yield'] = 0
+        
+        # 实时股息率补充
+        rt_dy = rt.get('dividend_yield', 0)
+        if rt_dy > 0:
+            mask = (df['dividend_yield'] <= 0) & ((datetime.now() - df['date_dt']).dt.days <= 365)
+            df.loc[mask, 'dividend_yield'] = rt_dy
+
+        # 3. 计算 ROE 与 ROI
+        # ROE = PB / PE * 100
+        df['calc_roe'] = (df['pb'] / df['pe'].replace(0, np.nan) * 100).fillna(0)
+        
+        # 应用动态估值配置 (如 ROE 地板)
+        roe_floor = val_config.get('roe_floor')
+        if roe_floor:
+            df['calc_roe'] = df['calc_roe'].clip(lower=roe_floor)
+        
+        df['roi'] = (df['calc_roe'] / df['pb'].replace(0, np.nan)).fillna(0) + df['dividend_yield']
+
+        # 4. 组装结果
         history = []
-        for _, row in df_aligned.iterrows():
-            price = row['price']
-            date_dt = pd.to_datetime(row['date'])
-            ttm_profit = row.get('ttm_profit', 0)
-            equity = row.get('TOTAL_PARENT_EQUITY', 0)
-
-            pe = (price * total_shares) / ttm_profit if ttm_profit and ttm_profit > 0 and total_shares > 0 else (curr_pe * (price / curr_price) if curr_price > 0 else 0)
-            pb = (price * total_shares) / equity if equity and equity > 0 and total_shares > 0 else (curr_pb * (price / curr_price) if curr_price > 0 else 0)
-
-            ltm_div_sum = FundamentalService.calculate_dividend_at_date(df_divs, date_dt)
-            dy = (ltm_div_sum / price) * 100 if price > 0 else 0
-
-            rt_dy = rt.get('dividend_yield', 0)
-            if dy <= 0 and rt_dy > 0 and (datetime.now() - date_dt).days <= 365:
-                dy = rt_dy
-
-            calc_roe = (pb / pe * 100) if pe > 0 else 0
-            
-            # Apply dynamic valuation config (e.g. ROE floor)
-            roe_floor = val_config.get('roe_floor')
-            if roe_floor and calc_roe < roe_floor:
-                calc_roe = roe_floor
-            
-            roi = calc_roe / pb if pb > 0 else 0
-
-            history.append({
-                'date': row['date'],
-                'price': round(price, 2),
-                'pe': round(pe, 2) if pe > 0 else 0,
-                'pb': round(pb, 2) if pb > 0 else 0,
-                'dividend_yield': round(dy, 2) if dy > 0 else 0,
-                'roi': round(roi, 2)
-            })
+        df_final = df[['date', 'price', 'pe', 'pb', 'dividend_yield', 'roi']].round(2)
+        history = df_final.to_dict(orient='records')
 
         if requested_period == 'annual' and history:
             annual_history = []
@@ -490,7 +636,7 @@ class PriceService:
             limit = p_limit
 
         norm_symbols = [cls._fix_symbol(s) for s in symbols]
-        cache_key = f"hist_v9_{'_'.join(sorted(norm_symbols))}_{requested_period}_{period}_{limit}"
+        cache_key = f"hist_v17_{'_'.join(sorted(norm_symbols))}_{requested_period}_{period}_{limit}"
         stale_cache_key = f"{cache_key}_stale"
         cached_data = cls._cache_get(cache_key)
         if cached_data is not None:
@@ -516,31 +662,33 @@ class PriceService:
             rt_data = cls.get_realtime_price(fixed_missing_symbols)
             spot_fallback = cls._get_spot_snapshot_map(fixed_missing_symbols)
 
-        for orig_symbol in missing_symbols:
-            symbol = cls._fix_symbol(orig_symbol)
-            single_cache_key = cls._historical_single_cache_key(orig_symbol, requested_period, period, limit)
-            single_stale_cache_key = cls._historical_single_stale_cache_key(orig_symbol, requested_period, period, limit)
-            try:
-                history = cls._build_single_historical_data(
-                    symbol,
-                    requested_period,
-                    period,
-                    limit,
-                    rt_data,
-                    spot_fallback,
-                )
-                results[symbol] = history
-                if history:
-                    single_ttl = 3600 * 12
-                    if period == 'day':
-                        single_ttl = 3600 * 2
-                    cls._cache_set(single_cache_key, history, single_ttl)
-                    cls._cache_set(single_stale_cache_key, history, 7 * 24 * 3600)
-            except Exception as e:
-                logger.error(f"PriceService Valuation Error for {symbol}: {e}")
-                stale_history = cls._cache_get(single_stale_cache_key)
-                if stale_history is not None:
-                    results[symbol] = cls._normalize_historical_cache_value(stale_history)
+        # [性能优化] 并发构建缺失标的的历时数据
+        if missing_symbols:
+            from concurrent.futures import ThreadPoolExecutor
+            
+            def _build_task(orig_sym):
+                sym = cls._fix_symbol(orig_sym)
+                single_cache_key = cls._historical_single_cache_key(orig_sym, requested_period, period, limit)
+                single_stale_cache_key = cls._historical_single_stale_cache_key(orig_sym, requested_period, period, limit)
+                try:
+                    hist = cls._build_single_historical_data(
+                        sym, requested_period, period, limit, rt_data, spot_fallback
+                    )
+                    if hist:
+                        s_ttl = 3600 * 2 if period == 'day' else 3600 * 12
+                        cls._cache_set(single_cache_key, hist, s_ttl)
+                        cls._cache_set(single_stale_cache_key, hist, 7 * 24 * 3600)
+                    return sym, hist
+                except Exception as e:
+                    logger.error(f"PriceService Task Error for {sym}: {e}")
+                    stale = cls._cache_get(single_stale_cache_key)
+                    return sym, cls._normalize_historical_cache_value(stale) if stale else []
+
+            with ThreadPoolExecutor(max_workers=min(len(missing_symbols), 4)) as executor:
+                futures = [executor.submit(_build_task, s) for s in missing_symbols]
+                for future in futures:
+                    sym, hist = future.result()
+                    results[sym] = hist
 
         if results and len(results) == len(symbols):
             ttl = 3600 * 12
@@ -556,22 +704,39 @@ class PriceService:
 
     @classmethod
     def _align_data(cls, data_map):
-        """ISO-GRID 数据对齐：确保所有股票在相同日期都有数据 (同步所有指标)"""
+        """ISO-GRID 3.0 数据对齐：全集时间轴 + 空值填充 (Union + None Padding)"""
         if len(data_map) < 2:
             return data_map
 
-        # 获取所有日期的交集
-        date_sets = []
+        # 获取所有标的中出现过的日期点并去重排序 (Union)
+        all_dates = set()
         for sym in data_map:
-            date_sets.append(set(d['date'] for d in data_map[sym]))
+            for item in data_map[sym]:
+                all_dates.add(item['date'])
+        common_dates = sorted(list(all_dates))
         
-        common_dates = sorted(list(set.intersection(*date_sets)))
-        
-        aligned_results = {}
+        aligned = {}
         for sym in data_map:
-            # 只保留共有日期的记录，并保留完整属性
-            aligned_results[sym] = [d for d in data_map[sym] if d['date'] in common_dates]
-        return aligned_results
+            orig_data_map = { d['date']: d for d in data_map[sym] }
+            new_list = []
+            
+            for d in common_dates:
+                current = orig_data_map.get(d)
+                if current:
+                    new_list.append(current)
+                else:
+                    # 缺失日期用 None 填充所有指标，防止量化指标（如波动率）计算失真
+                    new_list.append({
+                        'date': d,
+                        'price': None,
+                        'pe': None,
+                        'pb': None,
+                        'dividend_yield': None,
+                        'roi': None
+                    })
+                    
+            aligned[sym] = new_list
+        return aligned
             
     @classmethod
     def get_intraday_data(cls, symbols):
@@ -631,7 +796,7 @@ class PriceService:
 
     @classmethod
     def _align_intraday(cls, data_map):
-        """ISO-GRID 2.0 (Union + Forward Fill): 鲁棒的时间轴同步算法"""
+        """ISO-GRID 2.0 (Union + FFill/BFill): 鲁棒的时间轴同步算法"""
         if len(data_map) < 2: return data_map
         
         # 1. 获取所有标的中出现过的活跃分钟点并去重排序
@@ -646,20 +811,30 @@ class PriceService:
             # 使用 dict 以时间字符串为 key 重新索引原始数据
             orig_data_map = { d['time']: d for d in data_map[sym] }
             
+            # 找到首个有效点用于后向填充 (解决开盘数据缺失导致数组长度不一的问题)
+            first_valid = None
+            for t in common_times:
+                if t in orig_data_map:
+                    first_valid = orig_data_map[t]
+                    break
+                    
+            if not first_valid:
+                aligned[sym] = []
+                continue
+            
             new_list = []
-            last_valid = None
+            last_valid = first_valid
             
             for t in common_times:
                 current = orig_data_map.get(t)
                 if current:
                     new_list.append(current)
                     last_valid = current
-                elif last_valid:
-                    # 前向填充 (Forward Fill): 如果缺失点，使用上一分钟的有效价格，但时间戳保持同步
+                else:
+                    # 结合前向与后向填充，保证时间点和数组长度严格一致
                     filled_item = last_valid.copy()
                     filled_item['time'] = t
                     new_list.append(filled_item)
-                # 如果开头就缺失且无 last_valid，则暂时留空或跳过 (由另一方处理)
             
             aligned[sym] = new_list
         return aligned

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="h-screen bg-[#0f172a] text-slate-300 font-sans p-4 overflow-hidden flex flex-col">
     <!-- Top Header -->
     <header class="flex justify-between items-center mb-3 shrink-0">
@@ -13,7 +13,10 @@
             <h1 class="text-xl font-black text-white tracking-wide">价值投资分析终端</h1>
             <svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
           </div>
-          <p class="text-[10px] text-slate-500 tracking-widest mt-0.5">深度个股估值与投资回报监测引擎</p>
+          <p class="text-[10px] text-slate-500 tracking-widest mt-0.5">
+            深度个股估值与投资回报监测引擎
+            <span class="ml-2 px-1.5 py-0.5 bg-indigo-500/10 text-indigo-400 rounded-sm font-bold border border-indigo-500/20">开发者: @雪球小散户</span>
+          </p>
         </div>
       </div>
 
@@ -91,12 +94,12 @@
             <div class="flex justify-between items-center mb-2 shrink-0">
                <div class="flex items-center gap-2">
                  <span class="w-1 h-3.5 bg-cyan-400 rounded-full"></span>
-                 <h3 class="text-xs font-bold text-white tracking-wide">情感趋势</h3>
+                 <h3 class="text-xs font-bold text-white tracking-wide">全场情感趋势 (7D)</h3>
                </div>
                <svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
             </div>
             <div class="flex-1 min-h-0 relative">
-               <SentimentChart :data="store.sortedStocks" class="absolute inset-0" />
+               <SentimentChart :data="store.sentimentTrend" class="absolute inset-0" />
             </div>
           </div>
 
@@ -156,8 +159,11 @@ const goToDetail = (symbol: string) => {
 const refreshData = async () => {
   if (isRefreshing.value) return
   isRefreshing.value = true
-  await store.fetchLatestSentiment()
-  await store.fetchRealtimePrices()
+  await Promise.all([
+    store.fetchLatestSentiment(),
+    store.fetchSentimentTrend(),
+    store.fetchRealtimePrices()
+  ])
   isRefreshing.value = false
 }
 
@@ -175,11 +181,14 @@ onMounted(async () => {
     showReleaseNotes.value = true
   }
 
-  await store.fetchStocks()
-  if (!store.sentimentData.length) {
-    await store.fetchLatestSentiment()
-  }
-  await store.fetchRealtimePrices()
+  // 第二阶段：并行获取所有核心业务数据 (列表、舆情、趋势、价格)
+  // 这能显著减少串行等待时间，提升首屏响应速度
+  await Promise.all([
+    store.fetchStocks(),
+    store.sentimentData.length ? Promise.resolve() : store.fetchLatestSentiment(),
+    store.fetchSentimentTrend(),
+    store.fetchRealtimePrices()
+  ])
   
   priceTimer = setInterval(() => {
     store.fetchRealtimePrices()

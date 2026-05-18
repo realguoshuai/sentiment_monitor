@@ -1710,6 +1710,7 @@ class SentimentApiTests(APITestCase):
                     'data': {
                         'sz000001': {
                             'qfqday': [
+                                ['not-a-date', '10.00', '12.00'],
                                 ['2026-04-08', '10.00', 'nan'],
                                 ['bad-row'],
                                 ['2026-04-10', '10.50', '11.00'],

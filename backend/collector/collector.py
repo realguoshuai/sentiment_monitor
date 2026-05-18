@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-舆情数据采集主程序
+舆情数据采集主程序 - 支持多日回溯 (Backfill)
 """
 import os
 import sys
@@ -13,20 +13,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'sentiment_monitor.settings')
 django.setup()
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from api.models import Stock, SentimentData, News, Report, Announcement
-from collector.sources import eastmoney, cninfo, xueqiu
+from collector.sources import eastmoney, cninfo, xueqiu, news_crawler
 from analyzer.engine import SentimentEngine
 
 logger = logging.getLogger(__name__)
-
-# Legacy keywords were removed in favor of SnowNLP analysis.
-
-
-# analyze_sentiment function was replaced by SentimentEngine.analyze_batch.
 
 
 def _normalize_title(value) -> str:
@@ -79,20 +74,14 @@ def _get_fhyanbao_reports(symbol_code: str) -> list:
 
 def _collect_reports(symbol_code: str) -> list:
     primary_reports = eastmoney.get_reports(symbol_code)
-    fallback_reports = []
-
-    if not primary_reports:
-        fallback_reports = _get_fhyanbao_reports(symbol_code)
+    fallback_reports = _get_fhyanbao_reports(symbol_code)
 
     return _dedupe_items([*primary_reports, *fallback_reports])
 
 
 def _collect_announcements(symbol_code: str) -> list:
     primary_announcements = cninfo.get_announcements(symbol_code)
-    fallback_announcements = []
-
-    if not primary_announcements:
-        fallback_announcements = eastmoney.fetch_notices_from_akshare(symbol_code)
+    fallback_announcements = eastmoney.fetch_notices_from_akshare(symbol_code)
 
     return _dedupe_items([*primary_announcements, *fallback_announcements])
 
@@ -124,10 +113,14 @@ def _build_report_records(sentiment, items, fallback_date: date):
             title=title[:300],
             pub_date=_safe_pub_date(item.get('pub_date'), fallback_date),
             org=_normalize_title(item.get('org'))[:100],
-            rating=_normalize_title(item.get('rating'))[:50],
+            rating=_normalize_text(item.get('rating'))[:50] if '_normalize_text' in globals() else str(item.get('rating', '')),
             url=str(item.get('url') or '').strip(),
         ))
     return records
+
+# Fix for missing _normalize_text in helper
+def _normalize_text(val, max_length=50):
+    return str(val or '')[:max_length]
 
 
 def _build_announcement_records(sentiment, items, fallback_date: date):
@@ -145,98 +138,109 @@ def _build_announcement_records(sentiment, items, fallback_date: date):
     return records
 
 
-def collect_stock_data(stock: Stock):
-    """采集单只股票数据
+def collect_stock_data(stock: Stock, days: int = 7):
+    """采集单只股票数据，并回溯过去几天的情感 (Backfill 模式)
     
     Args:
         stock: 股票对象
+        days: 回溯天数
     """
     symbol_code = stock.symbol[2:]  # 去掉SH/SZ前缀
     
-    print(f"\n[{stock.name}] 开始采集...")
+    print(f"\n[{stock.name}] 开始采集 (过去 {days} 天)...")
     
-    # 采集数据（只使用真实数据源）
-    # 分别从不同源采集数据
+    # 1. 采集数据
     em_news = eastmoney.get_news(symbol_code)
-    xq_news = xueqiu.get_news(stock.symbol) # 雪球通常需要带 SH/SZ 前缀
-    
-    # 合并新闻并去重
-    news_data = _dedupe_items([*em_news, *xq_news])
+    xq_news = xueqiu.get_news(stock.symbol)
+    crawler_news = news_crawler.get_news(symbol_code)
     report_data = _collect_reports(symbol_code)
     announcement_data = _collect_announcements(symbol_code)
     
-    print(f"  [OK] Consolidated News: {len(news_data)} items (EM: {len(em_news)}, XQ: {len(xq_news)})")
-    print(f"  [OK] Reports: {len(report_data)} items")
-    print(f"  [OK] Announcements: {len(announcement_data)} items")
-    
-    # 情感分析 (使用 SnowNLP 引擎)
-    all_titles = [n['title'] for n in news_data] + \
-                 [r['title'] for r in report_data] + \
-                 [a['title'] for a in announcement_data]
-                 
-    avg_score = SentimentEngine.analyze_batch(all_titles)
-    label = SentimentEngine.get_label(avg_score)
-    
-    # 映射为 -1 到 1 的范围
-    final_score = (avg_score - 0.5) * 2
-    
-    # 计算热度分值 (权重: 研报 2.5, 公告 2.0, 新闻 1.0)
-    # 采用对数缩放避免极端值
-    n_count, r_count, a_count = len(news_data), len(report_data), len(announcement_data)
-    raw_hot = (n_count * 1.0) + (r_count * 2.5) + (a_count * 2.0)
-    hot_score = min(100, round(math.log1p(raw_hot) * 15, 2)) # 缩放到约 0-100 范围
-    
-    # 保存舆情数据
+    # 2. 汇总所有条目并按日期分组
+    all_items = []
     today = timezone.localdate()
-    with transaction.atomic():
-        sentiment, created = SentimentData.objects.update_or_create(
-            stock=stock,
-            date=today,
-            defaults={
-                'sentiment_score': round(final_score, 3),
-                'sentiment_label': label,
-                'hot_score': hot_score,
-                'news_count': n_count,
-                'report_count': r_count,
-                'announcement_count': a_count,
-                'discussion_count': 0
-            }
-        )
-
-        News.objects.filter(sentiment_data=sentiment).delete()
-        Report.objects.filter(sentiment_data=sentiment).delete()
-        Announcement.objects.filter(sentiment_data=sentiment).delete()
-
-        news_records = _build_news_records(sentiment, news_data, today)
-        report_records = _build_report_records(sentiment, report_data, today)
-        announcement_records = _build_announcement_records(sentiment, announcement_data, today)
-
-        if news_records:
-            News.objects.bulk_create(news_records)
-        if report_records:
-            Report.objects.bulk_create(report_records)
-        if announcement_records:
-            Announcement.objects.bulk_create(announcement_records)
+    start_date = today - timedelta(days=days-1)
     
-    return sentiment
+    combined_news = _dedupe_items(em_news + xq_news + crawler_news, title_length=60)
+    for item in combined_news:
+        d = _safe_pub_date(item.get('pub_date'), today)
+        if d >= start_date: all_items.append({'type': 'news', 'data': item, 'date': d})
+        
+    for item in report_data:
+        d = _safe_pub_date(item.get('pub_date'), today)
+        if d >= start_date: all_items.append({'type': 'report', 'data': item, 'date': d})
+        
+    for item in announcement_data:
+        d = _safe_pub_date(item.get('pub_date'), today)
+        if d >= start_date: all_items.append({'type': 'announcement', 'data': item, 'date': d})
+        
+    # 按日期分组
+    from collections import defaultdict
+    date_groups = defaultdict(list)
+    for item in all_items:
+        date_groups[item['date']].append(item)
+        
+    print(f"  [OK] Found data for {len(date_groups)} distinct days in range.")
+
+    # 3. 为每一天生成情感记录
+    success_dates = 0
+    for target_date, items in date_groups.items():
+        # 分类
+        news_list = [i['data'] for i in items if i['type'] == 'news']
+        report_list = [i['data'] for i in items if i['type'] == 'report']
+        announcement_list = [i['data'] for i in items if i['type'] == 'announcement']
+        
+        # 情感分析
+        all_titles = [i['title'] for i in news_list + report_list + announcement_list]
+        if not all_titles: continue
+        
+        avg_score = SentimentEngine.analyze_batch(all_titles)
+        label = SentimentEngine.get_label(avg_score)
+        final_score = (avg_score - 0.5) * 2
+        
+        # 热度计算
+        n_count, r_count, a_count = len(news_list), len(report_list), len(announcement_list)
+        raw_hot = (n_count * 1.0) + (r_count * 2.5) + (a_count * 2.0)
+        hot_score = min(100, round(math.log1p(raw_hot) * 15, 2))
+        
+        # 事务保存
+        with transaction.atomic():
+            sentiment, _ = SentimentData.objects.update_or_create(
+                stock=stock,
+                date=target_date,
+                defaults={
+                    'sentiment_score': round(final_score, 3),
+                    'sentiment_label': label,
+                    'hot_score': hot_score,
+                    'news_count': n_count,
+                    'report_count': r_count,
+                    'announcement_count': a_count,
+                    'discussion_count': 0
+                }
+            )
+
+            News.objects.filter(sentiment_data=sentiment).delete()
+            Report.objects.filter(sentiment_data=sentiment).delete()
+            Announcement.objects.filter(sentiment_data=sentiment).delete()
+
+            News.objects.bulk_create(_build_news_records(sentiment, news_list, target_date))
+            Report.objects.bulk_create(_build_report_records(sentiment, report_list, target_date))
+            Announcement.objects.bulk_create(_build_announcement_records(sentiment, announcement_list, target_date))
+            success_dates += 1
+            
+    return success_dates
 
 
 def run_collection():
     """运行采集"""
     print("=" * 60)
-    print("  Sentiment Data Collection System")
+    print("  Sentiment Data Collection System (Backfill Mode)")
     print(f"  Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
     
-    # 获取监控股票列表
     stocks = Stock.objects.all()
-    
     if not stocks.exists():
         print("\n[WARN] No stocks configured!")
-        print("\nAdd stocks using Django shell:")
-        print("  python manage.py shell")
-        print("  from api.models import Stock")
-        print("  Stock.objects.create(name='Stock Name', symbol='SH600519')")
         return
     
     print(f"\nMonitoring {stocks.count()} stocks:")
@@ -252,18 +256,17 @@ def run_collection():
             collect_stock_data(stock)
             success_count += 1
         except Exception as e:
-            print(f"  [ERROR] Failed: {str(e)[:100]}")
+            print(f"  [ERROR] Failed for {stock.name}: {str(e)[:100]}")
     
     print("\n" + "=" * 60)
     print(f"  Done! Success: {success_count}/{stocks.count()}")
     print("=" * 60)
     
-    # 预热：同步所有标的的基本面数据到缓存 + 数据库
     sync_fundamentals_for_all(stocks)
 
 
 def sync_fundamentals_for_all(stocks):
-    """预热所有监控标的的基本面数据 (缓存 + 数据库快照)"""
+    """预热所有监控标的的基本面数据"""
     import time
     from api.fundamental_service import FundamentalService
     
@@ -271,30 +274,15 @@ def sync_fundamentals_for_all(stocks):
     print("  [PREHEAT] Syncing fundamental data...")
     print("-" * 60)
     
-    ok = 0
-    fail = 0
     for stock in stocks:
         symbol = stock.symbol
         try:
-            # 拉取 TTM 财务数据 (会自动写入缓存 + 数据库快照)
-            df = FundamentalService.get_ttm_fundamentals(symbol)
-            if not df.empty:
-                print(f"  [OK] {stock.name} ({symbol}): {len(df)} quarterly records")
-                ok += 1
-            else:
-                print(f"  [WARN] {stock.name} ({symbol}): empty result")
-                fail += 1
-            
-            # 分红数据预热
+            FundamentalService.get_ttm_fundamentals(symbol)
             FundamentalService.get_historical_dividends(symbol)
-            
-            # 避免请求过快被封
+            print(f"  [OK] {stock.name} ({symbol}) synced")
             time.sleep(1)
         except Exception as e:
             print(f"  [ERR] {stock.name} ({symbol}): {str(e)[:80]}")
-            fail += 1
-    
-    print(f"\n  [PREHEAT] Complete: {ok} success, {fail} failed")
 
 
 if __name__ == "__main__":

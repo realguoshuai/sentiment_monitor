@@ -44,6 +44,20 @@
               {{ mode.label }}
             </button>
           </div>
+          
+          <div class="flex bg-rose-50 p-1 rounded-xl border border-rose-100">
+            <button 
+              v-for="mode in calcModes"
+              :key="mode.value"
+              @click="currentCalcMode = mode.value"
+              :class="[
+                'px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all whitespace-nowrap',
+                currentCalcMode === mode.value ? 'bg-rose-600 text-white shadow-md' : 'text-rose-700/60 hover:text-rose-700 hover:bg-rose-100/50'
+              ]"
+            >
+              {{ mode.label }}
+            </button>
+          </div>
         </div>
       </div>
     </header>
@@ -92,7 +106,7 @@
                 <span class="text-4xl font-black font-mono tracking-tighter" :class="priceDiffColor">
                   {{ currentDiff > 0 ? '+' : '' }}{{ currentDiff.toFixed(2) }}
                 </span>
-                <span class="text-xs text-slate-500 font-bold uppercase">CNY</span>
+                <span class="text-xs text-slate-500 font-bold uppercase">{{ currentCalcMode === 'ratio' ? 'x' : 'CNY' }}</span>
              </div>
           </div>
           <div v-for="(sym, idx) in selectedSymbols" :key="sym" class="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
@@ -123,7 +137,7 @@
                 </div>
              </div>
              
-             <h4 class="text-sm font-bold text-slate-800 mb-2">{{ getStockName(sym) }}</h4>
+             <h4 class="text-sm font-bold text-slate-800 mb-2" :title="'ROI = ROE/PB + 股息率'">{{ getStockName(sym) }}</h4>
              
              <div class="grid grid-cols-2 gap-4 mt-4">
                <div class="p-3 bg-indigo-50/50 rounded-xl border border-indigo-100/50">
@@ -181,7 +195,7 @@
             <div>
               <h3 class="text-lg font-bold flex items-center gap-3 text-slate-800">
                 <div class="w-1.5 h-6 bg-indigo-500 rounded-full"></div>
-                {{ getTimeScaleLabel(currentTimeScale) }} {{ getMetricLabel(currentMetricMode) }} 对冲走势
+                {{ getTimeScaleLabel(currentTimeScale) }} {{ getMetricLabel(currentMetricMode) }} {{ currentCalcMode === 'ratio' ? '比值' : '差值' }} 对冲走势
               </h3>
               <p class="text-[10px] text-slate-500 font-bold uppercase mt-1 tracking-widest">{{ currentTimeScale === 'minute' ? 'Intraday Hedge Pulse' : 'Historical Valuation Dynamics' }}</p>
             </div>
@@ -216,6 +230,42 @@
 
           <div ref="priceSpreadRef" class="w-full h-[450px]"></div>
 
+          <!-- 简化版联动性图例 (已挪至相关性图表下方) -->
+          <div class="mt-2 px-1 flex items-center justify-between">
+            <div class="flex items-center gap-4">
+              <div class="flex items-center gap-1.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                <span class="text-[9px] font-black text-slate-400 uppercase">1.0 股价走势同步 (Synced)</span>
+              </div>
+              <div class="flex items-center gap-1.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-slate-300"></span>
+                <span class="text-[9px] font-black text-slate-400 uppercase">0 股价走势无关 (Irrelevant)</span>
+              </div>
+              <div class="flex items-center gap-1.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                <span class="text-[9px] font-black text-slate-400 uppercase">-1.0 股价走势反向 (Inverse)</span>
+              </div>
+            </div>
+            <div class="text-[9px] font-black text-amber-500 uppercase tracking-tighter bg-amber-50 px-2 py-0.5 rounded border border-amber-100">
+              ⚠️ < 0.5 关系破裂 (Breakdown)
+            </div>
+          </div>
+
+          <!-- Spread Drawdown Chart -->
+          <div class="mt-8 border-t border-slate-100 pt-8">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-sm font-bold flex items-center gap-2 text-slate-800 shrink-0">
+                <svg class="w-4 h-4 text-rose-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6"/></svg>
+                价差回撤分析 (Spread Drawdown)
+              </h3>
+              <div class="text-[11px] text-slate-500 flex items-center gap-1.5 bg-rose-50/50 border border-rose-100 px-2.5 py-1 rounded-md w-fit max-w-[60%]">
+                <svg class="w-3.5 h-3.5 text-rose-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                <span class="truncate"><strong class="font-bold text-rose-700">回归动能：</strong>回撤坑越深，历史偏离后强行闭合的拉扯力量就越强</span>
+              </div>
+            </div>
+            <div ref="drawdownRef" class="w-full h-[180px]"></div>
+          </div>
+
           <div
             v-if="dataNotice"
             class="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-[11px] font-bold text-amber-700"
@@ -247,15 +297,23 @@
                      </div>
                   </div>
                   <div class="grid grid-cols-2 gap-4">
-                     <div class="bg-white p-4 rounded-xl border border-indigo-50 shadow-sm">
+                     <div class="bg-white p-3 rounded-xl border border-indigo-50 shadow-sm">
                         <div class="text-[9px] font-bold text-slate-400 uppercase mb-1">平均价差 (HEC Avg)</div>
-                        <div class="text-lg font-black font-mono text-indigo-600">{{ spreadStats.avg.toFixed(2) }}</div>
+                        <div class="text-base font-black font-mono text-indigo-600">{{ spreadStats.avg.toFixed(2) }}</div>
                      </div>
-                     <div class="bg-white p-4 rounded-xl border border-indigo-50 shadow-sm">
-                        <div class="text-[9px] font-bold text-slate-400 uppercase mb-1">当前偏离 (Z-Gap)</div>
-                        <div class="text-lg font-black font-mono" :class="Math.abs(currentDiff - spreadStats.avg) > spreadStats.avg * 0.2 ? 'text-amber-500' : 'text-slate-700'">
-                           {{ (currentDiff - spreadStats.avg).toFixed(2) }}
+                     <div class="bg-white p-3 rounded-xl border border-indigo-50 shadow-sm">
+                        <div class="text-[9px] font-bold text-slate-400 uppercase mb-1">当前 Z-Score</div>
+                        <div class="text-base font-black font-mono" :class="Math.abs(spreadStats.zScore) > 2 ? 'text-amber-500' : 'text-slate-700'">
+                           {{ spreadStats.zScore > 0 ? '+' : '' }}{{ spreadStats.zScore.toFixed(2) }}σ
                         </div>
+                     </div>
+                     <div class="bg-white p-3 rounded-xl border border-rose-50 shadow-sm">
+                        <div class="text-[9px] font-bold text-slate-400 uppercase mb-1">最大回撤 (Max DD)</div>
+                        <div class="text-base font-black font-mono text-rose-600">{{ drawdownStats.maxDrawdown.toFixed(2) }}</div>
+                     </div>
+                     <div class="bg-white p-3 rounded-xl border border-rose-50 shadow-sm">
+                        <div class="text-[9px] font-bold text-slate-400 uppercase mb-1">当前回撤 (Cur DD)</div>
+                        <div class="text-base font-black font-mono text-rose-500">{{ drawdownStats.currentDrawdown.toFixed(2) }}</div>
                      </div>
                   </div>
                </div>
@@ -322,8 +380,14 @@ const metricModes = [
   { label: '回报率 (ROI)', value: 'roi' },
 ]
 
+const calcModes = [
+  { label: '差值 (A-B)', value: 'diff' },
+  { label: '比值 (A/B)', value: 'ratio' },
+]
+
 const currentTimeScale = ref<string>('minute')
 const currentMetricMode = ref<string>('price')
+const currentCalcMode = ref<string>('diff')
 const selectedSymbols = ref<string[]>([])
 const loadingPrice = ref(false)
 const rtPrices = ref<Record<string, RealtimePrice>>({})
@@ -339,6 +403,9 @@ const defaultComparisonSymbols = ['SZ000423', 'SZ002304']
 // Chart refs
 const priceSpreadRef = ref<HTMLElement>()
 let priceChart: ECharts | null = null
+
+const drawdownRef = ref<HTMLElement>()
+let drawdownChart: ECharts | null = null
 
 function normalizeSymbol(symbol: string) {
   const raw = String(symbol || '').trim().toUpperCase()
@@ -391,7 +458,7 @@ function buildRealtimeFallbackSeries(symbols: string[]) {
     time,
     p1: val1,
     p2: val2,
-    diff: val1 - val2,
+    diff: currentCalcMode.value === 'ratio' ? (val2 > 0 ? val1 / val2 : 0) : val1 - val2,
     m1: metrics1,
     m2: metrics2,
   }]
@@ -485,6 +552,9 @@ const currentDiff = computed(() => {
   if (selectedSymbols.value.length < 2) return 0
   const p1 = rtPrices.value[selectedSymbols.value[0]]?.price || 0
   const p2 = rtPrices.value[selectedSymbols.value[1]]?.price || 0
+  if (currentCalcMode.value === 'ratio') {
+    return p2 > 0 ? p1 / p2 : 0
+  }
   return p1 - p2
 })
 
@@ -495,7 +565,7 @@ const priceDiffColor = computed(() => {
 })
 
 const spreadStats = computed(() => {
-  if (comparisonData.value.length === 0) return { maxVal: 0, maxDate: '--', minVal: 0, minDate: '--', avg: 0, range: '--', percentile: 0 }
+  if (comparisonData.value.length === 0) return { maxVal: 0, maxDate: '--', minVal: 0, minDate: '--', avg: 0, std: 0, zScore: 0, range: '--', percentile: 0 }
   
   let maxVal = -Infinity, minVal = Infinity, sum = 0
   let maxDate = '', minDate = ''
@@ -508,6 +578,13 @@ const spreadStats = computed(() => {
   
   const avg = sum / (comparisonData.value.length || 1)
   
+  let varianceSum = 0
+  comparisonData.value.forEach(d => {
+    varianceSum += Math.pow(d.diff - avg, 2)
+  })
+  const std = Math.sqrt(varianceSum / (comparisonData.value.length || 1))
+  const zScore = std > 0 ? (currentDiff.value - avg) / std : 0
+  
   let lessThanCurrent = 0
   comparisonData.value.forEach(d => {
      if (d.diff <= currentDiff.value) lessThanCurrent++
@@ -515,7 +592,30 @@ const spreadStats = computed(() => {
   const percentile = (lessThanCurrent / (comparisonData.value.length || 1)) * 100
   const range = `${comparisonData.value[0].time} 至 ${comparisonData.value[comparisonData.value.length - 1].time}`
   
-  return { maxVal, maxDate, minVal, minDate, avg, range, percentile }
+  return { maxVal, maxDate, minVal, minDate, avg, std, zScore, range, percentile }
+})
+
+const drawdownStats = computed(() => {
+  if (comparisonData.value.length === 0) return { maxDrawdown: 0, currentDrawdown: 0, series: [] }
+  
+  let maxVal = -Infinity
+  let maxDrawdown = 0
+  let currentDrawdown = 0
+
+  const series = comparisonData.value.map(d => {
+    if (d.diff > maxVal) maxVal = d.diff
+    const dd = maxVal - d.diff
+    if (dd > maxDrawdown) maxDrawdown = dd
+    return {
+      time: d.time,
+      drawdown: -dd,
+      peak: maxVal
+    }
+  })
+
+  currentDrawdown = -(series[series.length - 1].drawdown)
+
+  return { maxDrawdown, currentDrawdown, series }
 })
 
 async function fetchComparisonData() {
@@ -574,6 +674,20 @@ async function fetchComparisonData() {
   }
 }
 
+function calculatePearson(x: number[], y: number[]) {
+  const n = x.length;
+  if (n === 0) return 0;
+  const sumX = x.reduce((a, b) => a + b, 0);
+  const sumY = y.reduce((a, b) => a + b, 0);
+  const sumX2 = x.reduce((a, b) => a + b * b, 0);
+  const sumY2 = y.reduce((a, b) => a + b * b, 0);
+  const sumXY = x.reduce((a, b, i) => a + b * y[i], 0);
+  const numerator = n * sumXY - sumX * sumY;
+  const denominator = Math.sqrt((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY));
+  if (denominator === 0) return 0;
+  return numerator / denominator;
+}
+
 function remapComparisonData() {
   const symbols = selectedSymbols.value
   const scale = currentTimeScale.value
@@ -617,7 +731,7 @@ function remapComparisonData() {
          time: `${item.time.slice(0, 2)}:${item.time.slice(2, 4)}`,
          p1: val1,
          p2: val2,
-         diff: val1 - val2,
+         diff: currentCalcMode.value === 'ratio' ? (val2 > 0 ? val1 / val2 : 0) : val1 - val2,
          m1: metrics1,
          m2: metrics2
        }
@@ -629,7 +743,7 @@ function remapComparisonData() {
           time: item.date, 
           p1, 
           p2, 
-          diff: p1 - p2,
+          diff: currentCalcMode.value === 'ratio' ? (p2 > 0 ? p1 / p2 : 0) : p1 - p2,
           m1: { price: item.price, pe: item.pe, pb: item.pb, dividend_yield: item.dividend_yield, roi: item.roi },
           m2: item2 ? { price: item2.price, pe: item2.pe, pb: item2.pb, dividend_yield: item2.dividend_yield, roi: item2.roi } : {}
         }
@@ -639,6 +753,18 @@ function remapComparisonData() {
   if (!comparisonData.value.length) {
     restoreLastGoodData('当前指标没有可绘制的数据，已保留上一轮有效走势。')
     return
+  }
+
+  const windowSize = 30;
+  for (let i = 0; i < comparisonData.value.length; i++) {
+    if (i < windowSize - 1) {
+      comparisonData.value[i].corr = null;
+    } else {
+      const slice = comparisonData.value.slice(i - windowSize + 1, i + 1);
+      const px1 = slice.map(d => d.p1);
+      const px2 = slice.map(d => d.p2);
+      comparisonData.value[i].corr = calculatePearson(px1, px2);
+    }
   }
 
   lastGoodComparisonData.value = [...comparisonData.value]
@@ -666,7 +792,7 @@ function calculateIntradayMetrics(item: any, rt: any, sym: string) {
   // ROE = PB / PE * 100
   let roe = pe > 0 ? (pb / pe * 100) : 0
   if (sym.includes('002304') && roe < 20) roe = 20
-  const roi = pb > 0 ? (roe / pb) : 0
+  const roi = pb > 0 ? (roe / pb) + dy : 0
 
   return {
     price: item.price,
@@ -700,7 +826,8 @@ function updatePriceChart() {
     title: {
       text: `${n1} ⇌ ${n2}`,
       left: 'center',
-      top: '20',
+      top: '10',
+      itemGap: 8,
       textStyle: {
         color: '#1e293b',
         fontSize: 14,
@@ -747,8 +874,11 @@ function updatePriceChart() {
           `
         }
 
+        const unitMap: Record<string, string> = { 'minute': 'MIN', '30d': 'D', '1y': 'W', '5y': 'M', '10y': 'Y' }
+        const corrLabel = `30${unitMap[currentTimeScale.value] || 'D'} Rolling Corr`
+
         return `
-          <div class="p-4 min-w-[320px] bg-white rounded-xl">
+          <div class="p-4 min-w-[320px] bg-white rounded-xl shadow-2xl border border-slate-100">
             <div class="flex items-center justify-between mb-3 pb-2 border-b border-slate-100">
                <span class="text-[11px] font-black text-slate-800 uppercase tracking-wider">${data.time}</span>
                <span class="text-[9px] px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-full font-bold uppercase">Hedge Matrix</span>
@@ -771,6 +901,13 @@ function updatePriceChart() {
               </tbody>
             </table>
             
+            ${data.corr !== undefined && data.corr !== null ? `
+            <div class="mt-3 pt-2 border-t border-slate-50 flex items-center justify-between">
+               <span class="text-[9px] text-slate-400 font-bold uppercase">${corrLabel}</span>
+               <span class="text-[11px] font-mono font-black ${data.corr > 0.5 ? 'text-emerald-600' : (data.corr > 0 ? 'text-amber-500' : 'text-rose-600')}">${data.corr.toFixed(2)}</span>
+            </div>
+            ` : ''}
+            
             <div class="mt-3 pt-2 border-t border-slate-50 flex items-center justify-between">
                <span class="text-[9px] text-slate-400 font-bold uppercase font-mono italic">Primary Focus: ${mLabel}</span>
                <div class="flex items-center gap-1">
@@ -782,30 +919,83 @@ function updatePriceChart() {
         `
       }
     },
-    grid: { left: '1%', right: '1%', bottom: '5%', top: '15%', containLabel: true },
-    xAxis: {
-      type: 'category',
-      data: comparisonData.value.map(d => {
-        if (currentTimeScale.value === 'minute') return d.time;
-        // 10Y/5Y 月线模式下，如果点数较多，显示完整日期 YYYY-MM
-        if (currentTimeScale.value === '5y' || currentTimeScale.value === '10y') return d.time.slice(0, 7);
-        return d.time.length > 5 ? d.time.slice(5) : d.time; // MM-DD
-      }), 
-      axisLine: { lineStyle: { color: 'rgba(0,0,0,0.1)' } },
-      axisLabel: { color: '#475569', fontSize: 10, fontWeight: '800', fontFamily: 'Monaco, Inter' },
-      axisPointer: { show: true }
-    },
-    yAxis: {
-      type: 'value',
-      scale: true,
-      position: 'right',
-      splitLine: { lineStyle: { color: 'rgba(0,0,0,0.05)' } },
-      axisLabel: { color: '#475569', fontSize: 10, fontWeight: '800', fontFamily: 'Monaco, Inter' }
-    },
+    visualMap: [
+      {
+        show: false,
+        dimension: 1,
+        seriesIndex: 0,
+        pieces: [
+          { gt: spreadStats.value.avg + 2 * spreadStats.value.std, color: '#f43f5e' },
+          { lt: spreadStats.value.avg - 2 * spreadStats.value.std, color: '#10b981' },
+        ],
+        outOfRange: { color: '#6366f1' }
+      },
+      {
+        show: false,
+        dimension: 1,
+        seriesIndex: 1,
+        pieces: [
+          { gt: 0.5, color: '#10b981' },  // 股价走势同步
+          { lte: 0, color: '#f43f5e' }    // 股价走势反向
+        ],
+        outOfRange: { color: '#94a3b8' }  // 股价走势无关
+      }
+    ],
+    grid: [
+      { left: '1%', right: '1%', top: '10%', height: '60%', containLabel: true },
+      { left: '1%', right: '1%', top: '75%', height: '20%', containLabel: true }
+    ],
+    xAxis: [
+      {
+        type: 'category',
+        gridIndex: 0,
+        data: comparisonData.value.map(d => {
+          if (currentTimeScale.value === 'minute') return d.time;
+          if (currentTimeScale.value === '5y' || currentTimeScale.value === '10y') return d.time.slice(0, 7);
+          return d.time.length > 5 ? d.time.slice(5) : d.time;
+        }), 
+        axisLine: { lineStyle: { color: 'rgba(0,0,0,0.1)' } },
+        axisLabel: { show: false },
+        axisPointer: { show: true }
+      },
+      {
+        type: 'category',
+        gridIndex: 1,
+        data: comparisonData.value.map(d => {
+          if (currentTimeScale.value === 'minute') return d.time;
+          if (currentTimeScale.value === '5y' || currentTimeScale.value === '10y') return d.time.slice(0, 7);
+          return d.time.length > 5 ? d.time.slice(5) : d.time;
+        }), 
+        axisLine: { lineStyle: { color: 'rgba(0,0,0,0.1)' } },
+        axisLabel: { color: '#475569', fontSize: 10, fontWeight: '800', fontFamily: 'Monaco, Inter' },
+        axisPointer: { show: true }
+      }
+    ],
+    yAxis: [
+      {
+        type: 'value',
+        scale: true,
+        gridIndex: 0,
+        position: 'right',
+        splitLine: { lineStyle: { color: 'rgba(0,0,0,0.05)' } },
+        axisLabel: { color: '#475569', fontSize: 10, fontWeight: '800', fontFamily: 'Monaco, Inter' }
+      },
+      {
+        type: 'value',
+        gridIndex: 1,
+        min: -1,
+        max: 1,
+        position: 'right',
+        splitLine: { lineStyle: { color: 'rgba(0,0,0,0.05)', type: 'dashed' } },
+        axisLabel: { color: '#475569', fontSize: 9, fontFamily: 'Monaco, Inter' }
+      }
+    ],
     series: [
       {
         name: 'Spread',
         type: 'line',
+        xAxisIndex: 0,
+        yAxisIndex: 0,
         showSymbol: false,
         smooth: true,
         data: comparisonData.value.map(d => d.diff),
@@ -868,13 +1058,113 @@ function updatePriceChart() {
         },
         markLine: {
           symbol: 'none',
-          data: [{ yAxis: 0, lineStyle: { color: 'rgba(0,0,0,0.15)', type: 'solid', width: 1.5 } }],
+          data: [
+            { yAxis: spreadStats.value.avg, lineStyle: { color: '#6366f1', type: 'dashed', width: 1.5 }, label: { show: true, position: 'insideEndTop', formatter: 'Mean', color: '#6366f1', fontSize: 9 } },
+            { yAxis: spreadStats.value.avg + spreadStats.value.std, lineStyle: { color: 'rgba(99,102,241,0.3)', type: 'solid', width: 1 }, label: { show: true, position: 'insideEndTop', formatter: '+1σ', color: 'rgba(99,102,241,0.6)', fontSize: 9 } },
+            { yAxis: spreadStats.value.avg - spreadStats.value.std, lineStyle: { color: 'rgba(99,102,241,0.3)', type: 'solid', width: 1 }, label: { show: true, position: 'insideEndBottom', formatter: '-1σ', color: 'rgba(99,102,241,0.6)', fontSize: 9 } },
+            { yAxis: spreadStats.value.avg + 2 * spreadStats.value.std, lineStyle: { color: 'rgba(244,63,94,0.5)', type: 'dashed', width: 1 }, label: { show: true, position: 'insideEndTop', formatter: '+2σ', color: '#f43f5e', fontSize: 9 } },
+            { yAxis: spreadStats.value.avg - 2 * spreadStats.value.std, lineStyle: { color: 'rgba(16,185,129,0.5)', type: 'dashed', width: 1 }, label: { show: true, position: 'insideEndBottom', formatter: '-2σ', color: '#10b981', fontSize: 9 } },
+            { yAxis: currentCalcMode.value === 'ratio' ? 1 : 0, lineStyle: { color: 'rgba(0,0,0,0.15)', type: 'solid', width: 1.5 }, label: { show: false } }
+          ],
+          label: { show: false }
+        }
+      },
+      {
+        name: 'Correlation',
+        type: 'line',
+        xAxisIndex: 1,
+        yAxisIndex: 1,
+        showSymbol: false,
+        smooth: true,
+        data: comparisonData.value.map(d => d.corr),
+        lineStyle: { width: 1.5 },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(148, 163, 184, 0.1)' },
+            { offset: 1, color: 'rgba(148, 163, 184, 0)' }
+          ])
+        },
+        markLine: {
+          symbol: 'none',
+          data: [
+            { yAxis: 0, lineStyle: { color: 'rgba(0,0,0,0.1)', type: 'solid', width: 1 } },
+            { yAxis: 0.5, lineStyle: { color: 'rgba(244,63,94,0.5)', type: 'dashed', width: 1 }, label: { show: true, position: 'insideStartTop', formatter: 'Breakdown (0.5)', fontSize: 9, color: '#f43f5e' } }
+          ],
           label: { show: false }
         }
       }
     ]
   }
   priceChart.setOption(option, true)
+
+  updateDrawdownChart()
+}
+
+function updateDrawdownChart() {
+  if (!drawdownRef.value) {
+    nextTick(() => {
+      if (drawdownRef.value) updateDrawdownChart()
+    })
+    return
+  }
+  if (!drawdownChart) drawdownChart = echarts.init(drawdownRef.value)
+  if (!drawdownStats.value.series.length) {
+    drawdownChart.clear()
+    return
+  }
+
+  const chartData = drawdownStats.value.series
+  
+  const option = {
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params: any) => {
+        const d = chartData[params[0].dataIndex]
+        return `
+          <div class="p-3 bg-white rounded-xl shadow-lg border border-slate-100 min-w-[150px]">
+            <div class="font-bold text-slate-700 mb-2 border-b border-slate-100 pb-1">${d.time}</div>
+            <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">区间高点: <span class="text-indigo-600 font-mono">${d.peak.toFixed(2)}</span></div>
+            <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wider">回撤深度: <span class="text-rose-600 font-mono">${Math.abs(d.drawdown).toFixed(2)}</span></div>
+          </div>
+        `
+      }
+    },
+    grid: { left: '1%', right: '1%', bottom: '5%', top: '5%', containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: chartData.map((d: any) => d.time),
+      show: false
+    },
+    yAxis: {
+      type: 'value',
+      position: 'right',
+      splitLine: { lineStyle: { color: 'rgba(0,0,0,0.05)' } },
+      axisLabel: { color: '#94a3b8', fontSize: 10, fontFamily: 'Monaco, Inter' }
+    },
+    series: [
+      {
+        name: 'Drawdown',
+        type: 'line',
+        step: 'end',
+        showSymbol: false,
+        data: chartData.map((d: any) => d.drawdown),
+        lineStyle: { width: 1.5, color: '#f43f5e' },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(244, 63, 94, 0.2)' },
+            { offset: 1, color: 'rgba(244, 63, 94, 0)' }
+          ])
+        }
+      }
+    ]
+  }
+  drawdownChart.setOption(option, true)
+}
+
+const handleResize = () => {
+  priceChart?.resize()
+  drawdownChart?.resize()
 }
 
 onMounted(async () => {
@@ -883,19 +1173,20 @@ onMounted(async () => {
 
   selectedSymbols.value = buildDefaultComparisonSelection(getAvailableComparisonSymbols())
   
-  window.addEventListener('resize', () => priceChart?.resize())
+  window.addEventListener('resize', handleResize)
 })
 
 onUnmounted(() => {
-  window.removeEventListener('resize', () => priceChart?.resize())
+  window.removeEventListener('resize', handleResize)
   priceChart?.dispose()
+  drawdownChart?.dispose()
 })
 
 watch([selectedSymbols, currentTimeScale], () => {
   fetchComparisonData()
 }, { deep: true, immediate: true })
 
-watch(currentMetricMode, () => {
+watch([currentMetricMode, currentCalcMode], () => {
   remapComparisonData()
 })
 

@@ -108,7 +108,15 @@ def get_news(symbol_code: str) -> list:
     news_list = []
 
     try:
-        df = ak.stock_news_em(symbol=symbol_code)
+        # 增加对 AkShare 返回异常的防御
+        try:
+            df = ak.stock_news_em(symbol=symbol_code)
+        except Exception as exc:
+            if "Extra data" in str(exc) or "JSONDecodeError" in str(exc):
+                logger.warning("EastMoney API returned invalid JSON for %s, skipping news.", symbol_code)
+                return news_list
+            raise exc
+
         if df.empty:
             logger.info("EastMoney news returned empty result for %s", symbol_code)
             return news_list

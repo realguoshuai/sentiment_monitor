@@ -1,14 +1,14 @@
-﻿<template>
+<template>
   <div class="analysis-detail">
     <header class="page-header hero-card">
       <div class="stock-info hero-copy" v-if="stockData">
         <p class="hero-kicker">Deep Analysis</p>
         <div class="hero-title-row">
-          <h1 class="stock-name">{{ getSymbolName(stockData.symbol) }} 深度分析矩阵</h1>
+          <h1 class="stock-name">{{ getSymbolName(stockData.symbol) }} 估值分析矩阵</h1>
           <span class="symbol-chip">{{ stockData.symbol }}</span>
         </div>
         <p class="hero-subtitle">
-          先看 10 年分位与公允区间，再看安全性和投资 Thesis，避免来回切换模块。
+          深度观测 10 年分位与公允价值区间，结合 F-Score 排雷，构建完整的价值投资决策矩阵。
         </p>
         <div class="badges hero-badges">
           <span class="badge color-pe">PE {{ formatMetric(mainPercentiles?.pe?.current, 'pe') }}</span>
@@ -83,7 +83,7 @@
         <span v-if="analysisCacheAtText" class="analysis-cache-time">{{ analysisCacheAtText }}</span>
       </section>
 
-      <!-- 1. 深度对比鍥捐〃 -->
+      <!-- 1. 深度对比图表 -->
       <section class="section chart-section">
         <div class="chart-layout">
           <div class="chart-main">
@@ -164,7 +164,7 @@
       </section>
 
       <div class="grid-layout">
-        <!-- 2. F-Score 安全鎬х煩闃?-->
+        <!-- 2. F-Score 安全性矩阵?-->
         <section class="section safety-section">
           <div class="section-header compact-header">
             <div>
@@ -191,11 +191,11 @@
         </section>
 
 
-        <!-- 3. 浼板€肩粨璁哄眰 -->
+        <!-- 3. 估值结论层 -->
                 <section class="section fair-value-section" v-if="valuationConclusion && valuationRange && expectedReturn">
           <div class="valuation-header">
             <div>
-              <h2>估值结论层</h2>
+              <h2>估值分析结论层</h2>
               <p class="section-footer section-footer-tight">综合 ROE-PB、盈利能力与股东自由现金流三种口径，给出加权估值区间。</p>
             </div>
             <div class="valuation-summary" :class="valuationSummaryClass">
@@ -781,7 +781,7 @@ const steps = [
   '同步 10 年期历史分位数据...',
   '执行 F-Score 安全性排雷...',
   '计算公允价值锚点...',
-  '渲染深度分析矩阵...'
+  '渲染估值分析矩阵...'
 ];
 
 // 计算属性
@@ -857,17 +857,31 @@ onMounted(async () => {
 });
 
 const fetchMainData = async () => {
+  if (sentimentStore.analysisCache[symbol]) {
+    const cached = sentimentStore.analysisCache[symbol];
+    applyAnalysisPayload(cached);
+    syncAnalysisRefreshState(cached);
+    loading.value = false;
+    currentStep.value = 4;
+    // 如果是陈旧缓存，依然在后台触发同步
+    if (cached.cache_status === 'stale') {
+       void sentimentStore.getAnalysis(symbol, true).then(data => {
+         applyAnalysisPayload(data);
+         syncAnalysisRefreshState(data);
+       });
+    }
+    return;
+  }
+
   loading.value = true;
   currentStep.value = 0;
   clearAnalysisRefreshRetry();
   try {
     currentStep.value = 1;
-    const res = await stockApi.getAnalysis(symbol);
-    applyAnalysisPayload(res.data);
-    syncAnalysisRefreshState(res.data);
+    const data = await sentimentStore.getAnalysis(symbol);
+    applyAnalysisPayload(data);
+    syncAnalysisRefreshState(data);
 
-    currentStep.value = 2;
-    currentStep.value = 3;
     currentStep.value = 4;
   } catch (error) {
     console.error('Failed to fetch analysis:', error);
@@ -886,7 +900,7 @@ const fetchComparisonData = async () => {
     return;
   }
 
-  // 鎵惧嚭缂撳瓨涓病鏈夌殑鏍囩殑
+  // 找出缓存中没有的标的
   const missingSymbols = symbols.filter(s => !historicalCache.value[s]);
   
   if (missingSymbols.length > 0) {
@@ -906,7 +920,7 @@ const fetchComparisonData = async () => {
     }
   }
 
-  // 浠庣紦瀛樹腑同步当前鍕鹃€夌殑对比鏁版嵁
+  // 从缓存中同步当前勾选的对比数据
   const newMap: Record<string, AnalysisPayload> = {};
   symbols.forEach(s => {
     if (historicalCache.value[s]) {
@@ -1093,7 +1107,6 @@ const initChart = () => {
   // 1. 主线数据 (采用公司名)
   series.push({
     name: mainName,
-
     type: 'line',
     data: mainHistory.map((h: any) => h[metric] || 0),
     smooth: true,
@@ -1122,7 +1135,7 @@ const initChart = () => {
     }
   });
 
-  // 2. 对比绾挎暟鎹?(采用公司名?
+  // 2. 对比线数据 (采用公司名)
   compareSymbols.value.forEach((s, idx) => {
     const d = compareDataMap.value[s];
     if (d && d.history) {
@@ -1190,7 +1203,7 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.9); /* 提高不透明度?*/
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid #cbd5e1; /* 明显鐨勮竟妗?*/
+  border: 1px solid #cbd5e1; /* 明显的边框 */
   padding: 16px;
   border-radius: 20px;
   width: 100%;
@@ -1235,7 +1248,7 @@ onUnmounted(() => {
   position: relative;
   font-size: 0.75rem;
   padding: 8px 14px;
-  background: #f1f5f9; /* 明显鐨勫簳鑹?*/
+  background: #f1f5f9; /* 明显的底色?*/
   border: 1px solid #e2e8f0;
   color: #475569;
   border-radius: 12px;

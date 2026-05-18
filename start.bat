@@ -27,4 +27,3 @@ echo   Startup script finished.
 echo   [Upgraded] Backend is now powered by Uvicorn ASGI.
 echo   [Upgraded] SQLite concurrent WAL mode is active.
 echo ======================================================
-pause

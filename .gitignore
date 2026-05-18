@@ -18,6 +18,8 @@ backend/scratch/debug_outputs/
 *.djcache
 *.sqlite3
 *.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
 backend/fix_*.py
 backend/verify_*.py
 backend/patch_*.py

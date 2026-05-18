@@ -1,7 +1,8 @@
-﻿from statistics import median
+from statistics import median
 import logging
 import threading
 from typing import Dict, List, Optional
+import concurrent.futures
 
 from django.core.cache import cache
 from django.utils import timezone
@@ -47,26 +48,38 @@ class AnalysisService:
         history_period = 'month' if period == '10y' else period
         history_limit = 120 if history_period == 'month' else 30
 
-        hist_data = PriceService.get_historical_data(
-            [fixed_symbol],
-            limit=history_limit,
-            period=history_period,
-        )
-        stock_hist = hist_data.get(fixed_symbol, []) or hist_data.get(symbol, [])
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            # 并行抓取各维度核心数据
+            future_hist = executor.submit(
+                PriceService.get_historical_data,
+                [fixed_symbol],
+                limit=history_limit,
+                period=history_period
+            )
+            future_forward = executor.submit(FundamentalService.get_forward_metrics, fixed_symbol)
+            future_f_score = executor.submit(FundamentalService.get_f_score, fixed_symbol)
+            future_quality = executor.submit(
+                FundamentalService.get_quality_data, 
+                fixed_symbol, 
+                include_shareholder=False
+            )
+
+            # 获取结果
+            hist_data = future_hist.result()
+            stock_hist = hist_data.get(fixed_symbol, []) or hist_data.get(symbol, [])
+            forward = future_forward.result()
+            f_score = future_f_score.result()
+            try:
+                quality_data = future_quality.result()
+            except Exception:
+                quality_data = {}
+
         percentiles = {
             'pe': FundamentalService.calculate_percentiles(stock_hist, 'pe'),
             'pb': FundamentalService.calculate_percentiles(stock_hist, 'pb'),
             'roi': FundamentalService.calculate_percentiles(stock_hist, 'roi'),
             'dy': FundamentalService.calculate_percentiles(stock_hist, 'dividend_yield'),
         }
-        forward = FundamentalService.get_forward_metrics(fixed_symbol)
-        f_score = FundamentalService.get_f_score(fixed_symbol)
-
-        quality_data = {}
-        try:
-            quality_data = FundamentalService.get_quality_data(fixed_symbol, include_shareholder=False)
-        except Exception:
-            quality_data = {}
 
         from .utils import get_valuation_config
         val_config = get_valuation_config(fixed_symbol)
@@ -144,13 +157,32 @@ class AnalysisService:
             for item in Stock.objects.filter(symbol__in=[fixed_symbol, *peer_symbols])
         }
         realtime_map = PriceService.get_realtime_price([fixed_symbol, *peer_symbols], fetch_fundamentals=True)
-        rows = []
+        
         symbols = [fixed_symbol, *peer_symbols]
+        # 并行获取所有同行的前瞻财务数据
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(symbols)) as executor:
+            future_map = {
+                item_symbol: executor.submit(FundamentalService.get_forward_metrics, item_symbol)
+                for item_symbol in symbols
+                if not (item_symbol == fixed_symbol and forward)
+            }
+            
+            peer_forward_map = {}
+            for item_symbol, future in future_map.items():
+                try:
+                    peer_forward_map[item_symbol] = future.result()
+                except Exception:
+                    peer_forward_map[item_symbol] = {}
+            
+            if fixed_symbol and forward:
+                peer_forward_map[fixed_symbol] = forward
+
+        rows = []
         latest_history = cls._latest_history_point(history or [])
 
         for item_symbol in symbols:
             realtime = realtime_map.get(item_symbol, {})
-            current_forward = forward if item_symbol == fixed_symbol and forward else FundamentalService.get_forward_metrics(item_symbol)
+            current_forward = peer_forward_map.get(item_symbol, {})
             row = cls._build_peer_row(
                 item_symbol,
                 realtime=realtime,
@@ -748,8 +780,8 @@ class AnalysisService:
         if current_price <= 0 or current_pb <= 0 or expected_roe <= 0:
             return cls._build_unavailable_model(
                 key='roe_anchor',
-                label='ROE-PB 閿氱偣',
-                reason='缂哄皯褰撳墠 PB 鎴栧墠鐬?ROE',
+                label='ROE-PB 锚点',
+                reason='缺少当前 PB 或前瞻 ROE',
             )
 
         book_value_per_share = current_price / current_pb

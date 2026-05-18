@@ -36,15 +36,15 @@ const updateChart = () => {
   const sortedData = [...props.data].sort((a, b) => {
     const pA = store.realtimePrices[a.stock_symbol]
     const pB = store.realtimePrices[b.stock_symbol]
-    const roiA = pA ? store.calculateROI(a.stock_symbol, pA.pe, pA.pb) : 0
-    const roiB = pB ? store.calculateROI(b.stock_symbol, pB.pe, pB.pb) : 0
+    const roiA = pA ? store.calculateROI(a.stock_symbol, pA.pe, pA.pb, pA.dividend_yield) : 0
+    const roiB = pB ? store.calculateROI(b.stock_symbol, pB.pe, pB.pb, pB.dividend_yield) : 0
     return roiB - roiA
   })
 
   const stockNames = sortedData.map(d => d.stock_name)
   const roiValues = sortedData.map(d => {
     const p = store.realtimePrices[d.stock_symbol]
-    return p ? parseFloat(store.calculateROI(d.stock_symbol, p.pe, p.pb).toFixed(2)) : 0
+    return p ? parseFloat(store.calculateROI(d.stock_symbol, p.pe, p.pb, p.dividend_yield).toFixed(2)) : 0
   })
   
   const option: EChartsOption = {
@@ -80,7 +80,11 @@ const updateChart = () => {
               <span style="color: #94a3b8;">PB</span>
               <span style="font-weight: bold; color: #fbbf24;">${rt.pb.toFixed(2)}</span>
             </div>
-            <div style="display: flex; justify-content: space-between; gap: 20px; font-size: 12px; margin-top: 8px; border-top: 1px solid #334155; pt-4;">
+            <div style="display: flex; justify-content: space-between; gap: 20px; font-size: 12px; margin-bottom: 4px;">
+              <span style="color: #94a3b8;">股息率</span>
+              <span style="font-weight: bold; color: #f472b6;">${(rt.dividend_yield || 0).toFixed(2)}%</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; gap: 20px; font-size: 12px; margin-top: 8px; border-top: 1px solid #334155; padding-top: 4px;">
               <span style="color: #94a3b8;">ROI (回报率)</span>
               <span style="font-weight: bold; color: #22c55e;">${roi}%</span>
             </div>

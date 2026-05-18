@@ -68,7 +68,7 @@
           <span class="text-[11px] font-bold font-mono" :class="roeColor">{{ roeText }}</span>
         </div>
         <div class="flex flex-col p-1 rounded bg-[#1e293b]/50 border border-slate-700/50 text-center">
-          <span class="text-[8px] text-slate-500 mb-0.5" title="投资回报率 = ROE / PB">ROI</span>
+          <span class="text-[8px] text-slate-500 mb-0.5" title="投资回报率 = ROE / PB + 股息率">ROI</span>
           <span class="text-[11px] font-bold font-mono" :class="roiColor">{{ roiText }}</span>
         </div>
       </div>
@@ -95,7 +95,7 @@
           :to="`/analysis/${data.stock_symbol}`"
           class="px-3 py-1 bg-indigo-500/20 border border-indigo-500/50 hover:bg-indigo-500/40 text-[10px] text-indigo-300 rounded-full transition-all text-center min-w-[50px] font-bold"
         >
-          深度分析
+          估值分析
         </router-link>
         <router-link 
           :to="`/quality/${data.stock_symbol}`"
@@ -107,7 +107,7 @@
           :to="`/analysis/${data.stock_symbol}/history`"
           class="px-3 py-1 bg-amber-500/20 border border-amber-500/50 hover:bg-amber-500/40 text-[10px] text-amber-300 rounded-full transition-all text-center min-w-[50px] font-bold"
         >
-          历史回测
+          回测复盘
         </router-link>
         <a 
           v-for="link in allLinks"
