@@ -15,6 +15,11 @@ desktop/frontend-dist/
 desktop/release/
 backend/cache_data/
 backend/scratch/debug_outputs/
+scratch/
+test_*.py
+backend/test_*.py
+backend/scratch/verify_*.py
+backend/scratch/final_*.py
 *.djcache
 *.sqlite3
 *.sqlite3-journal
