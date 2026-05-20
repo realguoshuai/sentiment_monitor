@@ -1467,14 +1467,14 @@ class AnalysisService:
     @staticmethod
     def _classify_valuation(price_low: float, price_base: float, price_high: float, current_price: float) -> str:
         if current_price <= price_low * 0.9:
-            return '鏄捐憲浣庝及'
+            return '显著低估'
         if current_price < price_low:
-            return '浣庝及'
+            return '低估'
         if current_price <= price_high:
-            return '鍚堢悊'
+            return '合理'
         if current_price <= price_high * 1.15:
-            return '鍋忚吹'
-        return '楂樹及'
+            return '偏贵'
+        return '高估'
 
     @staticmethod
     def _classify_summary_color(price_low: float, price_base: float, price_high: float, current_price: float) -> str:
