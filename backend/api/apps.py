@@ -48,10 +48,9 @@ class ApiConfig(AppConfig):
     def warm_valuation_cache(self):
         """后台预热常用估值、深度分析与回测缓存，不阻塞服务启动"""
         import time
-        from .analysis_service import AnalysisService
-        from .history_backtest_service import HistoryBacktestService
         from .models import Stock
         from .price_service import PriceService
+        from .fundamental_service import FundamentalService
         
         # 延迟 5 秒等 Django 服务完全就位
         time.sleep(5)

@@ -174,20 +174,7 @@ class FundamentalService:
             return df
         except Exception: return pd.DataFrame()
 
-    @classmethod
-    def get_shareholder_history(cls, symbol):
-        symbol = cls._fix_symbol(symbol)
-        cache_key = f"shareholder_history_v1_{symbol}"
-        cached = cls._cache_get(cache_key)
-        if cached is not None:
-            if isinstance(cached, list): return pd.DataFrame(cached)
-            return cached
-        try:
-            df = Fetcher.fetch_shareholder_history(symbol)
-            # 这里可以根据需要进行简单重命名，Calculator 也可以做
-            cls._cache_set(cache_key, df, 12 * 3600)
-            return df
-        except Exception: return pd.DataFrame()
+
 
     @classmethod
     def get_northbound_holding_history(cls, symbol):
@@ -297,17 +284,30 @@ class FundamentalService:
         try:
             df_new = Fetcher.fetch_shareholder_history(symbol)
             if cached is not None and not df_new.empty:
-                # 增量合并逻辑
-                df_combined = pd.concat([cached, df_new]).drop_duplicates(subset=['end_date'], keep='last').sort_values('end_date')
+                # 增量合并逻辑：对 cached 进行类型防御
+                if isinstance(cached, list):
+                    cached_df = pd.DataFrame(cached)
+                elif isinstance(cached, pd.DataFrame):
+                    cached_df = cached
+                else:
+                    cached_df = pd.DataFrame(cached)
+                
+                df_combined = pd.concat([cached_df, df_new]).drop_duplicates(subset=['end_date'], keep='last').sort_values('end_date')
                 cls._cache_set(cache_key, df_combined, 12 * 3600)
                 return df_combined
             
             if not df_new.empty:
                 cls._cache_set(cache_key, df_new, 12 * 3600)
                 return df_new
-            return cached if cached is not None else pd.DataFrame()
+            
+            # 返回值类型防御
+            if cached is not None:
+                return pd.DataFrame(cached) if isinstance(cached, list) else cached
+            return pd.DataFrame()
         except Exception:
-            return cached if cached is not None else pd.DataFrame()
+            if cached is not None:
+                return pd.DataFrame(cached) if isinstance(cached, list) else cached
+            return pd.DataFrame()
 
     @classmethod
     def get_f_score(cls, symbol):

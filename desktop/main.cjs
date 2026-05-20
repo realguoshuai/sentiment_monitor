@@ -503,16 +503,16 @@ async function bootstrap() {
   if (!isDev) {
     await showStartupWindow();
     spawnBackend();
-    waitForBackendStartup(`${backendUrl}/api/stocks/`, 60000)
-      .then(() => {
-        logDesktop(`Backend ready at ${backendUrl}`);
-      })
-      .catch((error) => {
-        logDesktop('Backend startup failed', error);
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          dialog.showErrorBox('Backend startup failed', String(error.message || error));
-        }
-      });
+    try {
+      await waitForBackendStartup(`${backendUrl}/api/stocks/`, 60000);
+      logDesktop(`Backend ready at ${backendUrl}`);
+    } catch (error) {
+      logDesktop('Backend startup failed', error);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        dialog.showErrorBox('Backend startup failed', String(error.message || error));
+      }
+      return; // 启动失败则中断，避免后续报错
+    }
   }
 
   await loadAppWindow();

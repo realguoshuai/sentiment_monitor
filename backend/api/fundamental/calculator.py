@@ -166,6 +166,28 @@ class FundamentalCalculator:
             df['roic_pct'] = df['roe'] # 简化版 roic
             df['revenue_growth_pct'] = df['TOTAL_OPERATE_INCOME'].pct_change().fillna(0) * 100
             
+            # 计算股本总数和每股净资产 BVPS (用于资本分配计算)
+            def calculate_shares_and_bvps(row):
+                net_profit = row.get('PARENT_NETPROFIT', 0)
+                eps = row.get('BASIC_EPS', 0)
+                equity = row.get('TOTAL_PARENT_EQUITY', 0)
+                shares = (net_profit / eps) if eps and eps > 0 else 0
+                bvps = (equity / shares) if shares and shares > 0 else 0
+                return pd.Series([shares, bvps], index=['shares', 'bvps'])
+            
+            try:
+                df[['shares', 'bvps']] = df.apply(calculate_shares_and_bvps, axis=1)
+                # 如果大部分 shares 都是 0，说明数据源缺失 EPS，回退到使用 parent equity 作为 bvps 替代
+                if (df['shares'] == 0).sum() / len(df) > 0.5:
+                    df['share_change_pct'] = 0.0
+                    df['bvps_growth_pct'] = df['TOTAL_PARENT_EQUITY'].pct_change().fillna(0) * 100
+                else:
+                    df['share_change_pct'] = df['shares'].pct_change().fillna(0) * 100
+                    df['bvps_growth_pct'] = df['bvps'].pct_change().fillna(0) * 100
+            except Exception:
+                df['share_change_pct'] = 0.0
+                df['bvps_growth_pct'] = df['TOTAL_PARENT_EQUITY'].pct_change().fillna(0) * 100
+
             # --- [核心修复：解决 JSON 序列化 nan 问题] ---
             # 在生成 Summary 之前，全量清理 DataFrame 中的 NaN 和 Inf
             df = df.replace([np.inf, -np.inf], np.nan).fillna(0)
@@ -179,11 +201,26 @@ class FundamentalCalculator:
             roe_vol = cls.series_volatility(stability_window['roe'])
             rev_vol = cls.series_volatility(stability_window['revenue_growth_pct'])
             
+            # 资本分配分析
+            capital_allocation_label = cls.classify_capital_allocation(
+                float(latest.get('roic_pct', latest['roe'])),
+                float(latest.get('bvps_growth_pct', 0)),
+                float(latest.get('share_change_pct', 0)),
+                float(latest.get('payout_ratio', 0))
+            )
+            financing_label = cls.classify_financing_signal(float(latest.get('share_change_pct', 0)))
+
             summary = {
                 'cashflow_summary': {
                     'latest_cfo': round(float(latest['cfo']), 2),
                     'latest_fcf': round(float(latest['fcf']), 2),
                     'cashflow_quality_label': cls.classify_cashflow_quality(latest['roe'], 60), # 占位
+                },
+                'capital_allocation_summary': {
+                    'capital_allocation_label': capital_allocation_label,
+                    'financing_label': financing_label,
+                    'latest_payout_ratio': round(float(latest.get('payout_ratio', 0)), 2),
+                    'latest_dps': round(float(latest.get('dps', 0)), 4),
                 },
                 'stability_summary': {
                     'moat_label': cls.classify_moat_strength(stability_window['gross_margin'].mean(), g_vol, n_vol),
@@ -192,7 +229,7 @@ class FundamentalCalculator:
                 'balance_sheet_summary': {
                     'risk_flags': cls.build_balance_sheet_flags(30, 150, 40, 5, float(latest['interest_bearing_debt'])),
                 },
-                'history': df.tail(10).select_dtypes(include=[np.number]).round(4).combine_first(df.tail(10)).to_dict(orient='records'),
+                'quality_history': df.tail(10).select_dtypes(include=[np.number]).round(4).combine_first(df.tail(10)).to_dict(orient='records'),
             }
             return cls.clean_json_data(summary)
         except Exception as e:
