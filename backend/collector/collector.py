@@ -231,38 +231,54 @@ def collect_stock_data(stock: Stock, days: int = 7):
     return success_dates
 
 
-def run_collection():
+def run_collection(is_manual=False):
     """运行采集"""
-    print("=" * 60)
-    print("  Sentiment Data Collection System (Backfill Mode)")
-    print(f"  Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 60)
+    from django.core.cache import cache
     
-    stocks = Stock.objects.all()
-    if not stocks.exists():
-        print("\n[WARN] No stocks configured!")
-        return
+    LOCK_KEY = 'manual_collection_lock'
+    LOCK_TTL = 1800  # 30分钟
     
-    print(f"\nMonitoring {stocks.count()} stocks:")
-    for stock in stocks:
-        print(f"  - {stock.name} ({stock.symbol})")
-    
-    print("\nStarting collection...")
-    print("-" * 60)
-    
-    success_count = 0
-    for stock in stocks:
-        try:
-            collect_stock_data(stock)
-            success_count += 1
-        except Exception as e:
-            print(f"  [ERROR] Failed for {stock.name}: {str(e)[:100]}")
-    
-    print("\n" + "=" * 60)
-    print(f"  Done! Success: {success_count}/{stocks.count()}")
-    print("=" * 60)
-    
-    sync_fundamentals_for_all(stocks)
+    lock_acquired = False
+    if not is_manual:
+        if not cache.add(LOCK_KEY, True, LOCK_TTL):
+            print("\n[WARN] Another collection task is already running, skipping scheduled/cli collection.")
+            return
+        lock_acquired = True
+        
+    try:
+        print("=" * 60)
+        print("  Sentiment Data Collection System (Backfill Mode)")
+        print(f"  Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print("=" * 60)
+        
+        stocks = Stock.objects.all()
+        if not stocks.exists():
+            print("\n[WARN] No stocks configured!")
+            return
+        
+        print(f"\nMonitoring {stocks.count()} stocks:")
+        for stock in stocks:
+            print(f"  - {stock.name} ({stock.symbol})")
+        
+        print("\nStarting collection...")
+        print("-" * 60)
+        
+        success_count = 0
+        for stock in stocks:
+            try:
+                collect_stock_data(stock)
+                success_count += 1
+            except Exception as e:
+                print(f"  [ERROR] Failed for {stock.name}: {str(e)[:100]}")
+        
+        print("\n" + "=" * 60)
+        print(f"  Done! Success: {success_count}/{stocks.count()}")
+        print("=" * 60)
+        
+        sync_fundamentals_for_all(stocks)
+    finally:
+        if lock_acquired:
+            cache.delete(LOCK_KEY)
 
 
 def sync_fundamentals_for_all(stocks):

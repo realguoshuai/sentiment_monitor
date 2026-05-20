@@ -166,7 +166,8 @@ class ScreenerService:
         for report_date_str in cls._recent_report_dates():
             report_year = int(report_date_str[:4])
             try:
-                df = FundamentalService._call_akshare(ak.stock_fhps_em, date=report_date_str, use_no_proxy=True)
+                from .fundamental.fetcher import FundamentalFetcher as Fetcher
+                df = Fetcher.call_akshare(ak.stock_fhps_em, date=report_date_str, use_no_proxy=True)
             except Exception as exc:
                 logger.warning("Screener dividend fetch failed for report date %s: %s", report_date_str, exc)
                 continue

@@ -144,6 +144,12 @@ class StockViewSet(viewsets.ModelViewSet):
                     logger.info("Skip auto collection for deleted stock id=%s", stock_id)
                     continue
 
+                # 防御并发写：当全局批量采集任务运行时，挂起当前线程以防 SQLite 锁冲突
+                import time
+                while cache.get(COLLECTION_LOCK_KEY):
+                    logger.info("Global collection in progress. Waiting 10 seconds before collecting %s...", queued_stock.symbol)
+                    time.sleep(10)
+
                 try:
                     collect_stock_data(queued_stock)
                     logger.info("Auto collected sentiment data for newly added stock %s", queued_stock.symbol)
@@ -634,7 +640,7 @@ def trigger_collection(request):
 
     def task():
         try:
-            run_collection()
+            run_collection(is_manual=True)
             cache.set(COLLECTION_STATUS_KEY, {
                 'status': 'completed',
                 'finished_at': timezone.now().isoformat(),
