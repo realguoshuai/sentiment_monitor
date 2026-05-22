@@ -296,6 +296,22 @@ class ScreenerService:
             os.environ['NO_PROXY'] = ','.join(current_hosts)
 
     @classmethod
+    @classmethod
+    def _bypass_proxy(cls):
+        """保存并清除代理环境变量，避免本地代理拦截东方财富等直连请求"""
+        saved = {}
+        for key in ('http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'all_proxy', 'ALL_PROXY'):
+            if key in os.environ:
+                saved[key] = os.environ.pop(key)
+        os.environ['NO_PROXY'] = '*'
+        return saved
+
+    @classmethod
+    def _restore_proxy(cls, saved: dict):
+        for key, val in saved.items():
+            os.environ[key] = val
+
+    @classmethod
     def _fetch_upstream_snapshot(cls) -> tuple[pd.DataFrame, Exception | None]:
         last_error = None
         fetchers = [
@@ -303,20 +319,24 @@ class ScreenerService:
             ak.stock_zh_a_spot,
         ]
 
-        for fetcher in fetchers:
-            if fetcher is ak.stock_zh_a_spot:
-                cls._ensure_no_proxy_hosts(['.sina.com.cn', 'vip.stock.finance.sina.com.cn'])
+        saved_proxy = cls._bypass_proxy()
+        try:
+            for fetcher in fetchers:
+                if fetcher is ak.stock_zh_a_spot:
+                    cls._ensure_no_proxy_hosts(['.sina.com.cn', 'vip.stock.finance.sina.com.cn'])
 
-            df = pd.DataFrame()
-            for attempt in range(cls.SNAPSHOT_FETCH_RETRIES):
-                try:
-                    df = fetcher()
-                    if df is not None and not df.empty:
-                        return df, None
-                except Exception as exc:
-                    last_error = exc
-                    if attempt < cls.SNAPSHOT_FETCH_RETRIES - 1:
-                        time.sleep(1.5 * (attempt + 1))
+                df = pd.DataFrame()
+                for attempt in range(cls.SNAPSHOT_FETCH_RETRIES):
+                    try:
+                        df = fetcher()
+                        if df is not None and not df.empty:
+                            return df, None
+                    except Exception as exc:
+                        last_error = exc
+                        if attempt < cls.SNAPSHOT_FETCH_RETRIES - 1:
+                            time.sleep(1.5 * (attempt + 1))
+        finally:
+            cls._restore_proxy(saved_proxy)
 
         return pd.DataFrame(), last_error
 
@@ -370,13 +390,28 @@ class ScreenerService:
 
         normalized_symbols = working['_normalized_symbol'].tolist()
 
+        # 判断上游数据是否有 PE/PB 列（新浪源没有这两列）
+        has_pe_pb = pe_col is not None and pb_col is not None
+
         monitored_symbols_set = {format_symbol(s.symbol) for s in Stock.objects.all()}
         realtime_map: Dict[str, dict] = {}
-        target_monitored = [s for s in normalized_symbols if s in monitored_symbols_set]
-        if target_monitored:
-            for batch in cls._chunked(target_monitored, cls.BATCH_SIZE):
-                batch_map = PriceService.get_realtime_price(batch, fetch_fundamentals=False)
-                realtime_map.update(batch_map)
+
+        if has_pe_pb:
+            # 东方财富源有 PE/PB，只需为监控股票拉实时数据做兜底
+            target_monitored = [s for s in normalized_symbols if s in monitored_symbols_set]
+            if target_monitored:
+                for batch in cls._chunked(target_monitored, cls.BATCH_SIZE):
+                    batch_map = PriceService.get_realtime_price(batch, fetch_fundamentals=False)
+                    realtime_map.update(batch_map)
+        else:
+            # 上游缺少 PE/PB（新浪源），从腾讯 API 批量补全所有股票
+            logger.info("Upstream snapshot missing PE/PB columns, fetching from Tencent API for all stocks...")
+            for batch in cls._chunked(normalized_symbols, cls.BATCH_SIZE):
+                try:
+                    batch_map = PriceService.get_realtime_price(batch, fetch_fundamentals=False)
+                    realtime_map.update(batch_map)
+                except Exception as exc:
+                    logger.warning(f"Tencent batch realtime failed: {exc}")
 
         rows: List[StockScreenerSnapshot] = []
         for _, row in working.iterrows():
@@ -476,6 +511,22 @@ class ScreenerService:
             if retained['retained']:
                 logger.warning("Screener refresh produced no rows, retained previous database snapshot.")
             return retained
+
+        # 数据质量检查：如果 PE/PB 有效率低于 10%，说明上游数据缺失（如被代理拦截回退到新浪源）
+        pe_valid = sum(1 for r in rows if r.pe > 0)
+        pe_ratio = pe_valid / len(rows) if rows else 0
+        if pe_ratio < 0.10:
+            retained = cls._build_retained_snapshot_response()
+            if retained['retained']:
+                logger.warning(
+                    f"Screener snapshot PE/PB valid ratio too low ({pe_valid}/{len(rows)}), "
+                    f"retained previous database snapshot. Check network/proxy settings."
+                )
+                retained['message'] = (
+                    f'快照 PE/PB 数据缺失（仅 {pe_valid}/{len(rows)} 有效），'
+                    f'已保留旧快照。请检查网络或代理设置，确保能访问东方财富接口。'
+                )
+                return retained
 
         with transaction.atomic():
             StockScreenerSnapshot.objects.all().delete()

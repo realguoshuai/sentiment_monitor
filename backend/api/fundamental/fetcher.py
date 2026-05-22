@@ -118,12 +118,30 @@ class FundamentalFetcher:
         token = cache_getter('xueqiu_token_v1')
         if token:
             return token
-            
+
         with cls._xueqiu_token_lock:
             token = cache_getter('xueqiu_token_v1')
             if token:
                 return token
-                
+
+            # 方案一：requests 直接请求（无需浏览器，打包环境可用）
+            try:
+                import requests
+                resp = requests.get(
+                    'https://xueqiu.com/',
+                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'},
+                    timeout=10,
+                    allow_redirects=True,
+                )
+                for cookie in resp.cookies:
+                    if cookie.name == 'xq_a_token':
+                        token = cookie.value
+                        cache_setter('xueqiu_token_v1', token, 86400)
+                        return token
+            except Exception as e:
+                logger.warning(f"Failed to fetch xueqiu token via requests: {e}")
+
+            # 方案二：Playwright 浏览器（本地开发可用，打包环境可能缺 Chromium）
             try:
                 from playwright.sync_api import sync_playwright
                 with sync_playwright() as p:
@@ -140,7 +158,8 @@ class FundamentalFetcher:
                             return token
                     b.close()
             except Exception as e:
-                logger.error(f"Failed to fetch xueqiu token: {e}")
+                logger.warning(f"Failed to fetch xueqiu token via playwright: {e}")
+
         return None
 
     @classmethod

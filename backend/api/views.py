@@ -676,7 +676,7 @@ def get_market_diary(request):
     fixed_symbol = PriceService._fix_symbol(symbol)
     
     # 尝试读取缓存
-    cache_key = f"market_diary_v1_{fixed_symbol}"
+    cache_key = f"market_diary_v2_{fixed_symbol}"
     try:
         cached_data = cache.get(cache_key)
     except Exception:
@@ -746,15 +746,24 @@ def get_market_diary(request):
             'history': history_with_ma
         }
         
-        # 补全估值和股息率（PE/PB/股息率 来自雪球实时接口）
+        # 补全 PE/PB：腾讯实时行情（无需 token，可靠）
         try:
-            from .fundamental_service import FundamentalService
-            xq_metrics = FundamentalService.get_xueqiu_quote_metrics(fixed_symbol)
-            result['latest']['pe'] = xq_metrics.get('pe', 0.0)
-            result['latest']['pb'] = xq_metrics.get('pb', 0.0)
-            result['latest']['dividend_yield'] = xq_metrics.get('dividend_yield', 0.0)
+            rt = PriceService.get_realtime_price([fixed_symbol], fetch_fundamentals=False)
+            rt_data = rt.get(fixed_symbol, {})
+            if rt_data.get('pe', 0) > 0:
+                result['latest']['pe'] = rt_data['pe']
+            if rt_data.get('pb', 0) > 0:
+                result['latest']['pb'] = rt_data['pb']
         except Exception as e:
-            logger.error(f"Failed to fetch xueqiu metrics for {fixed_symbol}: {e}")
+            logger.warning(f"Tencent realtime fallback failed for {fixed_symbol}: {e}")
+
+        # 补全股息率：必须用雪球（腾讯不准确）
+        try:
+            dy = FundamentalService.get_xueqiu_dividend_yield(fixed_symbol)
+            if dy > 0:
+                result['latest']['dividend_yield'] = dy
+        except Exception as e:
+            logger.warning(f"Xueqiu dividend yield failed for {fixed_symbol}: {e}")
                 
         # 放入缓存 1 小时
         cache.set(cache_key, result, 3600)

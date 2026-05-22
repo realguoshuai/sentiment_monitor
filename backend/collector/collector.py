@@ -140,39 +140,46 @@ def _build_announcement_records(sentiment, items, fallback_date: date):
 
 def collect_stock_data(stock: Stock, days: int = 7):
     """采集单只股票数据，并回溯过去几天的情感 (Backfill 模式)
-    
+
     Args:
         stock: 股票对象
         days: 回溯天数
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     symbol_code = stock.symbol[2:]  # 去掉SH/SZ前缀
-    
+
     print(f"\n[{stock.name}] 开始采集 (过去 {days} 天)...")
+
+    # 1. 并发采集新闻（跳过研报/公告以提速）
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {
+            executor.submit(eastmoney.get_news, symbol_code): 'em_news',
+            executor.submit(xueqiu.get_news, stock.symbol): 'xq_news',
+            executor.submit(news_crawler.get_news, symbol_code): 'crawler_news',
+        }
+        results = {}
+        for f in as_completed(futures):
+            key = futures[f]
+            try:
+                results[key] = f.result()
+            except Exception as exc:
+                logger.warning(f"[{stock.name}] {key} failed: {exc}")
+                results[key] = []
+
+    em_news = results.get('em_news', [])
+    xq_news = results.get('xq_news', [])
+    crawler_news = results.get('crawler_news', [])
     
-    # 1. 采集数据
-    em_news = eastmoney.get_news(symbol_code)
-    xq_news = xueqiu.get_news(stock.symbol)
-    crawler_news = news_crawler.get_news(symbol_code)
-    report_data = _collect_reports(symbol_code)
-    announcement_data = _collect_announcements(symbol_code)
-    
-    # 2. 汇总所有条目并按日期分组
+    # 2. 汇总新闻并按日期分组
     all_items = []
     today = timezone.localdate()
     start_date = today - timedelta(days=days-1)
-    
+
     combined_news = _dedupe_items(em_news + xq_news + crawler_news, title_length=60)
     for item in combined_news:
         d = _safe_pub_date(item.get('pub_date'), today)
         if d >= start_date: all_items.append({'type': 'news', 'data': item, 'date': d})
-        
-    for item in report_data:
-        d = _safe_pub_date(item.get('pub_date'), today)
-        if d >= start_date: all_items.append({'type': 'report', 'data': item, 'date': d})
-        
-    for item in announcement_data:
-        d = _safe_pub_date(item.get('pub_date'), today)
-        if d >= start_date: all_items.append({'type': 'announcement', 'data': item, 'date': d})
         
     # 按日期分组
     from collections import defaultdict
@@ -187,20 +194,18 @@ def collect_stock_data(stock: Stock, days: int = 7):
     for target_date, items in date_groups.items():
         # 分类
         news_list = [i['data'] for i in items if i['type'] == 'news']
-        report_list = [i['data'] for i in items if i['type'] == 'report']
-        announcement_list = [i['data'] for i in items if i['type'] == 'announcement']
-        
+
         # 情感分析
-        all_titles = [i['title'] for i in news_list + report_list + announcement_list]
+        all_titles = [i['title'] for i in news_list]
         if not all_titles: continue
-        
+
         avg_score = SentimentEngine.analyze_batch(all_titles)
         label = SentimentEngine.get_label(avg_score)
         final_score = (avg_score - 0.5) * 2
-        
-        # 热度计算
-        n_count, r_count, a_count = len(news_list), len(report_list), len(announcement_list)
-        raw_hot = (n_count * 1.0) + (r_count * 2.5) + (a_count * 2.0)
+
+        # 热度计算（仅新闻）
+        n_count = len(news_list)
+        raw_hot = n_count * 1.0
         hot_score = min(100, round(math.log1p(raw_hot) * 15, 2))
         
         # 事务保存
@@ -213,19 +218,14 @@ def collect_stock_data(stock: Stock, days: int = 7):
                     'sentiment_label': label,
                     'hot_score': hot_score,
                     'news_count': n_count,
-                    'report_count': r_count,
-                    'announcement_count': a_count,
+                    'report_count': 0,
+                    'announcement_count': 0,
                     'discussion_count': 0
                 }
             )
 
             News.objects.filter(sentiment_data=sentiment).delete()
-            Report.objects.filter(sentiment_data=sentiment).delete()
-            Announcement.objects.filter(sentiment_data=sentiment).delete()
-
             News.objects.bulk_create(_build_news_records(sentiment, news_list, target_date))
-            Report.objects.bulk_create(_build_report_records(sentiment, report_list, target_date))
-            Announcement.objects.bulk_create(_build_announcement_records(sentiment, announcement_list, target_date))
             success_dates += 1
             
     return success_dates
@@ -283,22 +283,27 @@ def run_collection(is_manual=False):
 
 def sync_fundamentals_for_all(stocks):
     """预热所有监控标的的基本面数据"""
-    import time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from api.fundamental_service import FundamentalService
-    
+
     print("\n" + "-" * 60)
     print("  [PREHEAT] Syncing fundamental data...")
     print("-" * 60)
-    
-    for stock in stocks:
-        symbol = stock.symbol
-        try:
-            FundamentalService.get_ttm_fundamentals(symbol)
-            FundamentalService.get_historical_dividends(symbol)
-            print(f"  [OK] {stock.name} ({symbol}) synced")
-            time.sleep(1)
-        except Exception as e:
-            print(f"  [ERR] {stock.name} ({symbol}): {str(e)[:80]}")
+
+    def _sync_one(stock):
+        FundamentalService.get_ttm_fundamentals(stock.symbol)
+        FundamentalService.get_historical_dividends(stock.symbol)
+        return stock
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(_sync_one, s): s for s in stocks}
+        for f in as_completed(futures):
+            stock = futures[f]
+            try:
+                f.result()
+                print(f"  [OK] {stock.name} ({stock.symbol}) synced")
+            except Exception as e:
+                print(f"  [ERR] {stock.name} ({stock.symbol}): {str(e)[:80]}")
 
 
 if __name__ == "__main__":
