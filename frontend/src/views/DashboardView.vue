@@ -93,17 +93,17 @@
 
         <!-- Section: Charts Row -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-1 min-h-0 pb-2">
-          <!-- Sentiment Chart -->
+          <!-- Dividend Calendar -->
           <div class="bg-[#1a2332] rounded-xl p-3.5 border border-slate-700/50 flex flex-col min-h-0">
             <div class="flex justify-between items-center mb-2 shrink-0">
                <div class="flex items-center gap-2">
                  <span class="w-1 h-3.5 bg-cyan-400 rounded-full"></span>
-                 <h3 class="text-xs font-bold text-white tracking-wide">全场情感趋势 (7D)</h3>
+                 <h3 class="text-xs font-bold text-white tracking-wide">分红日历</h3>
                </div>
-               <svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+               <svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
             </div>
-            <div class="flex-1 min-h-0 relative">
-               <SentimentChart :data="store.sentimentTrend" class="absolute inset-0" />
+            <div class="flex-1 min-h-0">
+               <DividendCalendar :data="store.dividendCalendar" />
             </div>
           </div>
 
@@ -134,7 +134,7 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSentimentStore } from '@/stores/sentiment'
 import StockCard from '@/components/StockCard.vue'
-import SentimentChart from '@/components/SentimentChart.vue'
+import DividendCalendar from '@/components/DividendCalendar.vue'
 import HotScoreChart from '@/components/HotScoreChart.vue'
 import StockManagementModal from '@/components/StockManagementModal.vue'
 import ReleaseNotesModal from '@/components/ReleaseNotesModal.vue'
@@ -165,7 +165,7 @@ const refreshData = async () => {
   isRefreshing.value = true
   await Promise.all([
     store.fetchLatestSentiment(),
-    store.fetchSentimentTrend(),
+    store.fetchDividendCalendar(),
     store.fetchRealtimePrices()
   ])
   isRefreshing.value = false
@@ -190,7 +190,7 @@ onMounted(async () => {
   await Promise.all([
     store.fetchStocks(),
     store.sentimentData.length ? Promise.resolve() : store.fetchLatestSentiment(),
-    store.fetchSentimentTrend(),
+    store.fetchDividendCalendar(),
     store.fetchRealtimePrices()
   ])
   

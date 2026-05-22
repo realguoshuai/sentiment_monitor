@@ -10,13 +10,15 @@
 
 ## 主要功能
 
-- 首页看板：监控股票池、实时价格、PE/PB、股息率、情绪分数、新闻/研报/公告摘要。
+- 首页看板：监控股票池、实时价格、PE/PB、股息率、情绪分数、分红日历倒计时。
+- 盯盘日记：250 日成交量与 20 日均量对照图，识别缩量买点；分红除权倒计时；PE/PB/股息率安全边际卡片。
+- 分红日历：首页展示所有监控股票的下一次分红时间线，三级回退（已确立/预案/历史估算）。
 - 监控配置：支持搜索添加股票，维护行业和同行代码。
 - 个股详情：查看单只股票的舆情、公告、研报和新闻。
-- 深度分析：估值分位、F-Score、合理价值区间、投资 thesis、同行横向对比。
+- 深度分析：估值分位、F-Score、合理价值区间、投资 thesis、同行横向对比；DDM 股利折现沙盒；归一化中周期 EPS 分析。
 - 股价对比：多只股票实时价格、历史价格和估值序列对比。
-- 条件选股：基于本地 SQLite 快照筛选 PB、PE、ROE、ROI、股息率、市值等指标。
-- 财务质量：现金流、资本配置、经营稳定性、股东人数和财务质量矩阵。
+- 条件选股：基于本地 SQLite 快照筛选 PB、PE、ROE、ROI、股息率、市值、净现金比率、经营现金流收益率。
+- 财务质量：现金流质量、资本配置信号、经营稳定性、资产负债表风险、股东人数趋势和财务质量矩阵。
 - 桌面端：Electron + Python 后端打包，支持安装版和便携版。
 - 更新与快速开始：首次打开当前版本时显示更新日志和使用教程，也可从首页右上角再次打开。
 
@@ -30,9 +32,9 @@ desktop/release/
 
 | 文件 | 用途 | 建议 |
 | --- | --- | --- |
-| `SentimentMonitor-Setup-0.1.0-x64.exe` | Windows 安装包 | 推荐发给普通用户 |
-| `SentimentMonitor-Portable-0.1.0-x64.exe` | 免安装便携版 | 适合临时测试 |
-| `SentimentMonitor-Setup-0.1.0-x64.exe.blockmap` | 自动更新差分文件 | 当前无需单独分发 |
+| `SentimentMonitor-Setup-0.1.2-x64.exe` | Windows 安装包 | 推荐发给普通用户 |
+| `SentimentMonitor-Portable-0.1.2-x64.exe` | 免安装便携版 | 适合临时测试 |
+| `SentimentMonitor-Setup-0.1.2-x64.exe.blockmap` | 自动更新差分文件 | 当前无需单独分发 |
 | `win-unpacked/` | 解包后的调试目录 | 仅用于本机调试 |
 
 说明：
@@ -161,24 +163,23 @@ sentiment_monitor/
 - `GET /api/sentiment/history-backtest/?symbol=SZ000001`
 - `GET /api/sentiment/quality/?symbol=SZ000001&include_shareholder=1`
 - `GET /api/sentiment/quality/shareholder-structure/?symbol=SZ000001`
-- `GET /api/sentiment/screener/?pb_max=1.5&pe_max=15&roe_min=12`
+- `GET /api/sentiment/quality/refresh/?symbol=SZ000001`
+- `GET /api/sentiment/screener/?pb_max=1.5&pe_max=15&roe_min=12&dividend_yield_min=3`
 - `POST /api/sentiment/screener/refresh/`
+- `GET /api/sentiment/market-diary/?symbol=SZ000001`
+- `GET /api/sentiment/dividend-calendar/`
 
 ## 最近更新
 
-- 桌面端支持先打开前端页面，再后台等待 Python 后端服务启动。
-- 桌面端支持自动选择可用后端端口，并通过 preload 注入给前端 API。
-- 前端在桌面 `file://` 环境下自动使用 preload 注入的后端 API 地址。
-- Vite 打包使用 `base: './'`，Electron 文件加载使用 Hash 路由，修复打包后黑屏。
-- 新增启动遮罩，避免安装包打开时短暂出现无样式布局。
-- 新增「更新与快速开始」弹窗，并按版本记录是否已读。
-- 修复新增股票后旧股票看板数据消失的问题。
-- 修复 `/api/sentiment/{symbol}/` 多条历史记录导致详情接口异常的问题。
-- `latest` 接口改为每只已关注股票各取自己的最新快照。
-- 桌面端后端运行时数据库和缓存迁移到用户目录，避免写入安装目录。
-- PyInstaller 输出目录改为 `backend/dist/SentimentMonitor-runtime`，规避旧目录权限锁问题。
-- 支持生成 `Setup` 安装包和 `Portable` 便携版。
-- 构建产物和调试输出从 Git 跟踪中移除，后续只保留源代码和必要资源。
+- 新增盯盘日记页面：250 日成交量与 20 日均量对照图、分红除权倒计时、PE/PB/股息率安全边际卡片。
+- 首页情感趋势图替换为分红日历：展示所有监控股票的下一次分红时间线，支持已确立/预案/历史估算三级回退。
+- 深度分析增强：新增 DDM 股利折现沙盒（可调增长率/折现率）、归一化中周期 EPS 分析、投资论点评分。
+- 条件选股增强：新增净现金比率、经营现金流收益率筛选维度；支持一键刷新全市场快照。
+- 财务质量增强：新增现金流质量标签、资本配置信号、资产负债表风险评级、经营稳定性/护城河/周期性标签。
+- 后端缓存防御：所有 `cache.get` 调用增加 pickle 反序列化异常捕获，pandas 版本升级不再导致服务崩溃。
+- SQLite 配置优化：WAL 模式 + busy_timeout=5000，解决并发写入锁冲突。
+- 定时任务保护：scheduler 启动延迟 1 小时执行，避免 misfire 导致启动时批量采集。
+- 便携版分发文件名从 `0.1.0` 更新到 `0.1.2`。
 
 ## 数据同步
 
@@ -233,7 +234,7 @@ file:///.../resources/app.asar/frontend-dist/index.html#/
 
 ### 便携版启动慢
 
-便携版需要先自解压到临时目录，还可能被系统安全软件扫描。正式分发建议使用 `SentimentMonitor-Setup-0.1.0-x64.exe`。
+便携版需要先自解压到临时目录，还可能被系统安全软件扫描。正式分发建议使用 `SentimentMonitor-Setup-0.1.2-x64.exe`。
 
 ### 新增股票后旧股票不见了
 

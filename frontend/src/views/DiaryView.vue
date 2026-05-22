@@ -1,9 +1,9 @@
 <template>
-  <div class="min-h-screen bg-slate-950 text-slate-100 p-6">
+  <div class="h-screen bg-slate-950 text-slate-100 p-4 flex flex-col overflow-hidden">
     <!-- Header -->
-    <header class="flex justify-between items-center mb-8 bg-slate-900/50 backdrop-blur-md border border-white/5 rounded-2xl p-4 shadow-xl">
+    <header class="flex justify-between items-center mb-4 bg-slate-900/50 backdrop-blur-md border border-white/5 rounded-2xl px-4 py-3 shadow-xl shrink-0">
       <div class="flex items-center gap-4">
-        <h1 class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-indigo-400">
+        <h1 class="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-indigo-400">
           盯盘日记
         </h1>
         <span class="text-xs text-slate-400 bg-slate-800 px-3 py-1 rounded-full border border-slate-700">
@@ -46,37 +46,33 @@
     </div>
 
     <!-- Main Content -->
-    <div v-else class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      
-      <!-- Left 2 Cols: Main Dual-Axis Chart -->
-      <div class="lg:col-span-2 flex flex-col gap-6">
+    <div v-else class="grid grid-cols-1 lg:grid-cols-3 gap-4 flex-1 min-h-0">
+
+      <!-- Left 2 Cols: Main Chart -->
+      <div class="lg:col-span-2 flex flex-col gap-4 min-h-0">
         <!-- Chart Card -->
-        <div class="glass-card p-6 flex flex-col h-[520px]">
-          <div class="flex justify-between items-center mb-4">
+        <div class="glass-card p-4 flex flex-col flex-1 min-h-0">
+          <div class="flex justify-between items-center mb-2 shrink-0">
             <div>
-              <h2 class="text-lg font-bold text-slate-200">股息走势与成交量对照图</h2>
-              <p class="text-xs text-slate-400 mt-0.5">叠加 20 日成交均量，识别地量买点</p>
+              <h2 class="text-base font-bold text-slate-200">成交量与 20 日均量对照图</h2>
+              <p class="text-[11px] text-slate-400">识别缩量买点与放量信号</p>
             </div>
             <div class="flex gap-4 text-xs">
-              <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-[#10b981]"></span>股息率</span>
-              <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-[#06b6d4]"></span>成交量</span>
-              <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-[#6366f1] border border-dashed border-[#6366f1]"></span>20日均量</span>
+              <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-[#06b6d4]"></span>成交量</span>
+              <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-[#6366f1] border border-dashed border-[#6366f1]"></span>20日均量</span>
             </div>
           </div>
-          <div ref="chartRef" class="w-full h-[420px]"></div>
+          <div ref="chartRef" class="w-full flex-1 min-h-0"></div>
         </div>
 
         <!-- Volume Alert Spec Card -->
-        <div v-if="diaryData.latest.volume_status === '极度缩量'" class="p-6 rounded-2xl bg-cyan-950/30 border border-cyan-500/30 shadow-[0_0_30px_rgba(6,182,212,0.15)] backdrop-blur-md">
-          <div class="flex items-start gap-4">
-            <div class="text-3xl text-cyan-400 bg-cyan-950/50 p-2.5 rounded-xl border border-cyan-500/20">💡</div>
+        <div v-if="diaryData.latest.volume_status === '极度缩量'" class="p-4 rounded-2xl bg-cyan-950/30 border border-cyan-500/30 shadow-[0_0_30px_rgba(6,182,212,0.15)] backdrop-blur-md shrink-0">
+          <div class="flex items-start gap-3">
+            <div class="text-2xl text-cyan-400 bg-cyan-950/50 p-2 rounded-xl border border-cyan-500/20 shrink-0">💡</div>
             <div>
-              <h3 class="text-lg font-bold text-cyan-300 mb-2">极度缩量状态特别提示</h3>
-              <p class="text-slate-200 leading-relaxed text-sm italic font-medium bg-slate-950/40 p-3 rounded-lg border border-white/5 mb-2">
-                “如果极度缩量，说明这是典型的无流动性杀跌，反而不具备基本面恐慌的破坏力。”
-              </p>
+              <h3 class="text-sm font-bold text-cyan-300 mb-1">极度缩量状态特别提示</h3>
               <p class="text-xs text-slate-400 leading-relaxed">
-                当前个股成交量仅为 20 日均值的 <strong>{{ (diaryData.latest.volume_ratio * 100).toFixed(1) }}%</strong>。根据历史规律，无流动性杀跌通常处于非理性割肉的末端，是筹码换手极度清淡的良性探底，不具有破坏个股基本面根基的能力。当前位置往往提供了非常厚实的安全边际。
+                当前成交量仅为 20 日均值的 <strong>{{ (diaryData.latest.volume_ratio * 100).toFixed(1) }}%</strong>，属于典型的无流动性杀跌阶段，恐慌杀伤力极小，已进入高安全边际配置区。
               </p>
             </div>
           </div>
@@ -84,19 +80,19 @@
       </div>
 
       <!-- Right 1 Col: Info Panels -->
-      <div class="flex flex-col gap-6">
-        
-        <!-- Pred Dividend Countdown Card (Glassmorphism + breath animation) -->
-        <div class="glass-card p-6 relative overflow-hidden flex flex-col justify-between h-[250px] group border-cyan-500/20 hover:border-cyan-500/40 shadow-[0_4px_30px_rgba(0,0,0,0.4)]">
+      <div class="flex flex-col gap-4 min-h-0">
+
+        <!-- Pred Dividend Countdown Card -->
+        <div class="glass-card p-4 relative overflow-hidden flex flex-col justify-between group border-cyan-500/20 hover:border-cyan-500/40 shadow-[0_4px_30px_rgba(0,0,0,0.4)] shrink-0">
           <div class="absolute -right-16 -top-16 w-32 h-32 bg-cyan-500/10 rounded-full blur-3xl group-hover:bg-cyan-500/20 transition-all duration-500"></div>
-          
+
           <div>
-            <div class="flex justify-between items-start mb-4">
+            <div class="flex justify-between items-start mb-2">
               <div>
-                <span class="text-xs text-cyan-400 font-semibold tracking-wider uppercase">Next Dividend Countdown</span>
-                <h3 class="text-lg font-bold text-slate-100 mt-0.5">分红除权倒计时</h3>
+                <span class="text-[10px] text-cyan-400 font-semibold tracking-wider uppercase">Next Dividend Countdown</span>
+                <h3 class="text-base font-bold text-slate-100">分红除权倒计时</h3>
               </div>
-              <span 
+              <span
                 class="px-2 py-0.5 rounded text-[10px] font-bold border"
                 :class="{
                   'bg-emerald-950/50 text-emerald-400 border-emerald-500/30': diaryData.next_dividend.status === 'confirmed',
@@ -107,20 +103,20 @@
                 {{ diaryData.next_dividend.status_desc }}
               </span>
             </div>
-            
-            <!-- Countdown Number with Glowing Breath Pulse -->
-            <div class="flex items-baseline gap-2 py-4">
-              <span class="text-5xl font-black bg-clip-text text-transparent bg-gradient-to-br from-cyan-300 via-indigo-300 to-indigo-500 tracking-tight animate-pulse-glow">
+
+            <!-- Countdown Number -->
+            <div class="flex items-baseline gap-2 py-2">
+              <span class="text-4xl font-black bg-clip-text text-transparent bg-gradient-to-br from-cyan-300 via-indigo-300 to-indigo-500 tracking-tight animate-pulse-glow">
                 {{ diaryData.next_dividend.days_left !== null ? diaryData.next_dividend.days_left : '--' }}
               </span>
               <span class="text-slate-400 text-sm">天后除权</span>
             </div>
           </div>
 
-          <div class="border-t border-white/5 pt-4 flex flex-col gap-1 text-xs">
+          <div class="border-t border-white/5 pt-3 flex flex-col gap-1 text-xs">
             <div class="flex justify-between">
               <span class="text-slate-400">方案：</span>
-              <span class="text-slate-200 font-medium">{{ diaryData.next_dividend.plan }}</span>
+              <span class="text-slate-200 font-medium truncate ml-2">{{ diaryData.next_dividend.plan }}</span>
             </div>
             <div class="flex justify-between">
               <span class="text-slate-400">预计除权日：</span>
@@ -130,41 +126,39 @@
         </div>
 
         <!-- Margin of Safety Details Card -->
-        <div class="glass-card p-6 flex flex-col justify-between min-h-[250px]">
-          <div>
-            <h3 class="text-lg font-bold text-slate-100 mb-4 flex items-center gap-2">
-              <span class="text-indigo-400">🛡️</span> 安全边际监测
-            </h3>
-            
-            <div class="grid grid-cols-2 gap-4">
-              <!-- PE -->
-              <div class="bg-slate-900/60 p-3.5 rounded-xl border border-white/5">
-                <span class="text-xs text-slate-400 block mb-1">动态 PE</span>
-                <span class="text-xl font-bold font-mono text-slate-200">{{ diaryData.latest.pe.toFixed(2) }}</span>
-              </div>
-              
-              <!-- PB -->
-              <div class="bg-slate-900/60 p-3.5 rounded-xl border border-white/5">
-                <span class="text-xs text-slate-400 block mb-1">静态 PB</span>
-                <span class="text-xl font-bold font-mono text-slate-200">{{ diaryData.latest.pb.toFixed(2) }}</span>
-              </div>
-              
-              <!-- Dividend Yield -->
-              <div class="bg-slate-900/60 p-3.5 rounded-xl border border-white/5 col-span-2">
-                <span class="text-xs text-slate-400 block mb-1">滚动股息率 (TTM)</span>
-                <div class="flex items-baseline gap-1">
-                  <span class="text-2xl font-black font-mono text-emerald-400">{{ diaryData.latest.dividend_yield.toFixed(2) }}</span>
-                  <span class="text-xs text-emerald-500 font-bold">%</span>
-                </div>
+        <div class="glass-card p-4 flex flex-col flex-1 min-h-0">
+          <h3 class="text-base font-bold text-slate-100 mb-3 flex items-center gap-2 shrink-0">
+            <span class="text-indigo-400">🛡️</span> 安全边际监测
+          </h3>
+
+          <div class="grid grid-cols-2 gap-3">
+            <!-- PE -->
+            <div class="bg-slate-900/60 p-3 rounded-xl border border-white/5">
+              <span class="text-[11px] text-slate-400 block mb-0.5">动态 PE</span>
+              <span class="text-lg font-bold font-mono text-slate-200">{{ diaryData.latest.pe.toFixed(2) }}</span>
+            </div>
+
+            <!-- PB -->
+            <div class="bg-slate-900/60 p-3 rounded-xl border border-white/5">
+              <span class="text-[11px] text-slate-400 block mb-0.5">静态 PB</span>
+              <span class="text-lg font-bold font-mono text-slate-200">{{ diaryData.latest.pb.toFixed(2) }}</span>
+            </div>
+
+            <!-- Dividend Yield -->
+            <div class="bg-slate-900/60 p-3 rounded-xl border border-white/5 col-span-2">
+              <span class="text-[11px] text-slate-400 block mb-0.5">滚动股息率 (TTM)</span>
+              <div class="flex items-baseline gap-1">
+                <span class="text-xl font-black font-mono text-emerald-400">{{ diaryData.latest.dividend_yield.toFixed(2) }}</span>
+                <span class="text-xs text-emerald-500 font-bold">%</span>
               </div>
             </div>
           </div>
 
           <!-- Volume Status Pill -->
-          <div class="mt-4 border-t border-white/5 pt-4">
-            <div class="flex justify-between items-center mb-2">
-              <span class="text-xs text-slate-400">20日成交均量对比</span>
-              <span 
+          <div class="mt-3 border-t border-white/5 pt-3">
+            <div class="flex justify-between items-center mb-1">
+              <span class="text-[11px] text-slate-400">20日成交均量对比</span>
+              <span
                 class="px-2 py-0.5 rounded text-[10px] font-bold"
                 :class="{
                   'bg-cyan-950/60 text-cyan-400 border border-cyan-500/30': diaryData.latest.volume_status === '极度缩量',
@@ -176,7 +170,7 @@
                 {{ diaryData.latest.volume_status }}
               </span>
             </div>
-            <p class="text-xs text-slate-400 leading-relaxed">
+            <p class="text-[11px] text-slate-400 leading-relaxed">
               {{ diaryData.latest.volume_desc }}
             </p>
           </div>
@@ -262,7 +256,6 @@ const initChart = () => {
   myChart = echarts.init(chartRef.value)
   
   const dates = diaryData.value.history.map((h: any) => h.date || '')
-  const yields = diaryData.value.history.map((h: any) => h.dividend_yield || 0.0)
   const volumes = diaryData.value.history.map((h: any) => h.volume || 0.0)
   const ma20s = diaryData.value.history.map((h: any) => h.ma20_volume || 0.0)
   
@@ -280,12 +273,9 @@ const initChart = () => {
           <div class="font-bold mb-1 border-b border-white/10 pb-1">${params[0].name}</div>`
         params.forEach((p: any) => {
           let val = p.value
-          if (p.seriesName === '股息率') val = val.toFixed(2) + '%'
-          else if (p.seriesName === '成交量' || p.seriesName === '20日均量') {
-            if (val >= 1e8) val = (val / 1e8).toFixed(2) + ' 亿股'
-            else if (val >= 1e4) val = (val / 1e4).toFixed(1) + ' 万股'
-            else val = val.toLocaleString() + ' 股'
-          }
+          if (val >= 1e8) val = (val / 1e8).toFixed(2) + ' 亿手'
+          else if (val >= 1e4) val = (val / 1e4).toFixed(2) + ' 万手'
+          else val = val.toLocaleString() + ' 手'
           res += `<div class="flex items-center justify-between gap-4 mt-1">
             <span class="flex items-center gap-1.5">
               <span class="w-2 h-2 rounded-full" style="background-color: ${p.color}"></span>
@@ -311,36 +301,23 @@ const initChart = () => {
       axisLine: { lineStyle: { color: 'rgba(255,255,255,0.1)' } },
       axisLabel: { color: '#94a3b8', fontSize: 10 }
     },
-    yAxis: [
-      {
-        type: 'value',
-        name: '股息率',
-        nameTextStyle: { color: '#10b981', fontSize: 10 },
-        position: 'left',
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: { color: '#10b981', formatter: '{value}%', fontSize: 10 },
-        splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)', type: 'dashed' } }
+    yAxis: {
+      type: 'value',
+      name: '成交量',
+      nameTextStyle: { color: '#06b6d4', fontSize: 10 },
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: {
+        color: '#06b6d4',
+        fontSize: 10,
+        formatter: (v: number) => {
+          if (v >= 1e8) return (v / 1e8).toFixed(2) + '亿'
+          if (v >= 1e4) return (v / 1e4).toFixed(2) + '万'
+          return v
+        }
       },
-      {
-        type: 'value',
-        name: '成交量',
-        nameTextStyle: { color: '#06b6d4', fontSize: 10 },
-        position: 'right',
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: {
-          color: '#06b6d4', 
-          fontSize: 10,
-          formatter: (v: number) => {
-            if (v >= 1e8) return (v / 1e8).toFixed(1) + '亿'
-            if (v >= 1e4) return (v / 1e4).toFixed(0) + '万'
-            return v
-          }
-        },
-        splitLine: { show: false }
-      }
-    ],
+      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)', type: 'dashed' } }
+    },
     dataZoom: [
       {
         type: 'inside',
@@ -366,31 +343,8 @@ const initChart = () => {
     ],
     series: [
       {
-        name: '股息率',
-        type: 'line',
-        data: yields,
-        smooth: true,
-        showSymbol: false,
-        lineStyle: { width: 3 },
-        itemStyle: { color: '#10b981' },
-        areaStyle: {
-          color: {
-            type: 'linear',
-            x: 0,
-            y: 0,
-            x2: 0,
-            y2: 1,
-            colorStops: [
-              { offset: 0, color: 'rgba(16, 185, 129, 0.15)' },
-              { offset: 1, color: 'rgba(16, 185, 129, 0)' }
-            ]
-          }
-        }
-      },
-      {
         name: '成交量',
         type: 'bar',
-        yAxisIndex: 1,
         data: volumes,
         itemStyle: {
           color: {
@@ -409,7 +363,6 @@ const initChart = () => {
       {
         name: '20日均量',
         type: 'line',
-        yAxisIndex: 1,
         data: ma20s,
         showSymbol: false,
         lineStyle: { width: 1.5, type: 'dashed' },

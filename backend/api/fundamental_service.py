@@ -25,7 +25,15 @@ class FundamentalService:
 
     @classmethod
     def _cache_get(cls, key):
-        return cache.get(key)
+        try:
+            return cache.get(key)
+        except Exception as e:
+            logger.warning(f"Cache deserialization failed for {key}: {e}")
+            try:
+                cache.delete(key)
+            except Exception:
+                pass
+            return None
 
     @classmethod
     def _cache_set(cls, key, value, timeout):
@@ -33,7 +41,15 @@ class FundamentalService:
 
     @classmethod
     def _cache_get_value(cls, key):
-        return cache.get(key)
+        try:
+            return cache.get(key)
+        except Exception as e:
+            logger.warning(f"Cache deserialization failed for {key}: {e}")
+            try:
+                cache.delete(key)
+            except Exception:
+                pass
+            return None
 
     @classmethod
     def _cache_set_value(cls, key, value, timeout):
@@ -468,3 +484,127 @@ class FundamentalService:
         if target is not None and isinstance(target, unittest.mock.Mock):
             return target(symbol=symbol)
         return Fetcher.fetch_yearly_cashflow(symbol)
+
+    @classmethod
+    def get_next_dividend(cls, symbol: str) -> dict:
+        """获取单只股票的下一次分红信息（含三级回退：确认/预案/历史估算）"""
+        from datetime import datetime
+        symbol = cls._fix_symbol(symbol)
+        cache_key = f"next_dividend_v1_{symbol}"
+        cached = cls._cache_get_value(cache_key)
+        if cached is not None:
+            return cached
+
+        none_result = {
+            'symbol': symbol, 'date': None, 'days_left': None,
+            'plan': '暂无最新方案', 'status': 'none',
+            'status_desc': '暂无分红数据', 'progress': '无'
+        }
+
+        try:
+            df_div_raw = Fetcher.fetch_dividend_detail(symbol)
+        except Exception as e:
+            logger.warning(f"Failed to fetch dividend detail for {symbol}: {e}")
+            return none_result
+
+        if df_div_raw is None or df_div_raw.empty:
+            return none_result
+
+        cols = list(df_div_raw.columns)
+        ann_col = next((c for c in cols if '公告' in c), cols[0] if len(cols) > 0 else None)
+        ex_col = next((c for c in cols if '除权' in c or '除息' in c), None)
+        progress_col = next((c for c in cols if '进度' in c), None)
+        bonus_col = next((c for c in cols if '送股' in c or '送' in c), None)
+        transfer_col = next((c for c in cols if '转增' in c or '转' in c), None)
+        cash_col = next((c for c in cols if '派息' in c or '派' in c), None)
+
+        def _build_plan(row):
+            parts = []
+            if bonus_col and float(row.get(bonus_col, 0) or 0) > 0:
+                parts.append(f"送{float(row[bonus_col]):.2f}")
+            if transfer_col and float(row.get(transfer_col, 0) or 0) > 0:
+                parts.append(f"转{float(row[transfer_col]):.2f}")
+            if cash_col and float(row.get(cash_col, 0) or 0) > 0:
+                parts.append(f"派{float(row[cash_col]):.2f}元")
+            return ' '.join(parts) if parts else '暂无方案'
+
+        df_parsed = []
+        for idx, row in df_div_raw.iterrows():
+            df_parsed.append({
+                'ann_date': pd.to_datetime(row[ann_col] if ann_col else None, errors='coerce'),
+                'ex_date': pd.to_datetime(row[ex_col] if ex_col else None, errors='coerce'),
+                'plan_str': _build_plan(row),
+                'progress': str(row[progress_col] if progress_col else "")
+            })
+
+        df_p = pd.DataFrame(df_parsed).dropna(subset=['ann_date']).sort_values('ann_date', ascending=False)
+        today = pd.Timestamp(datetime.now().date())
+
+        # A. 已宣告但未除权的未来分红
+        confirmed_row = None
+        for _, r in df_p.iterrows():
+            if pd.notna(r['ex_date']) and r['ex_date'] >= today:
+                if confirmed_row is None or r['ex_date'] < confirmed_row['ex_date']:
+                    confirmed_row = r
+
+        if confirmed_row is not None:
+            result = {
+                'symbol': symbol,
+                'date': confirmed_row['ex_date'].strftime('%Y-%m-%d'),
+                'days_left': int((confirmed_row['ex_date'] - today).days),
+                'plan': confirmed_row['plan_str'],
+                'status': 'confirmed',
+                'status_desc': '已确立',
+                'progress': confirmed_row['progress'] or '实施'
+            }
+            cls._cache_set_value(cache_key, result, 12 * 3600)
+            return result
+
+        # B. 预案
+        for _, r in df_p.iterrows():
+            prog = r['progress']
+            is_proposal = ('预案' in prog or '大会' in prog or '通过' in prog or '董事会' in prog) and ('实施' not in prog)
+            if is_proposal and (pd.isna(r['ex_date']) or r['ex_date'] >= today):
+                interval_days = 60
+                for _, r2 in df_p.iterrows():
+                    if pd.notna(r2['ex_date']) and r2['ex_date'] < today and pd.notna(r2['ann_date']):
+                        diff = int((r2['ex_date'] - r2['ann_date']).days)
+                        if diff > 0:
+                            interval_days = diff
+                            break
+                est = r['ann_date'] + pd.Timedelta(days=interval_days)
+                if est < today:
+                    est = r['ann_date'] + pd.Timedelta(days=max(60, interval_days))
+                if est < today:
+                    est = today + pd.Timedelta(days=14)
+                result = {
+                    'symbol': symbol,
+                    'date': est.strftime('%Y-%m-%d'),
+                    'days_left': max(0, int((est - today).days)),
+                    'plan': r['plan_str'],
+                    'status': 'proposal',
+                    'status_desc': '预案中',
+                    'progress': r['progress'] or '董事会预案'
+                }
+                cls._cache_set_value(cache_key, result, 12 * 3600)
+                return result
+
+        # C. 历史估算
+        for _, r in df_p.iterrows():
+            if pd.notna(r['ex_date']) and r['ex_date'] < today:
+                est = r['ex_date'] + pd.Timedelta(days=365)
+                while est < today:
+                    est += pd.Timedelta(days=365)
+                result = {
+                    'symbol': symbol,
+                    'date': est.strftime('%Y-%m-%d'),
+                    'days_left': max(0, int((est - today).days)),
+                    'plan': r['plan_str'],
+                    'status': 'estimated',
+                    'status_desc': '历史估算',
+                    'progress': '历史估算'
+                }
+                cls._cache_set_value(cache_key, result, 12 * 3600)
+                return result
+
+        return none_result

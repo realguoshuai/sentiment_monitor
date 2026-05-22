@@ -11,6 +11,7 @@ import logging
 import json
 import re
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .models import Stock, SentimentData, News, Report, Announcement
 from .serializers import (
@@ -676,7 +677,11 @@ def get_market_diary(request):
     
     # 尝试读取缓存
     cache_key = f"market_diary_v1_{fixed_symbol}"
-    cached_data = cache.get(cache_key)
+    try:
+        cached_data = cache.get(cache_key)
+    except Exception:
+        cache.delete(cache_key)
+        cached_data = None
     if cached_data is not None:
         return Response(cached_data)
         
@@ -722,133 +727,9 @@ def get_market_diary(request):
             volume_desc = '交投平稳，符合均值状态。'
             
         # 3. 计算分红倒计时
-        from .fundamental.fetcher import FundamentalFetcher as Fetcher
-        from .fundamental.calculator import FundamentalCalculator as Calc
-        
-        # 针对原始分红明细进行 12 小时的长缓存以提高页面响应速度，减少后台大并发同步期间因 API 请求堵塞导致的前台加载挂起
-        div_cache_key = f"raw_dividend_detail_v1_{fixed_symbol}"
-        df_div_raw = cache.get(div_cache_key)
-        if df_div_raw is None:
-            try:
-                df_div_raw = Fetcher.fetch_dividend_detail(fixed_symbol)
-                cache.set(div_cache_key, df_div_raw, 12 * 3600)
-            except Exception as e:
-                logger.warning(f"Failed to fetch dividend detail live for {fixed_symbol}: {e}")
-                df_div_raw = pd.DataFrame()
-        
-        next_dividend = {
-            'date': None,
-            'days_left': None,
-            'plan': '暂无最新方案',
-            'status': 'none',
-            'status_desc': '暂无分红数据',
-            'progress': '无'
-        }
-        
-        if df_div_raw is not None and not df_div_raw.empty:
-            cols = list(df_div_raw.columns)
-            ann_col = next((c for c in cols if '公告' in c or '公告日期' in c), cols[0] if len(cols) > 0 else None)
-            plan_col = next((c for c in cols if '方案' in c or '分红方案' in c), cols[1] if len(cols) > 1 else None)
-            ex_col = next((c for c in cols if '除权' in c or '除息' in c), None)
-            reg_col = next((c for c in cols if '登记' in c), None)
-            progress_col = next((c for c in cols if '进度' in c), None)
-            
-            df_parsed = []
-            for idx, row in df_div_raw.iterrows():
-                ann_val = row[ann_col] if ann_col else None
-                plan_val = row[plan_col] if plan_col else ""
-                ex_val = row[ex_col] if ex_col else None
-                progress_val = row[progress_col] if progress_col else ""
-                
-                ann_date = pd.to_datetime(ann_val, errors='coerce')
-                ex_date = pd.to_datetime(ex_val, errors='coerce')
-                
-                df_parsed.append({
-                    'ann_date': ann_date,
-                    'ex_date': ex_date,
-                    'plan_str': str(plan_val),
-                    'progress': str(progress_val)
-                })
-                
-            df_p = pd.DataFrame(df_parsed).dropna(subset=['ann_date']).sort_values('ann_date', ascending=False)
-            
-            today = pd.Timestamp(datetime.now().date())
-            
-            # A. 优先寻找已宣告但未除权的未来分红（实施公告）
-            confirmed_row = None
-            for idx, r in df_p.iterrows():
-                if pd.notna(r['ex_date']) and r['ex_date'] >= today:
-                    if confirmed_row is None or r['ex_date'] < confirmed_row['ex_date']:
-                        confirmed_row = r
-                        
-            if confirmed_row is not None:
-                next_dividend = {
-                    'date': confirmed_row['ex_date'].strftime('%Y-%m-%d'),
-                    'days_left': int((confirmed_row['ex_date'] - today).days),
-                    'plan': confirmed_row['plan_str'],
-                    'status': 'confirmed',
-                    'status_desc': '分红时间已确立（官方实施公告）',
-                    'progress': confirmed_row['progress'] or '实施'
-                }
-            else:
-                # B. 寻找未除权的预案
-                proposal_row = None
-                for idx, r in df_p.iterrows():
-                    prog = r['progress']
-                    is_proposal = ('预案' in prog or '大会' in prog or '通过' in prog or '董事会' in prog) and ('实施' not in prog)
-                    if is_proposal and (pd.isna(r['ex_date']) or r['ex_date'] >= today):
-                        proposal_row = r
-                        break
-                        
-                if proposal_row is not None:
-                    # 计算历史的公告到除权平均间隔（默认 60 天）
-                    interval_days = 60
-                    for idx, r in df_p.iterrows():
-                        if pd.notna(r['ex_date']) and r['ex_date'] < today and pd.notna(r['ann_date']):
-                            diff = int((r['ex_date'] - r['ann_date']).days)
-                            if diff > 0:
-                                interval_days = diff
-                                break
-                    estimated_ex_date = proposal_row['ann_date'] + pd.Timedelta(days=interval_days)
-                    # 如果估算出的除权日在今天之前，且该预案尚未实施，说明历史间隔由于特别分红等原因算短了，需按正常 A 股周期（60天）重新推算
-                    if estimated_ex_date < today:
-                        estimated_ex_date = proposal_row['ann_date'] + pd.Timedelta(days=max(60, interval_days))
-                        # 如果仍然在今天之前，则直接设置为今天起往后推算 14 天
-                        if estimated_ex_date < today:
-                            estimated_ex_date = today + pd.Timedelta(days=14)
-                    
-                    days_left = int((estimated_ex_date - today).days)
-                    next_dividend = {
-                        'date': estimated_ex_date.strftime('%Y-%m-%d'),
-                        'days_left': max(0, days_left),
-                        'plan': proposal_row['plan_str'],
-                        'status': 'proposal',
-                        'status_desc': '预案进行中（基于历史周期估算）',
-                        'progress': proposal_row['progress'] or '董事会预案'
-                    }
-                else:
-                    # C. 寻找最近一次完成的分红并加一年进行预测
-                    completed_row = None
-                    for idx, r in df_p.iterrows():
-                        if pd.notna(r['ex_date']) and r['ex_date'] < today:
-                            completed_row = r
-                            break
-                            
-                    if completed_row is not None:
-                        estimated_ex_date = completed_row['ex_date'] + pd.Timedelta(days=365)
-                        # 滚动到未来周期的同一时段，确保预计除权日始终在今天或之后
-                        while estimated_ex_date < today:
-                            estimated_ex_date += pd.Timedelta(days=365)
-                        days_left = int((estimated_ex_date - today).days)
-                        next_dividend = {
-                            'date': estimated_ex_date.strftime('%Y-%m-%d'),
-                            'days_left': max(0, days_left),
-                            'plan': completed_row['plan_str'],
-                            'status': 'estimated',
-                            'status_desc': '时间点历史预估（去年今日+365D）',
-                            'progress': '历史估算'
-                        }
-                        
+        from .fundamental_service import FundamentalService
+        next_dividend = FundamentalService.get_next_dividend(fixed_symbol)
+
         # 4. 组装并返回
         result = {
             'symbol': fixed_symbol,
@@ -865,63 +746,69 @@ def get_market_diary(request):
             'history': history_with_ma
         }
         
-        # 补全估值和股息率
+        # 补全估值和股息率（PE/PB/股息率 来自雪球实时接口）
         try:
             from .fundamental_service import FundamentalService
-            quality = FundamentalService.get_quality_data(fixed_symbol, include_shareholder=False)
-            if quality and 'latest' in quality:
-                result['latest']['pe'] = quality['latest'].get('pe', 0.0)
-                result['latest']['pb'] = quality['latest'].get('pb', 0.0)
-                
-            # 股息率采用历史最新非零的股息率
-            if quality and 'history' in quality and len(quality['history']) > 0:
-                # 寻找最新的股息率作为 TTM 股息率展现
-                dy = quality['latest'].get('dividend_yield', 0.0)
-                if not dy:
-                    # 从历史里找最新的非零股息率
-                    for h in reversed(quality['history']):
-                        if h.get('dividend_yield', 0.0) > 0:
-                            dy = h['dividend_yield']
-                            break
-                result['latest']['dividend_yield'] = dy
-                
-                # 映射历史股息率
-                hist_quality_map = {pd.to_datetime(h['date']).date(): h.get('dividend_yield', 0.0) for h in quality.get('history', [])}
-                for h in result['history']:
-                    h_date = pd.to_datetime(h['date']).date()
-                    h['dividend_yield'] = hist_quality_map.get(h_date, 0.0)
-            else:
-                # 如果没有基本面历史，全部默认为 0.0
-                for h in result['history']:
-                    h['dividend_yield'] = 0.0
-
-            # 雪球兜底逻辑：如果 PE、PB 或 股息率 依然为 0.0，说明本地库无数据（如未成功抓取），直接从雪球实时接口获取补全
-            if result['latest']['pe'] == 0.0 or result['latest']['pb'] == 0.0 or result['latest']['dividend_yield'] == 0.0:
-                xq_metrics = FundamentalService.get_xueqiu_quote_metrics(fixed_symbol)
-                if result['latest']['pe'] == 0.0:
-                    result['latest']['pe'] = xq_metrics.get('pe', 0.0)
-                if result['latest']['pb'] == 0.0:
-                    result['latest']['pb'] = xq_metrics.get('pb', 0.0)
-                if result['latest']['dividend_yield'] == 0.0:
-                    result['latest']['dividend_yield'] = xq_metrics.get('dividend_yield', 0.0)
+            xq_metrics = FundamentalService.get_xueqiu_quote_metrics(fixed_symbol)
+            result['latest']['pe'] = xq_metrics.get('pe', 0.0)
+            result['latest']['pb'] = xq_metrics.get('pb', 0.0)
+            result['latest']['dividend_yield'] = xq_metrics.get('dividend_yield', 0.0)
         except Exception as e:
-            logger.error(f"Concurrent fundamental task failed for {fixed_symbol}: {e}")
-            # 即使整体失败，我们也尝试用雪球补全最新的核心数值
-            try:
-                from .fundamental_service import FundamentalService
-                xq_metrics = FundamentalService.get_xueqiu_quote_metrics(fixed_symbol)
-                result['latest']['pe'] = xq_metrics.get('pe', 0.0)
-                result['latest']['pb'] = xq_metrics.get('pb', 0.0)
-                result['latest']['dividend_yield'] = xq_metrics.get('dividend_yield', 0.0)
-            except Exception as xq_err:
-                logger.error(f"Failed to fetch xueqiu fallback in error block for {fixed_symbol}: {xq_err}")
-            
-            for h in result['history']:
-                h['dividend_yield'] = 0.0
+            logger.error(f"Failed to fetch xueqiu metrics for {fixed_symbol}: {e}")
                 
         # 放入缓存 1 小时
         cache.set(cache_key, result, 3600)
         return Response(result)
     except Exception as e:
         logger.error(f"Error generating market diary: {e}")
+        return Response({'error': str(e)}, status=500)
+
+
+@api_view(['GET'])
+def get_dividend_calendar(request):
+    """分红日历接口：返回所有监控股票的下一次分红信息"""
+    calendar_cache_key = "dividend_calendar_v1"
+    try:
+        cached_data = cache.get(calendar_cache_key)
+    except Exception:
+        cache.delete(calendar_cache_key)
+        cached_data = None
+    if cached_data is not None:
+        return Response(cached_data)
+
+    try:
+        from .fundamental_service import FundamentalService
+        stocks = list(Stock.objects.all().values('symbol', 'name'))
+        if not stocks:
+            return Response([])
+
+        results = []
+        with ThreadPoolExecutor(max_workers=min(len(stocks), 8)) as executor:
+            future_map = {}
+            for s in stocks:
+                future = executor.submit(FundamentalService.get_next_dividend, s['symbol'])
+                future_map[future] = s
+
+            for future in as_completed(future_map):
+                stock_info = future_map[future]
+                try:
+                    div_info = future.result()
+                    if div_info.get('status') != 'none':
+                        results.append({
+                            'symbol': stock_info['symbol'],
+                            'name': stock_info['name'],
+                            'date': div_info.get('date'),
+                            'days_left': div_info.get('days_left'),
+                            'plan': div_info.get('plan'),
+                            'status': div_info.get('status'),
+                            'status_desc': div_info.get('status_desc'),
+                        })
+                except Exception as e:
+                    logger.warning(f"Failed to get dividend for {stock_info['symbol']}: {e}")
+
+        results.sort(key=lambda x: x.get('days_left') if x.get('days_left') is not None else 9999)
+        cache.set(calendar_cache_key, results, 3600)
+        return Response(results)
+    except Exception as e:
+        logger.error(f"Error generating dividend calendar: {e}")
         return Response({'error': str(e)}, status=500)

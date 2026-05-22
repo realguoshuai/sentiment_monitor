@@ -247,6 +247,8 @@ export const stockApi = {
     ),
   getMarketDiary: (symbol: string) =>
     api.get<any>(`/sentiment/market-diary/?symbol=${symbol}`, { timeout: 30000 }),
+  getDividendCalendar: () =>
+    api.get<any[]>('/sentiment/dividend-calendar/', { timeout: 30000 }),
 }
 
 export default api

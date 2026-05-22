@@ -270,9 +270,9 @@ class PriceService:
                         # 兜底：尝试从数据库快照读取
                         try:
                             from .models import FundamentalSnapshot
-                            snap = FundamentalSnapshot.objects.filter(symbol=fixed).order_by('-report_date').first()
+                            snap = FundamentalSnapshot.objects.filter(symbol=fixed).order_by('-date').first()
                             if snap:
-                                return fixed, {'pe': snap.pe_ttm, 'pb': snap.pb_mrq}
+                                return fixed, {'pe': snap.pe, 'pb': snap.pb}
                         except Exception: pass
                         return fixed, {}
 

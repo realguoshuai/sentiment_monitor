@@ -8,6 +8,7 @@ export const useSentimentStore = defineStore('sentiment', () => {
   const stocks = ref<Stock[]>([])
   const sentimentData = ref<SentimentData[]>([])
   const sentimentTrend = ref<any[]>([])
+  const dividendCalendar = ref<any[]>([])
   const loading = ref(false)
   const isCollecting = ref(false)
   const error = ref<string | null>(null)
@@ -191,6 +192,15 @@ export const useSentimentStore = defineStore('sentiment', () => {
     }
   }
 
+  async function fetchDividendCalendar() {
+    try {
+      const response = await stockApi.getDividendCalendar()
+      dividendCalendar.value = response.data
+    } catch (e) {
+      console.error('Failed to fetch dividend calendar:', e)
+    }
+  }
+
   async function triggerCollection() {
     isCollecting.value = true
     try {
@@ -258,6 +268,7 @@ export const useSentimentStore = defineStore('sentiment', () => {
     stocks,
     sentimentData,
     sentimentTrend,
+    dividendCalendar,
     loading,
     isCollecting,
     error,
@@ -278,6 +289,7 @@ export const useSentimentStore = defineStore('sentiment', () => {
     removeStock,
     fetchLatestSentiment,
     fetchSentimentTrend,
+    fetchDividendCalendar,
     triggerCollection,
     fetchRealtimePrices,
     getStockBySymbol,
