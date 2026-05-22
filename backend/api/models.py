@@ -168,6 +168,8 @@ class StockScreenerSnapshot(models.Model):
     pb = models.FloatField(default=0, verbose_name='市净率')
     dividend_yield = models.FloatField(default=0, verbose_name='股息率')
     roe_proxy_pct = models.FloatField(default=0, verbose_name='ROE 代理')
+    net_cash_ratio = models.FloatField(default=0, verbose_name='净现比')
+    cfo_yield = models.FloatField(default=0, verbose_name='经营现金流收益率')
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -180,6 +182,8 @@ class StockScreenerSnapshot(models.Model):
             models.Index(fields=['snapshot_date', 'pe']),
             models.Index(fields=['snapshot_date', 'roe_proxy_pct']),
             models.Index(fields=['snapshot_date', 'dividend_yield']),
+            models.Index(fields=['snapshot_date', 'net_cash_ratio']),
+            models.Index(fields=['snapshot_date', 'cfo_yield']),
         ]
 
     def __str__(self):

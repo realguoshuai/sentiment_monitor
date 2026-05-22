@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 
 
 class AnalysisService:
-    CACHE_TTL = 12 * 3600
-    STALE_CACHE_TTL = 7 * 24 * 3600
+    CACHE_TTL = 7 * 24 * 3600
+    STALE_CACHE_TTL = 90 * 24 * 3600
     REFRESH_LOCK_TTL = 15 * 60
     CACHE_VERSION = 'v6'
     CONSERVATIVE_REQUIRED_RETURN = 12.0
@@ -1552,6 +1552,13 @@ class AnalysisService:
         cached_entry = cls._normalize_cache_entry(cls._cache_get(cls.cache_key(symbol, period)))
         if cached_entry is not None:
             return cached_entry['payload']
+
+        stale_entry = cls._normalize_cache_entry(cls._cache_get(cls.stale_cache_key(symbol, period)))
+        if stale_entry is not None:
+            background_refreshing = bool(cls._cache_get(cls.refresh_lock_key(symbol, period)))
+            if not background_refreshing:
+                cls._schedule_background_refresh(symbol, period)
+            return stale_entry['payload']
 
         payload = cls.build_analysis_payload(symbol, period)
         cls._store_payload(symbol, period, payload)

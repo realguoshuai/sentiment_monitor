@@ -294,7 +294,91 @@
               </div>
             </div>
           </div>
+
+          <!-- DDM 股息折现动态沙盘 -->
+          <div class="ddm-sandbox-panel">
+            <div class="ddm-sandbox-header">
+              <div>
+                <span class="valuation-card-title">DDM 股息折现动态沙盘</span>
+                <strong>调节长期增长假设与折现率，演算多阶段红利内在价值。</strong>
+              </div>
+              <div class="ddm-badge" :class="{ 'ddm-badge-warning': ddmParams.discountRate <= ddmParams.terminalGrowthRate }">
+                {{ ddmValuationLabel }}
+              </div>
+            </div>
+            <div class="ddm-sandbox-grid">
+              <div class="ddm-sliders">
+                <div class="ddm-slider-group">
+                  <div class="slider-header">
+                    <label>超额增长期 (年)</label>
+                    <span class="slider-value">{{ ddmParams.growthYears }} 年</span>
+                  </div>
+                  <input type="range" v-model.number="ddmParams.growthYears" min="3" max="10" step="1" />
+                </div>
+                <div class="ddm-slider-group">
+                  <div class="slider-header">
+                    <label>超额股息增长率 g₁ (%)</label>
+                    <span class="slider-value">{{ ddmParams.growthRate }}%</span>
+                  </div>
+                  <input type="range" v-model.number="ddmParams.growthRate" min="-10" max="30" step="0.5" />
+                </div>
+                <div class="ddm-slider-group">
+                  <div class="slider-header">
+                    <label>永续股息增长率 g₂ (%)</label>
+                    <span class="slider-value">{{ ddmParams.terminalGrowthRate }}%</span>
+                  </div>
+                  <input type="range" v-model.number="ddmParams.terminalGrowthRate" min="0" max="5" step="0.1" />
+                </div>
+                <div class="ddm-slider-group">
+                  <div class="slider-header">
+                    <label>折现要求回报率 r (%)</label>
+                    <span class="slider-value">{{ ddmParams.discountRate }}%</span>
+                  </div>
+                  <input type="range" v-model.number="ddmParams.discountRate" min="3" max="15" step="0.5" />
+                </div>
+              </div>
+              <div class="ddm-results">
+                <div class="ddm-result-cards">
+                  <div class="ddm-res-card">
+                    <span>每股派息基准 D₀</span>
+                    <strong>{{ formatPrice(ddmD0) }}</strong>
+                  </div>
+                  <div class="ddm-res-card ddm-res-card-highlight">
+                    <span>理论公允价值</span>
+                    <strong v-if="ddmParams.discountRate > ddmParams.terminalGrowthRate" class="glow-value">{{ formatPrice(ddmFairValue) }}</strong>
+                    <strong v-else class="glow-value text-error">--.--</strong>
+                  </div>
+                  <div class="ddm-res-card">
+                    <span>当前股价比对</span>
+                    <strong>{{ formatPrice(valuationConclusion?.current?.price || 0) }}</strong>
+                  </div>
+                </div>
+                <div class="ddm-mos-meter" v-if="ddmParams.discountRate > ddmParams.terminalGrowthRate">
+                  <div class="mos-meter-header">
+                    <span>安全边际 (MOS)</span>
+                    <strong :class="ddmMos >= 0 ? 'text-success' : 'text-error'">
+                      {{ ddmMos >= 0 ? '+' : '' }}{{ formatPct(ddmMos) }}
+                    </strong>
+                  </div>
+                  <div class="mos-track">
+                    <div class="mos-bar" :style="{ width: Math.max(0, Math.min(100, (ddmMos + 0.5) * 100)) + '%', backgroundColor: ddmMos >= 0 ? '#10b981' : '#f43f5e' }"></div>
+                    <div class="mos-marker" style="left: 50%;"></div>
+                  </div>
+                  <div class="mos-labels">
+                    <span>溢价 50%</span>
+                    <span>合理中枢</span>
+                    <span>折价 50%</span>
+                  </div>
+                </div>
+                <div class="ddm-warning-block" v-else>
+                  ⚠️ 要求回报率 ({{ ddmParams.discountRate }}%) 必须大于永续增长率 ({{ ddmParams.terminalGrowthRate }}%)，否则无法收敛。请调整滑块。
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div class="normalized-panel" v-if="normalizedEarnings?.enabled">
+
             <div class="normalized-header">
               <div>
                 <span class="valuation-card-title">归一化口径</span>
@@ -774,6 +858,73 @@ const calcParams = ref({
   expectedRoe: 15,
   requiredReturn: 10
 });
+
+const ddmParams = ref({
+  growthYears: 5,
+  growthRate: 6.0,
+  terminalGrowthRate: 2.0,
+  discountRate: 8.0
+});
+
+const ddmD0 = computed(() => {
+  const current = valuationConclusion.value?.current;
+  if (!current) return 0;
+  const price = current.price || 0;
+  const dy = current.dividend_yield || 0;
+  return price * dy;
+});
+
+const ddmPv1 = computed(() => {
+  const d0 = ddmD0.value;
+  const g1 = ddmParams.value.growthRate / 100;
+  const r = ddmParams.value.discountRate / 100;
+  const n = ddmParams.value.growthYears;
+  
+  let pv = 0;
+  for (let t = 1; t <= n; t++) {
+    pv += (d0 * Math.pow(1 + g1, t)) / Math.pow(1 + r, t);
+  }
+  return pv;
+});
+
+const ddmPv2 = computed(() => {
+  const d0 = ddmD0.value;
+  const g1 = ddmParams.value.growthRate / 100;
+  const g2 = ddmParams.value.terminalGrowthRate / 100;
+  const r = ddmParams.value.discountRate / 100;
+  const n = ddmParams.value.growthYears;
+  
+  if (r <= g2) return 0;
+  const dn = d0 * Math.pow(1 + g1, n);
+  const vn = (dn * (1 + g2)) / (r - g2);
+  return vn / Math.pow(1 + r, n);
+});
+
+const ddmFairValue = computed(() => {
+  if (ddmParams.value.discountRate <= ddmParams.value.terminalGrowthRate) return 0;
+  const val = ddmPv1.value + ddmPv2.value;
+  return isNaN(val) || val < 0 ? 0 : val;
+});
+
+const ddmMos = computed(() => {
+  const currentPrice = valuationConclusion.value?.current?.price || 0;
+  const fair = ddmFairValue.value;
+  if (fair <= 0) return 0;
+  return (fair - currentPrice) / fair;
+});
+
+const ddmValuationLabel = computed(() => {
+  const r = ddmParams.value.discountRate;
+  const g2 = ddmParams.value.terminalGrowthRate;
+  if (r <= g2) return '折现不足（要求回报率需大于永续增长率）';
+  
+  const mos = ddmMos.value;
+  if (mos >= 0.25) return '极度低估（黄金坑）';
+  if (mos >= 0.05) return '偏低估（安全边际充足）';
+  if (mos <= -0.15) return '严重高估（情绪泡沫）';
+  return '合理中枢（估值对齐）';
+});
+
 
 const currentStep = ref(0);
 const steps = [
@@ -2440,6 +2591,254 @@ onUnmounted(() => {
   color: #334155;
   line-height: 1.6;
 }
+
+/* DDM 股息折现动态沙盘样式 */
+.ddm-sandbox-panel {
+  grid-column: span 2;
+  margin-top: 18px;
+  padding: 24px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.75) 0%, rgba(248, 250, 252, 0.75) 100%);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  border-radius: 24px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.03);
+}
+
+.ddm-sandbox-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+  border-bottom: 1px dashed rgba(226, 232, 240, 0.8);
+  padding-bottom: 16px;
+}
+
+.ddm-sandbox-header strong {
+  display: block;
+  font-size: 0.9rem;
+  color: #64748b;
+  font-weight: 500;
+  margin-top: 4px;
+}
+
+.ddm-badge {
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 0.84rem;
+  font-weight: 800;
+  background: #dcfce7;
+  color: #15803d;
+  box-shadow: 0 2px 8px rgba(22, 163, 74, 0.1);
+  transition: all 0.2s ease;
+}
+
+.ddm-badge.ddm-badge-warning {
+  background: #fef3c7;
+  color: #b45309;
+  box-shadow: 0 2px 8px rgba(217, 119, 6, 0.1);
+}
+
+.ddm-sandbox-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  gap: 32px;
+  align-items: start;
+}
+
+.ddm-sliders {
+  display: grid;
+  gap: 20px;
+}
+
+.ddm-slider-group {
+  display: grid;
+  gap: 8px;
+}
+
+.slider-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #475569;
+}
+
+.slider-value {
+  color: #0f172a;
+  font-family: 'Monaco', monospace;
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+
+.ddm-sliders input[type="range"] {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 99px;
+  background: #e2e8f0;
+  outline: none;
+}
+
+.ddm-sliders input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #0f172a;
+  border: 2px solid #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  transition: all 0.1s ease;
+}
+
+.ddm-sliders input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  background: #3b82f6;
+  box-shadow: 0 2px 10px rgba(59, 130, 246, 0.3);
+}
+
+.ddm-results {
+  display: grid;
+  gap: 24px;
+}
+
+.ddm-result-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ddm-res-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+}
+
+.ddm-res-card span {
+  font-size: 0.74rem;
+  color: #64748b;
+  font-weight: 600;
+  text-align: center;
+}
+
+.ddm-res-card strong {
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.ddm-res-card-highlight {
+  background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%);
+  border-color: #a7f3d0;
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.05);
+}
+
+.ddm-res-card-highlight span {
+  color: #047857;
+}
+
+.ddm-res-card .glow-value {
+  font-size: 1.4rem;
+  color: #10b981;
+  text-shadow: 0 0 10px rgba(16, 185, 129, 0.1);
+}
+
+.ddm-res-card .text-error {
+  color: #ef4444;
+  text-shadow: none;
+}
+
+.ddm-mos-meter {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.mos-meter-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: #475569;
+}
+
+.mos-meter-header strong {
+  font-size: 1.1rem;
+  font-weight: 800;
+}
+
+.text-success {
+  color: #10b981;
+}
+
+.text-error {
+  color: #f43f5e;
+}
+
+.mos-track {
+  position: relative;
+  height: 8px;
+  background: #e2e8f0;
+  border-radius: 99px;
+  overflow: visible;
+}
+
+.mos-bar {
+  height: 100%;
+  border-radius: 99px;
+  transition: width 0.15s ease, background-color 0.15s ease;
+}
+
+.mos-marker {
+  position: absolute;
+  top: -4px;
+  width: 2px;
+  height: 16px;
+  background: #64748b;
+}
+
+.mos-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.ddm-warning-block {
+  padding: 16px;
+  border-radius: 16px;
+  background: #fffbeb;
+  border: 1px solid #fef3c7;
+  color: #b45309;
+  font-size: 0.84rem;
+  line-height: 1.6;
+  font-weight: 700;
+}
+
+@media (max-width: 1180px) {
+  .ddm-sandbox-panel {
+    grid-column: span 1;
+  }
+  .ddm-sandbox-grid {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+}
+
 
 @media (max-width: 1180px) {
   .chart-layout,

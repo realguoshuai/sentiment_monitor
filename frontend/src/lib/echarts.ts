@@ -8,6 +8,7 @@ import {
   MarkPointComponent,
   TitleComponent,
   TooltipComponent,
+  DataZoomComponent,
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 
@@ -22,6 +23,7 @@ echarts.use([
   MarkPointComponent,
   TitleComponent,
   TooltipComponent,
+  DataZoomComponent,
   CanvasRenderer,
 ])
 

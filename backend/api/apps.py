@@ -15,10 +15,9 @@ class ApiConfig(AppConfig):
         no_proxy_list = ['.eastmoney.com', '.gtimg.cn', '.sina.com.cn', '127.0.0.1', 'localhost']
         os.environ['NO_PROXY'] = ','.join(no_proxy_list)
 
-        # 确保只在主进程中启动定时任务
+        # 确保只在主进程中启动定时任务，且仅在 ENABLE_SCHEDULER 显式开启时运行，避免在本地开发/热重载时重复启动后台并发网络采集任务
         scheduler_requested = (
-            os.environ.get('RUN_MAIN') == 'true'
-            or os.environ.get('ENABLE_SCHEDULER') == '1'
+            os.environ.get('ENABLE_SCHEDULER') == '1'
         )
         if scheduler_requested and not ApiConfig._scheduler_started:
             ApiConfig._scheduler_started = True

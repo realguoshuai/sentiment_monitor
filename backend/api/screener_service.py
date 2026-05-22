@@ -115,6 +115,8 @@ class ScreenerService:
             code_col = cls._first_existing_column(df, ['股票代码', '代码'])
             roe_col = cls._first_existing_column(df, ['净资产收益率'])
             industry_col = cls._first_existing_column(df, ['所处行业', '行业'])
+            cfo_col = cls._first_existing_column(df, ['每股经营现金流量'])
+            eps_col = cls._first_existing_column(df, ['每股收益'])
             if not code_col or not roe_col:
                 continue
 
@@ -131,6 +133,8 @@ class ScreenerService:
                     'roe_pct': round(cls._normalize_percent_value(row.get(roe_col)), 2),
                     'report_date': report_date,
                     'industry': industry,
+                    'cfo_per_share': cls._to_float(row.get(cfo_col)) if cfo_col else 0.0,
+                    'eps': cls._to_float(row.get(eps_col)) if eps_col else 0.0,
                 }
 
         if roe_map:
@@ -415,7 +419,18 @@ class ScreenerService:
             if not name:
                 name = str(realtime.get('name') or symbol)
 
-            roe_pct = cls._to_float(roe_map.get(symbol, {}).get('roe_pct'))
+            roe_info = roe_map.get(symbol, {})
+            roe_pct = cls._to_float(roe_info.get('roe_pct'))
+            cfo_per_share = cls._to_float(roe_info.get('cfo_per_share'))
+            eps = cls._to_float(roe_info.get('eps'))
+
+            net_cash_ratio = 0.0
+            if eps > 0:
+                net_cash_ratio = cfo_per_share / eps
+
+            cfo_yield = 0.0
+            if price > 0:
+                cfo_yield = (cfo_per_share / price) * 100
 
             rows.append(
                 StockScreenerSnapshot(
@@ -429,6 +444,8 @@ class ScreenerService:
                     pb=round(pb, 4),
                     dividend_yield=round(dividend_yield, 4),
                     roe_proxy_pct=round(roe_pct, 2),
+                    net_cash_ratio=round(net_cash_ratio, 4),
+                    cfo_yield=round(cfo_yield, 4),
                 )
             )
 
@@ -555,6 +572,10 @@ class ScreenerService:
             ('dividend_yield_max', 'dividend_yield__lte'),
             ('market_cap_min', 'market_cap__gte'),
             ('market_cap_max', 'market_cap__lte'),
+            ('net_cash_ratio_min', 'net_cash_ratio__gte'),
+            ('net_cash_ratio_max', 'net_cash_ratio__lte'),
+            ('cfo_yield_min', 'cfo_yield__gte'),
+            ('cfo_yield_max', 'cfo_yield__lte'),
         ]
         for raw_key, orm_key in numeric_filters:
             raw_value = filters.get(raw_key)
@@ -576,6 +597,8 @@ class ScreenerService:
             'market_cap': 'market_cap',
             'price': 'price',
             'symbol': 'symbol',
+            'net_cash_ratio': 'net_cash_ratio',
+            'cfo_yield': 'cfo_yield',
         }
         order_field = sort_mapping.get(sort_by, 'pb')
         if sort_order == 'desc':
@@ -604,6 +627,8 @@ class ScreenerService:
                 'dividend_yield': row.dividend_yield,
                 'roe_pct': row.roe_proxy_pct,
                 'roi_pct': round(float(getattr(row, 'roi_pct', 0.0) or 0.0), 2),
+                'net_cash_ratio': row.net_cash_ratio,
+                'cfo_yield': row.cfo_yield,
                 'is_monitored': row.symbol in monitored_symbols,
             }
             for row in rows

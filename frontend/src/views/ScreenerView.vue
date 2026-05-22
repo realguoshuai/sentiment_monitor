@@ -63,6 +63,17 @@
 
           <div class="field-pair">
             <label class="field">
+              <span>净现比 ≥</span>
+              <input v-model.number="filters.net_cash_ratio_min" type="number" step="0.1" placeholder="1.0" />
+            </label>
+            <label class="field">
+              <span>现金流收益率 ≥</span>
+              <input v-model.number="filters.cfo_yield_min" type="number" step="0.5" placeholder="6" />
+            </label>
+          </div>
+
+          <div class="field-pair">
+            <label class="field">
               <span>排序字段</span>
               <select v-model="filters.sort_by">
                 <option value="pb">PB</option>
@@ -72,6 +83,8 @@
                 <option value="dividend_yield">股息率</option>
                 <option value="market_cap">总市值</option>
                 <option value="price">价格</option>
+                <option value="net_cash_ratio">净现比</option>
+                <option value="cfo_yield">现金流收益率</option>
               </select>
             </label>
             <label class="field">
@@ -216,6 +229,16 @@
                         股息率 <span :class="{ active: filters.sort_by === 'dividend_yield' }">{{ getSortIndicator('dividend_yield') }}</span>
                       </button>
                     </th>
+                    <th>
+                      <button class="sort-header" type="button" @click="toggleSort('net_cash_ratio')">
+                        净现比 <span :class="{ active: filters.sort_by === 'net_cash_ratio' }">{{ getSortIndicator('net_cash_ratio') }}</span>
+                      </button>
+                    </th>
+                    <th>
+                      <button class="sort-header" type="button" @click="toggleSort('cfo_yield')">
+                        现金流收益率 <span :class="{ active: filters.sort_by === 'cfo_yield' }">{{ getSortIndicator('cfo_yield') }}</span>
+                      </button>
+                    </th>
                   </tr>
                 </thead>
 
@@ -257,6 +280,8 @@
                     <td data-label="ROE"><span class="metric-pill" :class="getMetricTone('roe', row.roe_pct)">{{ formatPctValue(row.roe_pct) }}</span></td>
                     <td data-label="ROI"><span class="metric-pill" :class="getMetricTone('roi', row.roi_pct)">{{ formatPctValue(row.roi_pct) }}</span></td>
                     <td data-label="股息率"><span class="metric-pill" :class="getMetricTone('dividend', row.dividend_yield)">{{ formatPct(row.dividend_yield) }}</span></td>
+                    <td data-label="净现比"><span class="metric-pill" :class="getMetricTone('net_cash_ratio', row.net_cash_ratio)">{{ formatNumber(row.net_cash_ratio) }}</span></td>
+                    <td data-label="现金流收益率"><span class="metric-pill" :class="getMetricTone('cfo_yield', row.cfo_yield)">{{ formatPct(row.cfo_yield) }}</span></td>
                   </tr>
                 </tbody>
               </table>
@@ -363,7 +388,7 @@ import { useRouter } from 'vue-router'
 import { stockApi, type ScreenerMeta, type ScreenerResult } from '@/api'
 
 type ScreenerPreset = 'dividend_value' | 'quality_value' | 'cash_cow'
-type SortableField = 'price' | 'pe' | 'pb' | 'roe' | 'roi' | 'dividend_yield' | 'market_cap'
+type SortableField = 'price' | 'pe' | 'pb' | 'roe' | 'roi' | 'dividend_yield' | 'market_cap' | 'net_cash_ratio' | 'cfo_yield'
 
 const router = useRouter()
 
@@ -395,6 +420,8 @@ const filters = reactive({
   roe_min: null as number | null,
   dividend_yield_min: null as number | null,
   market_cap_min_100m: null as number | null,
+  net_cash_ratio_min: null as number | null,
+  cfo_yield_min: null as number | null,
   include_anomalies: false,
   sort_by: 'pb',
   sort_order: 'asc',
@@ -428,8 +455,8 @@ const presetCards: Array<{
     key: 'cash_cow',
     title: '现金奶牛',
     tagline: 'Preset 03',
-    description: '偏向成熟企业，要求盈利、分红和估值都不过分。',
-    metrics: ['ROE ≥ 12%', '股息率 ≥ 5%', 'PE ≤ 18'],
+    description: '偏向高利润含金量的现金流丰沛企业。',
+    metrics: ['ROE ≥ 12%', '净现比 ≥ 1.0', '现金流收益率 ≥ 6%'],
     tone: 'steady',
   },
 ]
@@ -442,6 +469,8 @@ const sortLabelMap: Record<string, string> = {
   dividend_yield: '股息率',
   market_cap: '总市值',
   price: '价格',
+  net_cash_ratio: '净现比',
+  cfo_yield: '现金流收益率',
 }
 
 const defaultSortOrderMap: Record<SortableField, 'asc' | 'desc'> = {
@@ -452,6 +481,8 @@ const defaultSortOrderMap: Record<SortableField, 'asc' | 'desc'> = {
   roi: 'desc',
   dividend_yield: 'desc',
   market_cap: 'desc',
+  net_cash_ratio: 'desc',
+  cfo_yield: 'desc',
 }
 
 const activeFilterCount = computed(() => {
@@ -462,6 +493,8 @@ const activeFilterCount = computed(() => {
   if (filters.roe_min !== null) count += 1
   if (filters.dividend_yield_min !== null) count += 1
   if (filters.market_cap_min_100m !== null) count += 1
+  if (filters.net_cash_ratio_min !== null) count += 1
+  if (filters.cfo_yield_min !== null) count += 1
   if (filters.include_anomalies) count += 1
   return count
 })
@@ -487,6 +520,8 @@ const activeFilterTags = computed(() => {
   if (filters.roe_min !== null) tags.push(`ROE ≥ ${filters.roe_min}%`)
   if (filters.dividend_yield_min !== null) tags.push(`股息率 ≥ ${filters.dividend_yield_min}%`)
   if (filters.market_cap_min_100m !== null) tags.push(`市值 ≥ ${filters.market_cap_min_100m} 亿`)
+  if (filters.net_cash_ratio_min !== null) tags.push(`净现比 ≥ ${filters.net_cash_ratio_min}`)
+  if (filters.cfo_yield_min !== null) tags.push(`现金流收益率 ≥ ${filters.cfo_yield_min}%`)
   if (filters.include_anomalies) tags.push('包含异常样本')
   return tags
 })
@@ -594,6 +629,8 @@ const buildParams = (page = 1) => ({
   roe_min: filters.roe_min ?? undefined,
   dividend_yield_min: filters.dividend_yield_min ?? undefined,
   market_cap_min: filters.market_cap_min_100m ? filters.market_cap_min_100m * 1e8 : undefined,
+  net_cash_ratio_min: filters.net_cash_ratio_min ?? undefined,
+  cfo_yield_min: filters.cfo_yield_min ?? undefined,
   include_anomalies: filters.include_anomalies ? 1 : undefined,
   sort_by: filters.sort_by,
   sort_order: filters.sort_order,
@@ -633,7 +670,7 @@ const refreshSnapshot = async () => {
   try {
     const res = await stockApi.refreshScreenerSnapshot()
     await fetchResults(1)
-    if (res.data?.source !== 'upstream' && res.data?.message) {
+    if ((res.data as any)?.source !== 'upstream' && res.data?.message) {
       errorMessage.value = res.data.message
     }
   } catch (error) {
@@ -651,6 +688,8 @@ const resetFilters = () => {
   filters.roe_min = null
   filters.dividend_yield_min = null
   filters.market_cap_min_100m = null
+  filters.net_cash_ratio_min = null
+  filters.cfo_yield_min = null
   filters.include_anomalies = false
   filters.sort_by = 'pb'
   filters.sort_order = 'asc'
@@ -664,6 +703,8 @@ const applyPreset = (preset: ScreenerPreset) => {
   filters.roe_min = null
   filters.dividend_yield_min = null
   filters.market_cap_min_100m = null
+  filters.net_cash_ratio_min = null
+  filters.cfo_yield_min = null
   filters.include_anomalies = false
   filters.sort_by = 'pb'
   filters.sort_order = 'asc'
@@ -683,9 +724,11 @@ const applyPreset = (preset: ScreenerPreset) => {
   }
 
   if (preset === 'cash_cow') {
-    filters.pe_max = 18
     filters.roe_min = 12
-    filters.dividend_yield_min = 5
+    filters.net_cash_ratio_min = 1.0
+    filters.cfo_yield_min = 6
+    filters.sort_by = 'cfo_yield'
+    filters.sort_order = 'desc'
   }
 
   void fetchResults(1)
@@ -766,7 +809,7 @@ const getSortIndicator = (field: SortableField) => {
   return filters.sort_order === 'asc' ? '↑' : '↓'
 }
 
-const getMetricTone = (metric: 'pb' | 'pe' | 'roe' | 'roi' | 'dividend', value?: number | null) => {
+const getMetricTone = (metric: 'pb' | 'pe' | 'roe' | 'roi' | 'dividend' | 'net_cash_ratio' | 'cfo_yield', value?: number | null) => {
   if (value === undefined || value === null || Number.isNaN(Number(value))) return 'tone-muted'
   const numeric = Number(value)
 
@@ -792,6 +835,20 @@ const getMetricTone = (metric: 'pb' | 'pe' | 'roe' | 'roi' | 'dividend', value?:
     if (numeric >= 10) return 'tone-quality'
     if (numeric >= 5) return 'tone-neutral'
     return 'tone-muted'
+  }
+
+  if (metric === 'net_cash_ratio') {
+    if (numeric >= 1.2) return 'tone-strong'
+    if (numeric >= 1.0) return 'tone-quality'
+    if (numeric <= 0) return 'tone-warm'
+    return 'tone-neutral'
+  }
+
+  if (metric === 'cfo_yield') {
+    if (numeric >= 8) return 'tone-strong'
+    if (numeric >= 5) return 'tone-quality'
+    if (numeric <= 2) return 'tone-muted'
+    return 'tone-neutral'
   }
 
   if (numeric >= 5) return 'tone-income'

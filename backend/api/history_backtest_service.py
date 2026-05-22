@@ -24,8 +24,8 @@ class Horizon:
 
 
 class HistoryBacktestService:
-    CACHE_TTL = 6 * 3600
-    STALE_CACHE_TTL = 7 * 24 * 3600
+    CACHE_TTL = 7 * 24 * 3600
+    STALE_CACHE_TTL = 90 * 24 * 3600
     CACHE_VERSION = 'v2'
     SAMPLE_LIMIT = 8
     LONG_HORIZONS = (

@@ -1,4 +1,4 @@
-﻿from unittest.mock import patch
+from unittest.mock import patch
 
 import os
 from datetime import date, timedelta
@@ -65,6 +65,27 @@ class SentimentApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['stock_symbol'], 'SZ000001')
         self.assertEqual(response.data['stock_name'], 'Sample Corp')
+
+    @patch('api.price_service.PriceService.get_historical_data')
+    @patch('api.fundamental.fetcher.FundamentalFetcher.fetch_dividend_detail')
+    def test_get_market_diary(self, mock_fetch_div, mock_get_hist):
+        mock_get_hist.return_value = {
+            'SZ000001': [
+                {'date': '2026-05-18', 'price': 10.0, 'pe': 8.5, 'pb': 1.2, 'dividend_yield': 3.5, 'roi': 12.0, 'volume': 100.0},
+                {'date': '2026-05-19', 'price': 10.1, 'pe': 8.6, 'pb': 1.21, 'dividend_yield': 3.4, 'roi': 12.0, 'volume': 110.0},
+                {'date': '2026-05-20', 'price': 10.2, 'pe': 8.7, 'pb': 1.22, 'dividend_yield': 3.3, 'roi': 12.0, 'volume': 40.0},
+            ]
+        }
+        mock_fetch_div.return_value = pd.DataFrame([
+            {'公告日期': '2026-04-10', '分红方案': '10派10元', '除权除息日': '2026-05-25', '进度': '实施'}
+        ])
+        
+        response = self.client.get('/api/sentiment/market-diary/?symbol=SZ000001')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['symbol'], 'SZ000001')
+        self.assertEqual(response.data['latest']['volume_status'], '极度缩量')
+        self.assertEqual(response.data['next_dividend']['status'], 'confirmed')
+        self.assertEqual(response.data['next_dividend']['plan'], '10派10元')
 
     def test_get_announcements_uses_detail_object(self):
         response = self.client.get('/api/sentiment/SZ000001/get_announcements/')
@@ -1991,7 +2012,8 @@ class EastMoneySourceTests(TestCase):
     ):
         from collector.collector import collect_stock_data
 
-        sentiment = collect_stock_data(self.stock)
+        collect_stock_data(self.stock)
+        sentiment = SentimentData.objects.filter(stock=self.stock).first()
 
         saved_news = News.objects.get(sentiment_data=sentiment)
         saved_report = Report.objects.get(sentiment_data=sentiment)
@@ -2050,7 +2072,8 @@ class EastMoneySourceTests(TestCase):
     ):
         from collector.collector import collect_stock_data
 
-        sentiment = collect_stock_data(self.stock)
+        collect_stock_data(self.stock)
+        sentiment = SentimentData.objects.filter(stock=self.stock).first()
 
         saved_news = News.objects.get(sentiment_data=sentiment)
         saved_report = Report.objects.get(sentiment_data=sentiment)
@@ -2106,7 +2129,8 @@ class EastMoneySourceTests(TestCase):
     ):
         from collector.collector import collect_stock_data
 
-        sentiment = collect_stock_data(self.stock)
+        collect_stock_data(self.stock)
+        sentiment = SentimentData.objects.filter(stock=self.stock).first()
 
         saved_report = Report.objects.get(sentiment_data=sentiment)
         saved_announcement = Announcement.objects.get(sentiment_data=sentiment)

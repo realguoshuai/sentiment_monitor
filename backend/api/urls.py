@@ -16,6 +16,7 @@ router.register(r'sentiment', views.SentimentDataViewSet, basename='sentiment')
 
 urlpatterns = [
     path('sentiment/search/', search_stocks, name='search-stocks'),
+    path('sentiment/market-diary/', views.get_market_diary, name='market-diary'),
     path('sentiment/screener/', get_screener_results, name='screener-results'),
     path('sentiment/screener/refresh/', refresh_screener_snapshot, name='screener-refresh'),
     path('sentiment/quality/', views.get_quality_analysis, name='quality-analysis'),

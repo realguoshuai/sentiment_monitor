@@ -13,7 +13,8 @@ def start():
     scheduler = BackgroundScheduler()
     scheduler.add_jobstore(DjangoJobStore(), "default")
 
-    # 每 1 小时运行一次采集
+    # 每 1 小时运行一次采集，显式设置下一次运行时间为 1 小时后，避免启动时由于历史错失（misfire）立即触发该重型任务
+    from datetime import datetime, timedelta
     scheduler.add_job(
         run_collector_job,
         trigger="interval",
@@ -24,6 +25,7 @@ def start():
         max_instances=1,
         coalesce=True,
         misfire_grace_time=15 * 60,
+        next_run_time=datetime.now() + timedelta(hours=1),
     )
 
     register_events(scheduler)

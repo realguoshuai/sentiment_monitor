@@ -182,6 +182,8 @@ export interface ScreenerResult {
   dividend_yield: number
   roe_pct: number
   roi_pct: number
+  net_cash_ratio: number
+  cfo_yield: number
   is_monitored: boolean
 }
 
@@ -243,6 +245,8 @@ export const stockApi = {
       {},
       { timeout: 120000 },
     ),
+  getMarketDiary: (symbol: string) =>
+    api.get<any>(`/sentiment/market-diary/?symbol=${symbol}`, { timeout: 30000 }),
 }
 
 export default api

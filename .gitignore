@@ -38,3 +38,5 @@ backend/sina_page.html
 backend/test_out.txt
 frontend/patch_*.py
 .DS_Store
+check_undefined.py
+clear_cache.py

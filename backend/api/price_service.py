@@ -5,6 +5,7 @@ import logging
 import math
 import pandas as pd
 from datetime import datetime
+from django.utils import timezone
 from django.core.cache import cache
 
 import numpy as np
@@ -226,20 +227,17 @@ class PriceService:
                 logger.warning("Tencent realtime returned no rows, using fallback data.")
                 return cached_fallback
             
-            # 强化实时行情：使用统一的股息率计算模型 (逻辑对齐：分红总额 / 当前价)
-            from .screener_service import ScreenerService
-            dividend_map = ScreenerService._get_latest_dividend_yield_map()
-            
             for sym, data in rt_data.items():
                 fallback = cached_fallback.get(sym) or spot_fallback.get(sym, {})
                 data.update(cls._merge_realtime_payload(sym, data, fallback, source='tencent'))
                 
-                # 注入高准确度股息率：使用 ScreenerService 提供的分红总额动态计算
-                div_info = dividend_map.get(sym)
-                if div_info and data.get('price', 0) > 0:
-                    cash_div = div_info.get('cash_div_total', 0)
-                    if cash_div > 0:
-                        data['dividend_yield'] = round((cash_div / data['price']) * 100, 3)
+                # 注入高准确度股息率：直接从雪球获取最新股息率
+                try:
+                    xq_yield = FundamentalService.get_xueqiu_dividend_yield(sym)
+                    if xq_yield > 0:
+                        data['dividend_yield'] = xq_yield
+                except Exception as xq_err:
+                    logger.warning(f"Failed to fetch dividend yield from Xueqiu for {sym}: {xq_err}")
 
             for fixed in fixed_symbols:
                 if fixed not in rt_data and fixed in cached_fallback:
@@ -409,11 +407,15 @@ class PriceService:
         # --- [增量缓存加速核心逻辑] ---
         # 缓存键包含周期，但不包含 limit (因为我们总是缓存全量并按需裁剪)
         raw_cache_key = f"price_history_raw_{fixed_symbol}_{fetch_period}"
-        cached_raw = cache.get(raw_cache_key) # [{date, price}, ...]
+        cached_raw = cache.get(raw_cache_key) # [{date, price, volume}, ...]
         
         price_list = []
         if isinstance(cached_raw, list) and cached_raw:
             price_list = cached_raw
+            # 兼容处理：补齐可能缺失的 volume 字段
+            for item in price_list:
+                if 'volume' not in item:
+                    item['volume'] = 0.0
             last_cached_date = price_list[-1]['date']
             today_str = timezone.localdate().strftime('%Y-%m-%d')
             
@@ -431,7 +433,12 @@ class PriceService:
                          for day in inc_data:
                              d_str = day[0]
                              if d_str > last_cached_date:
-                                 new_points.append({'date': d_str, 'price': cls._safe_float(day[2])})
+                                 volume = cls._safe_float(day[5]) if len(day) >= 6 else 0.0
+                                 new_points.append({
+                                     'date': d_str,
+                                     'price': cls._safe_float(day[2]),
+                                     'volume': volume
+                                 })
                          if new_points:
                              price_list.extend(new_points)
                              # 更新缓存
@@ -448,7 +455,12 @@ class PriceService:
                 days = data_res.get(fetch_period) or []
                 for day in days:
                     if len(day) < 3: continue
-                    price_list.append({'date': day[0], 'price': cls._safe_float(day[2])})
+                    volume = cls._safe_float(day[5]) if len(day) >= 6 else 0.0
+                    price_list.append({
+                        'date': day[0],
+                        'price': cls._safe_float(day[2]),
+                        'volume': volume
+                    })
                 price_list.sort(key=lambda x: x['date'])
                 if price_list:
                     cache.set(raw_cache_key, price_list, 86400 * 7)
@@ -599,7 +611,10 @@ class PriceService:
 
         # 4. 组装结果
         history = []
-        df_final = df[['date', 'price', 'pe', 'pb', 'dividend_yield', 'roi']].round(2)
+        cols = ['date', 'price', 'pe', 'pb', 'dividend_yield', 'roi']
+        if 'volume' in df.columns:
+            cols.append('volume')
+        df_final = df[cols].round(2)
         history = df_final.to_dict(orient='records')
 
         if requested_period == 'annual' and history:

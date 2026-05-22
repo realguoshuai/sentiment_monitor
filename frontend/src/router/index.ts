@@ -46,6 +46,11 @@ const router = createRouter({
       name: 'quality-analysis',
       component: () => import('@/views/QualityView.vue'),
       props: true
+    },
+    {
+      path: '/diary',
+      name: 'market-diary',
+      component: () => import('@/views/DiaryView.vue')
     }
   ]
 })

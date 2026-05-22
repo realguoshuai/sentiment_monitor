@@ -75,7 +75,10 @@ class FundamentalCalculator:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         
         # 计算价格
-        df['price'] = df.apply(lambda r: cls.safe_ratio(r.get('total_market_cap', 0), r.get('total_shares', 0)), axis=1)
+        if 'price' not in df.columns:
+            df['price'] = df.apply(lambda r: cls.safe_ratio(r.get('total_market_cap', 0), r.get('total_shares', 0)), axis=1)
+        else:
+            df['price'] = df.apply(lambda r: cls.safe_ratio(r.get('total_market_cap', 0), r.get('total_shares', 0)) or r.get('price', 0), axis=1)
         
         latest_date = df['end_date'].max()
         cutoff = latest_date - pd.DateOffset(years=10)
@@ -96,11 +99,13 @@ class FundamentalCalculator:
         latest_count = float(window.iloc[-1]['holder_count'])
         change_pct = cls.safe_ratio(latest_count - base_count, base_count) * 100 if base_count > 0 else 0
         
+        latest_price = float(window.iloc[-1].get('price', 0) or 0)
         summary = {
             'latest_holder_count': int(latest_count),
             'holder_count_change_pct': round(change_pct, 2),
             'holder_trend_label': cls.classify_holder_trend(change_pct),
             'latest_stat_date': latest_date.strftime('%Y-%m-%d'),
+            'latest_price': round(latest_price, 2),
         }
         
         # 只对数值列进行 round(4)，避免对 datetime 列调用 round 触发 UserWarning
@@ -118,6 +123,33 @@ class FundamentalCalculator:
         """核心计算逻辑：杜邦分析、护城河、派息质量等"""
         if df_profit.empty or df_balance.empty: return {}
         
+        # 统一列名以应对中英文/历史/不同接口差异
+        profit_aliases = {
+            'REPORT_DATE': ['REPORT_DATE', '报告期', '截止日期', 'REPORT_DATE'],
+            'TOTAL_OPERATE_INCOME': ['TOTAL_OPERATE_INCOME', '营业总收入', '营业收入', 'TOTAL_OPERATE_INCOME'],
+            'PARENT_NETPROFIT': ['PARENT_NETPROFIT', '归属于母公司所有者的净利润', '净利润', 'PARENT_NETPROFIT'],
+            'OPERATE_COST': ['OPERATE_COST', '营业成本', 'OPERATE_COST'],
+            'BASIC_EPS': ['BASIC_EPS', '基本每股收益', '每股收益', 'BASIC_EPS'],
+            'NOTICE_DATE': ['NOTICE_DATE', '公告日期', '公告日', 'NOTICE_DATE'],
+        }
+        balance_aliases = {
+            'REPORT_DATE': ['REPORT_DATE', '报告期', '截止日期', 'REPORT_DATE'],
+            'TOTAL_PARENT_EQUITY': ['TOTAL_PARENT_EQUITY', '归属于母公司股东权益合计', '归属于母公司所有者权益合计', '股东权益合计', 'TOTAL_PARENT_EQUITY'],
+            'TOTAL_ASSETS': ['TOTAL_ASSETS', '资产总额', '资产总计', 'TOTAL_ASSETS'],
+        }
+        
+        df_profit = df_profit.copy()
+        for target, cands in profit_aliases.items():
+            src = cls.first_existing_column(df_profit, cands)
+            if src and src != target:
+                df_profit[target] = df_profit[src]
+                
+        df_balance = df_balance.copy()
+        for target, cands in balance_aliases.items():
+            src = cls.first_existing_column(df_balance, cands)
+            if src and src != target:
+                df_balance[target] = df_balance[src]
+
         try:
             # 1. 预处理
             df_profit['REPORT_DATE'] = pd.to_datetime(df_profit['REPORT_DATE'])
@@ -192,6 +224,39 @@ class FundamentalCalculator:
             # 在生成 Summary 之前，全量清理 DataFrame 中的 NaN 和 Inf
             df = df.replace([np.inf, -np.inf], np.nan).fillna(0)
             
+            # 补齐原有指标列以供测试和老前端兼容
+            df['cfo_to_profit_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('cfo', 0), r.get('PARENT_NETPROFIT', 0)) * 100, axis=1)
+            df['fcf_to_profit_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('fcf', 0), r.get('PARENT_NETPROFIT', 0)) * 100, axis=1)
+            df['capex_intensity_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('capex', 0), r.get('TOTAL_OPERATE_INCOME', 0)) * 100, axis=1)
+            df['reinvestment_rate_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('capex', 0), r.get('cfo', 0)) * 100, axis=1)
+            df['retention_ratio_pct'] = 100 - df.get('payout_ratio', 0)
+            
+            # Invested Capital & ROIC 兼容计算
+            df['invested_capital'] = df.get('invested_capital', 0)
+            previous_invested_capital = df['invested_capital'].shift(1)
+            df['avg_invested_capital'] = df.apply(
+                lambda r: (r['invested_capital'] + (previous_invested_capital.loc[r.name] if pd.notnull(previous_invested_capital.loc[r.name]) else r['invested_capital'])) / 2,
+                axis=1
+            )
+            df['roic_proxy_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('PARENT_NETPROFIT', 0), r.get('avg_invested_capital', 1)) * 100, axis=1)
+            df['roic_pct'] = df['roic_proxy_pct']
+            
+            df['implied_share_count'] = df.get('shares', 0)
+            df['book_value_per_share'] = df.get('bvps', 0)
+            df['book_value_per_share_growth_pct'] = df.get('bvps_growth_pct', 0)
+            df['equity_growth_pct'] = df['TOTAL_PARENT_EQUITY'].pct_change().fillna(0) * 100
+            
+            # 补齐资产负债表与风险指标
+            df['net_cash'] = df['cash_balance'] - df['interest_bearing_debt']
+            df['debt_to_equity_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('interest_bearing_debt', 0), r.get('TOTAL_PARENT_EQUITY', 0)) * 100, axis=1)
+            df['debt_to_assets_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('interest_bearing_debt', 0), r.get('TOTAL_ASSETS', 0)) * 100, axis=1)
+            df['net_cash_to_equity_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('net_cash', 0), r.get('TOTAL_PARENT_EQUITY', 0)) * 100, axis=1)
+            df['short_debt_coverage_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('cash_balance', 0), r.get('short_debt', 0)) * 100 if r.get('short_debt', 0) > 0 else 0, axis=1)
+            
+            df['receivable_inventory_prepay_balance'] = df.get('receivable_balance', 0) + df.get('inventory_balance', 0) + df.get('prepayment_balance', 0)
+            df['receivable_inventory_prepay_to_revenue_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('receivable_inventory_prepay_balance', 0), r.get('TOTAL_OPERATE_INCOME', 0)) * 100, axis=1)
+            df['goodwill_to_equity_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('goodwill_balance', 0), r.get('TOTAL_PARENT_EQUITY', 0)) * 100, axis=1)
+            
             # 6. 生成 Summary
             latest = df.iloc[-1]
             stability_window = df.tail(5)
@@ -200,11 +265,12 @@ class FundamentalCalculator:
             n_vol = cls.series_volatility(stability_window['net_margin'])
             roe_vol = cls.series_volatility(stability_window['roe'])
             rev_vol = cls.series_volatility(stability_window['revenue_growth_pct'])
+            roic_proxy_vol = cls.series_volatility(stability_window['roic_proxy_pct'])
             
             # 资本分配分析
             capital_allocation_label = cls.classify_capital_allocation(
-                float(latest.get('roic_pct', latest['roe'])),
-                float(latest.get('bvps_growth_pct', 0)),
+                float(latest.get('roic_proxy_pct', latest['roe'])),
+                float(latest.get('book_value_per_share_growth_pct', 0)),
                 float(latest.get('share_change_pct', 0)),
                 float(latest.get('payout_ratio', 0))
             )
@@ -214,22 +280,76 @@ class FundamentalCalculator:
                 'cashflow_summary': {
                     'latest_cfo': round(float(latest['cfo']), 2),
                     'latest_fcf': round(float(latest['fcf']), 2),
-                    'cashflow_quality_label': cls.classify_cashflow_quality(latest['roe'], 60), # 占位
+                    'latest_cfo_to_profit_pct': round(float(latest.get('cfo_to_profit_pct', 0)), 2),
+                    'latest_fcf_to_profit_pct': round(float(latest.get('fcf_to_profit_pct', 0)), 2),
+                    'latest_capex_intensity_pct': round(float(latest.get('capex_intensity_pct', 0)), 2),
+                    'latest_fcf_yield_pct': round(cls.safe_ratio(float(latest['fcf']), market_cap) * 100 if market_cap > 0 else 0, 2),
+                    'cashflow_quality_label': cls.classify_cashflow_quality(latest.get('cfo_to_profit_pct', 0), latest.get('fcf_to_profit_pct', 0)),
+                    'capex_source': capex_source,
                 },
                 'capital_allocation_summary': {
                     'capital_allocation_label': capital_allocation_label,
                     'financing_label': financing_label,
+                    'financing_signal': financing_label,  # 兼容老版本
+                    'latest_roic_proxy_pct': round(float(latest.get('roic_proxy_pct', 0)), 2),
+                    'latest_reinvestment_rate_pct': round(float(latest.get('reinvestment_rate_pct', 0)), 2),
+                    'latest_retention_ratio_pct': round(float(latest.get('retention_ratio_pct', 0)), 2),
+                    'latest_share_change_pct': round(float(latest.get('share_change_pct', 0)), 2),
+                    'latest_book_value_per_share': round(float(latest.get('book_value_per_share', 0)), 2),
+                    'latest_book_value_per_share_growth_pct': round(float(latest.get('book_value_per_share_growth_pct', 0)), 2),
+                    'latest_equity_growth_pct': round(float(latest.get('equity_growth_pct', 0)), 2),
                     'latest_payout_ratio': round(float(latest.get('payout_ratio', 0)), 2),
                     'latest_dps': round(float(latest.get('dps', 0)), 4),
+                    'invested_capital_source': inv_cap_source,
                 },
                 'stability_summary': {
+                    'window_years': int(len(stability_window)),
+                    'gross_margin_volatility_pct': round(g_vol, 2),
+                    'net_margin_volatility_pct': round(n_vol, 2),
+                    'roe_volatility_pct': round(roe_vol, 2),
+                    'roic_proxy_volatility_pct': round(roic_proxy_vol, 2),
+                    'operating_stability_label': cls.classify_margin_stability(g_vol, n_vol),
+                    'return_stability_label': cls.classify_return_stability(roe_vol, roic_proxy_vol),
+                    'negative_growth_years': int((stability_window['revenue_growth_pct'] < 0).sum()),
                     'moat_label': cls.classify_moat_strength(stability_window['gross_margin'].mean(), g_vol, n_vol),
                     'cyclical_label': cls.classify_cyclicality(rev_vol, (stability_window['revenue_growth_pct'] < 0).sum(), roe_vol, 10),
                 },
                 'balance_sheet_summary': {
-                    'risk_flags': cls.build_balance_sheet_flags(30, 150, 40, 5, float(latest['interest_bearing_debt'])),
+                    'latest_cash_balance': round(float(latest.get('cash_balance', 0)), 2),
+                    'latest_interest_bearing_debt': round(float(latest.get('interest_bearing_debt', 0)), 2),
+                    'latest_net_cash': round(float(latest.get('net_cash', 0)), 2),
+                    'latest_short_debt': round(float(latest.get('short_debt', 0)), 2),
+                    'latest_short_debt_coverage_pct': round(float(latest.get('short_debt_coverage_pct', 0)), 2),
+                    'latest_debt_to_equity_pct': round(float(latest.get('debt_to_equity_pct', 0)), 2),
+                    'latest_debt_to_assets_pct': round(float(latest.get('debt_to_assets_pct', 0)), 2),
+                    'latest_net_cash_to_equity_pct': round(float(latest.get('net_cash_to_equity_pct', 0)), 2),
+                    'latest_receivable_inventory_prepay_to_revenue_pct': round(float(latest.get('receivable_inventory_prepay_to_revenue_pct', 0)), 2),
+                    'latest_goodwill_to_equity_pct': round(float(latest.get('goodwill_to_equity_pct', 0)), 2),
+                    'liquidity_label': cls.classify_liquidity(
+                        float(latest.get('short_debt_coverage_pct', 0)),
+                        float(latest.get('net_cash_to_equity_pct', 0)),
+                        float(latest.get('interest_bearing_debt', 0)),
+                    ),
+                    'asset_quality_label': cls.classify_asset_quality(
+                        float(latest.get('receivable_inventory_prepay_to_revenue_pct', 0)),
+                        float(latest.get('goodwill_to_equity_pct', 0)),
+                    ),
+                    'balance_sheet_label': cls.classify_balance_sheet_risk(
+                        float(latest.get('debt_to_equity_pct', 0)),
+                        float(latest.get('short_debt_coverage_pct', 0)),
+                        float(latest.get('receivable_inventory_prepay_to_revenue_pct', 0)),
+                        float(latest.get('goodwill_to_equity_pct', 0)),
+                        float(latest.get('interest_bearing_debt', 0)),
+                    ),
+                    'risk_flags': cls.build_balance_sheet_flags(
+                        float(latest.get('debt_to_equity_pct', 0)),
+                        float(latest.get('short_debt_coverage_pct', 0)),
+                        float(latest.get('receivable_inventory_prepay_to_revenue_pct', 0)),
+                        float(latest.get('goodwill_to_equity_pct', 0)),
+                        float(latest.get('interest_bearing_debt', 0)),
+                    ),
                 },
-                'quality_history': df.tail(10).select_dtypes(include=[np.number]).round(4).combine_first(df.tail(10)).to_dict(orient='records'),
+                'history': df.tail(10).select_dtypes(include=[np.number]).round(4).combine_first(df.tail(10)).to_dict(orient='records'),
             }
             return cls.clean_json_data(summary)
         except Exception as e:
@@ -241,6 +361,31 @@ class FundamentalCalculator:
         """计算 TTM 利润与净资产对齐序列"""
         if df_profit.empty:
             return pd.DataFrame()
+
+        # 统一列名以应对中英文/历史/不同接口差异
+        profit_aliases = {
+            'REPORT_DATE': ['REPORT_DATE', '报告期', '截止日期', 'REPORT_DATE'],
+            'PARENT_NETPROFIT': ['PARENT_NETPROFIT', '归属于母公司所有者的净利润', '净利润', 'PARENT_NETPROFIT'],
+            'NOTICE_DATE': ['NOTICE_DATE', '公告日期', '公告日', 'NOTICE_DATE'],
+        }
+        balance_aliases = {
+            'REPORT_DATE': ['REPORT_DATE', '报告期', '截止日期', 'REPORT_DATE'],
+            'TOTAL_PARENT_EQUITY': ['TOTAL_PARENT_EQUITY', '归属于母公司股东权益合计', '归属于母公司所有者权益合计', '股东权益合计', 'TOTAL_PARENT_EQUITY'],
+            'TOTAL_ASSETS': ['TOTAL_ASSETS', '资产总额', '资产总计', 'TOTAL_ASSETS'],
+        }
+        
+        df_profit = df_profit.copy()
+        for target, cands in profit_aliases.items():
+            src = cls.first_existing_column(df_profit, cands)
+            if src and src != target:
+                df_profit[target] = df_profit[src]
+                
+        if df_balance is not None and not df_balance.empty:
+            df_balance = df_balance.copy()
+            for target, cands in balance_aliases.items():
+                src = cls.first_existing_column(df_balance, cands)
+                if src and src != target:
+                    df_balance[target] = df_balance[src]
 
         # 1. 利润表处理
         df_profit = df_profit[['REPORT_DATE', 'PARENT_NETPROFIT', 'NOTICE_DATE']].copy()
