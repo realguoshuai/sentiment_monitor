@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 
 class ScreenerService:
+    # East Money CDN 子域名列表（个别子域名可能间歇性不可用）
+    EASTMONEY_SUBDOMAINS = [82, 83, 81, 90, 66, 55, 92, 91, 80]
     BATCH_SIZE = 160
     MAX_PAGE_SIZE = 200
     DEFAULT_PAGE_SIZE = 50
@@ -296,7 +298,6 @@ class ScreenerService:
             os.environ['NO_PROXY'] = ','.join(current_hosts)
 
     @classmethod
-    @classmethod
     def _bypass_proxy(cls):
         """保存并清除代理环境变量，避免本地代理拦截东方财富等直连请求"""
         saved = {}
@@ -314,31 +315,104 @@ class ScreenerService:
     @classmethod
     def _fetch_upstream_snapshot(cls) -> tuple[pd.DataFrame, Exception | None]:
         last_error = None
-        fetchers = [
-            ak.stock_zh_a_spot_em,
-            ak.stock_zh_a_spot,
-        ]
 
+        # 1) 直连东财 API（单请求不分页 + 多子域名容错 + 绕过 Windows 系统代理）
+        df, error = cls._fetch_eastmoney_direct()
+        if df is not None and not df.empty:
+            return df, None
+        last_error = error
+
+        # 2) AkShare 东财接口（带自动分页，固定子域名 82）
         saved_proxy = cls._bypass_proxy()
         try:
-            for fetcher in fetchers:
-                if fetcher is ak.stock_zh_a_spot:
-                    cls._ensure_no_proxy_hosts(['.sina.com.cn', 'vip.stock.finance.sina.com.cn'])
-
-                df = pd.DataFrame()
-                for attempt in range(cls.SNAPSHOT_FETCH_RETRIES):
-                    try:
-                        df = fetcher()
-                        if df is not None and not df.empty:
-                            return df, None
-                    except Exception as exc:
-                        last_error = exc
-                        if attempt < cls.SNAPSHOT_FETCH_RETRIES - 1:
-                            time.sleep(1.5 * (attempt + 1))
+            for attempt in range(cls.SNAPSHOT_FETCH_RETRIES):
+                try:
+                    df = ak.stock_zh_a_spot_em()
+                    if df is not None and not df.empty:
+                        return df, None
+                except Exception as exc:
+                    last_error = exc
+                    if attempt < cls.SNAPSHOT_FETCH_RETRIES - 1:
+                        time.sleep(1.5 * (attempt + 1))
         finally:
             cls._restore_proxy(saved_proxy)
 
+        # 3) 新浪源（最后兜底）
+        if last_error is not None:
+            logger.warning("East Money upstreams all failed, trying Sina fallback: %s", last_error)
+        try:
+            saved_proxy2 = cls._bypass_proxy()
+            try:
+                cls._ensure_no_proxy_hosts(['.sina.com.cn', 'vip.stock.finance.sina.com.cn'])
+                df = ak.stock_zh_a_spot()
+                if df is not None and not df.empty:
+                    return df, None
+            except Exception as exc:
+                last_error = exc
+            finally:
+                cls._restore_proxy(saved_proxy2)
+        except Exception as exc:
+            last_error = exc
+
         return pd.DataFrame(), last_error
+
+    @classmethod
+    def _fetch_eastmoney_direct(cls) -> tuple[pd.DataFrame, Exception | None]:
+        """直连东方财富 API，不分页 + 多子域名容错 + 绕过 Windows 系统代理"""
+        import requests as req
+
+        params = {
+            'pn': '1', 'pz': '6000', 'po': '1', 'np': '1',
+            'ut': 'bd1d9ddb04089700cf9c27f6f7426281',
+            'fltt': '2', 'invt': '2', 'fid': 'f3',
+            'fs': 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048',
+            'fields': 'f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23,f24,f25,f22,f11,f62,f128,f136,f115,f152',
+        }
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://quote.eastmoney.com/',
+        }
+
+        session = req.Session()
+        session.trust_env = False  # 绕过 Windows 系统代理（PAC/注册表）
+
+        last_error = None
+        for subdomain in cls.EASTMONEY_SUBDOMAINS:
+            for proto in ('https', 'http'):
+                url = f'{proto}://{subdomain}.push2.eastmoney.com/api/qt/clist/get'
+                try:
+                    r = session.get(url, params=params, headers=headers, timeout=(10, 20))
+                    if r.status_code == 200:
+                        data = r.json()
+                        rows = data.get('data', {}).get('diff')
+                        if rows:
+                            df = pd.DataFrame(rows)
+                            df = cls._rename_em_fields(df)
+                            if not df.empty:
+                                return df, None
+                except Exception as exc:
+                    last_error = exc
+                    continue
+
+        return pd.DataFrame(), last_error
+
+    @staticmethod
+    def _rename_em_fields(df: pd.DataFrame) -> pd.DataFrame:
+        """东财 API 字段编码 → 中文列名"""
+        mapping = {
+            'f2': '最新价', 'f3': '涨跌幅', 'f4': '涨跌额',
+            'f5': '成交量', 'f6': '成交额', 'f7': '振幅',
+            'f8': '换手率', 'f9': '市盈率-动态', 'f10': '量比',
+            'f11': '5分钟涨跌', 'f12': '代码', 'f14': '名称',
+            'f15': '最高', 'f16': '最低', 'f17': '今开',
+            'f18': '昨收', 'f20': '总市值', 'f21': '流通市值',
+            'f22': '涨速', 'f23': '市净率', 'f24': '60日涨跌幅',
+            'f25': '年初至今涨跌幅', 'f62': '主力净流入',
+            'f136': '所处行业',
+        }
+        rename = {k: v for k, v in mapping.items() if k in df.columns}
+        df = df.rename(columns=rename)
+        return df
 
     @classmethod
     def _get_cached_snapshot_frame(cls) -> pd.DataFrame:

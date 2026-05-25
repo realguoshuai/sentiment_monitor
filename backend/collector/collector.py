@@ -43,6 +43,10 @@ def _safe_pub_date(value, fallback: date) -> date:
     return parsed or fallback
 
 
+def _normalize_text(val, max_length=50):
+    return str(val or '')[:max_length]
+
+
 def _dedupe_items(items, *, title_length=60):
     seen = set()
     unique_items = []
@@ -113,14 +117,11 @@ def _build_report_records(sentiment, items, fallback_date: date):
             title=title[:300],
             pub_date=_safe_pub_date(item.get('pub_date'), fallback_date),
             org=_normalize_title(item.get('org'))[:100],
-            rating=_normalize_text(item.get('rating'))[:50] if '_normalize_text' in globals() else str(item.get('rating', '')),
+            rating=_normalize_text(item.get('rating')),
             url=str(item.get('url') or '').strip(),
         ))
     return records
 
-# Fix for missing _normalize_text in helper
-def _normalize_text(val, max_length=50):
-    return str(val or '')[:max_length]
 
 
 def _build_announcement_records(sentiment, items, fallback_date: date):
