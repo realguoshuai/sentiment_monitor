@@ -135,7 +135,7 @@ CACHES = {
         'LOCATION': cache_dir,
         'TIMEOUT': 43200,
         'OPTIONS': {
-            'MAX_ENTRIES': 5000
+            'MAX_ENTRIES': 50000
         }
     }
 }

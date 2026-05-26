@@ -24,12 +24,8 @@ class ApiConfig(AppConfig):
             from . import scheduler
             scheduler.start()
 
-        # 支持在 uvicorn 启动时显式开启后台预热，但不阻塞服务启动
-        warm_requested = (
-            os.environ.get('RUN_MAIN') == 'true'
-            or os.environ.get('ENABLE_STARTUP_WARM') == '1'
-        )
-        if warm_requested and not ApiConfig._warm_started:
+        # 后台预热缓存，不阻塞服务启动（_warm_started 防重复）
+        if not ApiConfig._warm_started:
             ApiConfig._warm_started = True
             import threading
             threading.Thread(target=self.warm_valuation_cache, daemon=True).start()
