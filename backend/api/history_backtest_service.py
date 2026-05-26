@@ -126,6 +126,8 @@ class HistoryBacktestService:
         def task():
             try:
                 cls.get_history_backtest(symbol)
+            except Exception as exc:
+                logger.error("History backtest background refresh failed for %s: %s", symbol, exc)
             finally:
                 cache.delete(refresh_key)
 

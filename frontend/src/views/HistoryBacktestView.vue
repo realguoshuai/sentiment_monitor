@@ -279,9 +279,86 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { echarts, type ECharts } from '@/lib/echarts'
-import { stockApi } from '@/api'
 import { useSentimentStore } from '@/stores/sentiment'
 import { useInvestorLoadingQuotes } from '@/composables/useInvestorLoadingQuotes'
+
+interface HorizonStats {
+  avg_return: number
+  median_return?: number
+  win_rate: number
+  count?: number
+}
+
+interface PercentileBucket {
+  bucket: string
+  sample_count: number
+  '1y': number
+  '3y': number
+  '5y': number
+}
+
+interface PercentileSample {
+  date: string
+  bucket: string
+  pb_pct: number
+  future_return_1y: number
+  future_return_3y: number
+  future_return_5y: number
+}
+
+interface QualityComboSample {
+  date: string
+  price: number
+  dividend_yield_pct: number
+  roi_pct: number
+  pb_pct: number
+  future_return_1y: number
+  future_return_3y: number
+  future_return_5y: number
+}
+
+interface SentimentSample {
+  date: string
+  sentiment_score: number
+  sentiment_label: string
+  pb_pct: number
+  pe_pct: number
+  dividend_yield_pct: number
+  roi_pct: number
+  future_return_5d: number
+  future_return_20d: number
+}
+
+interface BacktestPayload {
+  symbol: string
+  cache_status?: 'fresh' | 'stale'
+  background_refreshing?: boolean
+  sample_summary: { monthly_points: number; daily_points: number }
+  methodology: {
+    low_valuation: string
+    percentile_relation: string
+    quality_combo: string
+    sentiment_value: string
+  }
+  low_valuation_returns: { horizons: Record<string, HorizonStats> }
+  percentile_future_returns: {
+    buckets: PercentileBucket[]
+    samples: PercentileSample[]
+  }
+  quality_combo_performance: {
+    definition: string
+    signal_count: number
+    horizons: Record<string, HorizonStats>
+    samples: QualityComboSample[]
+  }
+  sentiment_value_signal: {
+    definition: string
+    sample_count: number
+    latest_signal_date?: string
+    horizons: Record<string, HorizonStats>
+    samples: SentimentSample[]
+  }
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -290,7 +367,7 @@ const symbol = route.params.symbol as string
 
 const loading = ref(true)
 const error = ref('')
-const data = ref<any>(null)
+const data = ref<BacktestPayload | null>(null)
 const { loadingQuote } = useInvestorLoadingQuotes(loading)
 const bucketChartRef = ref<HTMLElement | null>(null)
 let bucketChart: ECharts | null = null
@@ -300,12 +377,12 @@ const stockName = computed(() => {
 })
 
 const methodologyItems = computed(() => {
-  const methodology = data.value?.methodology || {}
+  const m = data.value?.methodology
   return [
-    { key: 'low_valuation', label: '低估区规则', text: methodology.low_valuation || '--' },
-    { key: 'percentile_relation', label: '分位数规则', text: methodology.percentile_relation || '--' },
-    { key: 'quality_combo', label: '组合规则', text: methodology.quality_combo || '--' },
-    { key: 'sentiment_value', label: '情绪联合信号', text: methodology.sentiment_value || '--' },
+    { key: 'low_valuation', label: '低估区规则', text: m?.low_valuation || '--' },
+    { key: 'percentile_relation', label: '分位数规则', text: m?.percentile_relation || '--' },
+    { key: 'quality_combo', label: '组合规则', text: m?.quality_combo || '--' },
+    { key: 'sentiment_value', label: '情绪联合信号', text: m?.sentiment_value || '--' },
   ]
 })
 
@@ -433,7 +510,7 @@ onMounted(async () => {
       loading.value = false
       await nextTick()
       renderBucketChart()
-      if (data.value.cache_status === 'stale') {
+      if (data.value!.cache_status === 'stale') {
          void store.getBacktest(symbol, true).then(res => {
             data.value = res
             renderBucketChart()

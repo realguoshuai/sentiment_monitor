@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="analysis-detail">
     <header class="page-header hero-card">
       <div class="stock-info hero-copy" v-if="stockData">
@@ -61,7 +61,7 @@
             </div>
           </div>
           <div class="loading-quote">
-            <p>“{{ loadingQuote.text }}”</p>
+            <p>"{{ loadingQuote.text }}"</p>
             <span>{{ loadingQuote.author }}</span>
           </div>
           <button type="button" class="loading-back-btn" @click="goDashboard">
@@ -83,565 +83,50 @@
         <span v-if="analysisCacheAtText" class="analysis-cache-time">{{ analysisCacheAtText }}</span>
       </section>
 
-      <!-- 1. 深度对比图表 -->
-      <section class="section chart-section">
-        <div class="chart-layout">
-          <div class="chart-main">
-            <div class="section-header">
-              <div>
-                <p class="section-kicker">Relative Positioning</p>
-                <h2>{{ getMetricLabel(activeMetric) }} 历史对比</h2>
-                <p class="subtitle">10 年期月线叠加，先判断当前位置，再看是否进入安全区。</p>
-              </div>
-
-              <div class="chart-tabs">
-                <button
-                  v-for="t in ['pe', 'pb', 'roi', 'dy']"
-                  :key="t"
-                  :class="{ active: activeMetric === t }"
-                  @click="activeMetric = t"
-                >
-                  {{ t.toUpperCase() }}
-                </button>
-              </div>
-            </div>
-            <div ref="chartRef" class="analysis-chart"></div>
-            <div class="chart-summary" v-if="!isMultiView">
-              当前处于历史 <strong>{{ getPercentilePos(activeMetric) }}</strong> 分位
-              <span v-if="isUnderValued" class="signal-buy">信号：绝对安全区</span>
-            </div>
-
-            <div class="chart-summary multi-summary" v-else>
-              正在进行 <strong>{{ compareSymbols.length }}</strong> 家标的叠加对比
-              <span v-if="loadingCompare" class="compare-loading-inline">
-                <span class="inline-loader"></span>
-                正在拉取新矩阵数据
-              </span>
-            </div>
-          </div>
-
-          <aside class="chart-sidebar">
-            <article class="sidebar-card">
-              <span class="mini-label">当前位置</span>
-              <strong>{{ getPercentilePos(activeMetric) }}</strong>
-              <p>{{ getMetricLabel(activeMetric) }} 当前值 {{ formatMetric(activePercentile?.current, activeMetric) }}</p>
-            </article>
-
-            <article class="sidebar-card" v-if="activePercentile">
-              <span class="mini-label">历史坐标</span>
-              <div class="metric-rows">
-                <div class="metric-row">
-                  <span>P10</span>
-                  <strong>{{ formatMetric(activePercentile.p10, activeMetric) }}</strong>
-                </div>
-                <div class="metric-row">
-                  <span>P50</span>
-                  <strong>{{ formatMetric(activePercentile.p50, activeMetric) }}</strong>
-                </div>
-                <div class="metric-row">
-                  <span>P90</span>
-                  <strong>{{ formatMetric(activePercentile.p90, activeMetric) }}</strong>
-                </div>
-              </div>
-            </article>
-
-            <article class="sidebar-card accent-card" v-if="valuationConclusion && expectedReturn">
-              <span class="mini-label">决策抓手</span>
-              <strong>{{ valuationConclusion.summary }}</strong>
-              <div class="metric-rows">
-                <div class="metric-row">
-                  <span>安全边际</span>
-                  <strong>{{ formatPct(valuationConclusion.margin_of_safety.pct) }}</strong>
-                </div>
-                <div class="metric-row">
-                  <span>预期年化</span>
-                  <strong>{{ formatPct(expectedReturn.total_annual_return_pct) }}</strong>
-                </div>
-              </div>
-            </article>
-          </aside>
-        </div>
-      </section>
+      <ValuationChart
+        :analysisData="analysisData"
+        :compareSymbols="compareSymbols"
+        :compareDataMap="compareDataMap"
+        :loadingCompare="loadingCompare"
+      />
 
       <div class="grid-layout">
-        <!-- 2. F-Score 安全性矩阵?-->
-        <section class="section safety-section">
-          <div class="section-header compact-header">
-            <div>
-              <p class="section-kicker">Safety Screen</p>
-              <h2>F-Score 排雷</h2>
-              <p class="subtitle">把九项财务信号压缩到一屏，快速剔除价值陷阱。</p>
-            </div>
-            <div class="score-pill" :class="getScoreClass(analysisData.f_score.score)">
-              {{ analysisData.f_score.score }}/10
-            </div>
-          </div>
-          <div class="f-score-matrix">
-            <div v-for="item in analysisData.f_score.details" :key="item.name" class="matrix-item">
-              <div class="matrix-copy">
-                <span class="matrix-name">{{ item.name }}</span>
-                <span class="matrix-val">{{ item.val }}</span>
-              </div>
-              <span class="matrix-status" :class="{ passed: item.passed, failed: !item.passed }">
-                {{ item.passed ? '通过' : '警惕' }}
-              </span>
-            </div>
-          </div>
-          <p class="section-footer">7 分以上通常代表财务结构扎实，3 分以下需要高度警惕“便宜但不安全”。</p>
-        </section>
+        <FScoreMatrix
+          :score="analysisData?.f_score?.score ?? 0"
+          :details="analysisData?.f_score?.details ?? []"
+        />
 
 
-        <!-- 3. 估值结论层 -->
-                <section class="section fair-value-section" v-if="valuationConclusion && valuationRange && expectedReturn">
-          <div class="valuation-header">
-            <div>
-              <h2>估值分析结论层</h2>
-              <p class="section-footer section-footer-tight">综合 ROE-PB、盈利能力与股东自由现金流三种口径，给出加权估值区间。</p>
-            </div>
-            <div class="valuation-summary" :class="valuationSummaryClass">
-              <span class="summary-label">综合判断</span>
-              <strong>{{ valuationConclusion.summary }}</strong>
-            </div>
-          </div>
-          <div class="valuation-grid">
-            <div class="valuation-card valuation-card-primary">
-              <span class="valuation-card-title">综合合理价值区间</span>
-              <div class="valuation-main">{{ formatPrice(valuationRange.price_low) }} - {{ formatPrice(valuationRange.price_high) }}</div>
-              <div class="valuation-sub">基准价 {{ formatPrice(valuationRange.price_base) }}</div>
-              <div class="valuation-note">
-                {{ valuationModelCount }} 个模型加权 | 模型分歧 {{ formatPct(valuationBlend?.spread_pct) }}
-              </div>
-            </div>
-            <div class="valuation-card">
-              <span class="valuation-card-title">折价 / 溢价</span>
-              <div class="valuation-main">{{ valuationConclusion.discount_premium.label }}</div>
-              <div class="valuation-sub">{{ formatPct(valuationConclusion.discount_premium.pct) }}</div>
-              <div class="valuation-note">相对综合基准价值</div>
-            </div>
-            <div class="valuation-card">
-              <span class="valuation-card-title">安全边际</span>
-              <div class="valuation-main">{{ valuationConclusion.margin_of_safety.label }}</div>
-              <div class="valuation-sub">{{ formatPct(valuationConclusion.margin_of_safety.pct) }}</div>
-              <div class="valuation-note">保守估值线 {{ formatPrice(valuationConclusion.margin_of_safety.floor_price) }}</div>
-            </div>
-            <div class="valuation-card">
-              <span class="valuation-card-title">预期年化回报</span>
-              <div class="valuation-main">{{ formatPct(expectedReturn.total_annual_return_pct) }}</div>
-              <div class="valuation-sub">{{ expectedReturn.holding_years }} 年视角</div>
-              <div class="valuation-note">经营回报 + 股息 + 估值回归</div>
-            </div>
-          </div>
-          <div class="valuation-grid valuation-grid-secondary">
-            <div class="valuation-card">
-              <span class="valuation-card-title">预期收益拆解</span>
-              <div class="valuation-row">
-                <span>经营回报</span>
-                <strong>{{ formatPct(expectedReturn.business_return_pct) }}</strong>
-              </div>
-              <div class="valuation-row">
-                <span>股息收益</span>
-                <strong>{{ formatPct(expectedReturn.dividend_yield_pct) }}</strong>
-              </div>
-              <div class="valuation-row">
-                <span>估值回归</span>
-                <strong>{{ formatPct(expectedReturn.re_rating_annual_pct) }}</strong>
-              </div>
-            </div>
-            <div class="valuation-card">
-              <span class="valuation-card-title">信号与假设</span>
-              <div class="valuation-row">
-                <span>PB 分位</span>
-                <strong>{{ valuationConclusion.signals.pb_percentile_zone }}</strong>
-              </div>
-              <div class="valuation-row">
-                <span>股息率分位</span>
-                <strong>{{ valuationConclusion.signals.dy_percentile_zone }}</strong>
-              </div>
-              <div class="valuation-row">
-                <span>前瞻 ROE</span>
-                <strong>{{ formatPct(valuationConclusion.assumptions.expected_roe) }}</strong>
-              </div>
-              <div class="valuation-row">
-                <span>模型一致性</span>
-                <strong>{{ valuationConclusion.signals.model_alignment_label }}</strong>
-              </div>
-            </div>
-            <div class="valuation-card">
-              <span class="valuation-card-title">敏感度演算</span>
-              <div class="calculator">
-                <div class="input-group">
-                  <label>预期 ROE (%)</label>
-                  <input type="number" v-model="calcParams.expectedRoe" step="0.5" />
-                </div>
-                <div class="input-group">
-                  <label>要求回报率 (%)</label>
-                  <input type="number" v-model="calcParams.requiredReturn" step="1" />
-                </div>
-                <div class="result-box compact-result">
-                  <div class="res-item">
-                    <span class="res-label">公允 PB</span>
-                    <span class="res-val">{{ manualFairPb.toFixed(2) }}</span>
-                  </div>
-                  <div class="res-item">
-                    <span class="res-label">公允价格</span>
-                    <span class="res-val">{{ formatPrice(manualFairPrice) }}</span>
-                  </div>
-                  <div class="res-item main-res">
-                    <span class="res-label">结论</span>
-                    <span class="res-val">{{ manualValuationLabel }}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- DDM 股息折现动态沙盘 -->
-          <div class="ddm-sandbox-panel">
-            <div class="ddm-sandbox-header">
-              <div>
-                <span class="valuation-card-title">DDM 股息折现动态沙盘</span>
-                <strong>调节长期增长假设与折现率，演算多阶段红利内在价值。</strong>
-              </div>
-              <div class="ddm-badge" :class="{ 'ddm-badge-warning': ddmParams.discountRate <= ddmParams.terminalGrowthRate }">
-                {{ ddmValuationLabel }}
-              </div>
-            </div>
-            <div class="ddm-sandbox-grid">
-              <div class="ddm-sliders">
-                <div class="ddm-slider-group">
-                  <div class="slider-header">
-                    <label>超额增长期 (年)</label>
-                    <span class="slider-value">{{ ddmParams.growthYears }} 年</span>
-                  </div>
-                  <input type="range" v-model.number="ddmParams.growthYears" min="3" max="10" step="1" />
-                </div>
-                <div class="ddm-slider-group">
-                  <div class="slider-header">
-                    <label>超额股息增长率 g₁ (%)</label>
-                    <span class="slider-value">{{ ddmParams.growthRate }}%</span>
-                  </div>
-                  <input type="range" v-model.number="ddmParams.growthRate" min="-10" max="30" step="0.5" />
-                </div>
-                <div class="ddm-slider-group">
-                  <div class="slider-header">
-                    <label>永续股息增长率 g₂ (%)</label>
-                    <span class="slider-value">{{ ddmParams.terminalGrowthRate }}%</span>
-                  </div>
-                  <input type="range" v-model.number="ddmParams.terminalGrowthRate" min="0" max="5" step="0.1" />
-                </div>
-                <div class="ddm-slider-group">
-                  <div class="slider-header">
-                    <label>折现要求回报率 r (%)</label>
-                    <span class="slider-value">{{ ddmParams.discountRate }}%</span>
-                  </div>
-                  <input type="range" v-model.number="ddmParams.discountRate" min="3" max="15" step="0.5" />
-                </div>
-              </div>
-              <div class="ddm-results">
-                <div class="ddm-result-cards">
-                  <div class="ddm-res-card">
-                    <span>每股派息基准 D₀</span>
-                    <strong>{{ formatPrice(ddmD0) }}</strong>
-                  </div>
-                  <div class="ddm-res-card ddm-res-card-highlight">
-                    <span>理论公允价值</span>
-                    <strong v-if="ddmParams.discountRate > ddmParams.terminalGrowthRate" class="glow-value">{{ formatPrice(ddmFairValue) }}</strong>
-                    <strong v-else class="glow-value text-error">--.--</strong>
-                  </div>
-                  <div class="ddm-res-card">
-                    <span>当前股价比对</span>
-                    <strong>{{ formatPrice(valuationConclusion?.current?.price || 0) }}</strong>
-                  </div>
-                </div>
-                <div class="ddm-mos-meter" v-if="ddmParams.discountRate > ddmParams.terminalGrowthRate">
-                  <div class="mos-meter-header">
-                    <span>安全边际 (MOS)</span>
-                    <strong :class="ddmMos >= 0 ? 'text-success' : 'text-error'">
-                      {{ ddmMos >= 0 ? '+' : '' }}{{ formatPct(ddmMos) }}
-                    </strong>
-                  </div>
-                  <div class="mos-track">
-                    <div class="mos-bar" :style="{ width: Math.max(0, Math.min(100, (ddmMos + 0.5) * 100)) + '%', backgroundColor: ddmMos >= 0 ? '#10b981' : '#f43f5e' }"></div>
-                    <div class="mos-marker" style="left: 50%;"></div>
-                  </div>
-                  <div class="mos-labels">
-                    <span>溢价 50%</span>
-                    <span>合理中枢</span>
-                    <span>折价 50%</span>
-                  </div>
-                </div>
-                <div class="ddm-warning-block" v-else>
-                  ⚠️ 要求回报率 ({{ ddmParams.discountRate }}%) 必须大于永续增长率 ({{ ddmParams.terminalGrowthRate }}%)，否则无法收敛。请调整滑块。
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="normalized-panel" v-if="normalizedEarnings?.enabled">
-
-            <div class="normalized-header">
-              <div>
-                <span class="valuation-card-title">归一化口径</span>
-                <strong>先看利润是否偏离中枢，再决定该信哪种盈利口径。</strong>
-              </div>
-              <span class="normalized-badge" :class="getNormalizedTone(normalizedEarnings.cycle_position_label)">
-                {{ normalizedEarnings.cycle_position_label }}
-              </span>
-            </div>
-            <div class="normalized-grid">
-              <article class="normalized-card">
-                <span>当前 EPS</span>
-                <strong>{{ formatPrice(normalizedEarnings.current_eps) }}</strong>
-                <p>近 {{ normalizedEarnings.window_years }} 年归一 EPS {{ formatPrice(normalizedEarnings.normalized_eps) }}</p>
-              </article>
-              <article class="normalized-card">
-                <span>EPS 偏离中枢</span>
-                <strong>{{ formatSignedPct(normalizedEarnings.eps_deviation_pct) }}</strong>
-                <p>盈利能力估值当前采用 {{ normalizedEarnings.basis_label }}</p>
-              </article>
-              <article class="normalized-card">
-                <span>FCF / 股</span>
-                <strong>{{ formatPrice(normalizedEarnings.current_fcf_per_share) }}</strong>
-                <p>归一口径 {{ formatPrice(normalizedEarnings.normalized_fcf_per_share) }}</p>
-              </article>
-              <article class="normalized-card">
-                <span>净利率</span>
-                <strong>{{ formatPct(normalizedEarnings.current_net_margin_pct) }}</strong>
-                <p>归一口径 {{ formatPct(normalizedEarnings.normalized_net_margin_pct) }}</p>
-              </article>
-            </div>
-            <p class="normalized-note">{{ normalizedEarnings.explanation }}</p>
-          </div>
-          <div class="model-grid" v-if="valuationModels.length">
-            <article
-              v-for="model in valuationModels"
-              :key="model.key"
-              class="model-card"
-              :class="{ 'model-card-muted': model.status !== 'available' }"
-            >
-              <div class="model-card-head">
-                <div>
-                  <span class="valuation-card-title">{{ model.label }}</span>
-                  <p class="model-desc">{{ model.description || model.reason }}</p>
-                  <p v-if="model.basis_label" class="model-basis">{{ model.basis_label }}</p>
-                </div>
-                <span class="model-badge" :class="model.status === 'available' ? 'badge-ready' : 'badge-muted'">
-                  {{ model.status === 'available' ? Number(model.effective_weight_pct || 0).toFixed(0) + '% 权重' : '待补数' }}
-                </span>
-              </div>
-              <template v-if="model.status === 'available'">
-                <div class="valuation-main">{{ formatPrice(model.fair_value_range.price_base) }}</div>
-                <div class="valuation-sub">区间 {{ formatPrice(model.fair_value_range.price_low) }} - {{ formatPrice(model.fair_value_range.price_high) }}</div>
-                <div class="valuation-row">
-                  <span>模型结论</span>
-                  <strong>{{ model.summary }}</strong>
-                </div>
-                <div class="valuation-row">
-                  <span>折价 / 溢价</span>
-                  <strong>{{ model.discount_premium.label }} {{ formatPct(model.discount_premium.pct) }}</strong>
-                </div>
-                <div class="valuation-row">
-                  <span>经营回报</span>
-                  <strong>{{ formatPct(model.business_return_pct) }}</strong>
-                </div>
-                <div class="model-highlight-list">
-                  <span v-for="item in model.highlights" :key="item" class="model-highlight">{{ item }}</span>
-                </div>
-              </template>
-<div v-else class="model-state">{{ model.reason }}</div>
-            </article>
-          </div>
-        </section>
+        <ValuationConclusionPanel
+          :valuationConclusion="valuationConclusion"
+          :valuationRange="valuationRange"
+          :expectedReturn="expectedReturn"
+          :valuationModels="valuationModels"
+          :valuationModelCount="valuationModelCount"
+          :valuationBlend="valuationBlend"
+          :normalizedEarnings="normalizedEarnings"
+          :valuationSummaryClass="valuationSummaryClass"
+        />
       </div>
 
-      <section class="section peer-section" v-if="peerComparison">
-        <div class="peer-header">
-          <div>
-            <p class="section-kicker">Peer Anchor</p>
-            <h2>行业与同行对比</h2>
-            <p class="subtitle">先看同行中位数，再判断当前这家公司到底是“便宜”还是“基本面更弱”。</p>
-          </div>
-          <div class="peer-badge-stack">
-            <span class="peer-badge" v-if="peerComparison.industry">行业 {{ peerComparison.industry }}</span>
-            <span class="peer-badge" v-if="peerComparison.source_label">{{ peerComparison.source_label }}</span>
-            <span class="peer-badge">{{ peerComparison.peer_count }} 家同行</span>
-          </div>
-        </div>
+      <PeerComparison :peerComparison="peerComparison" />
 
-        <template v-if="peerComparison.enabled && peerRelativeView && peerMedians">
-          <div class="peer-overview-grid">
-            <article class="peer-metric-card">
-              <span class="valuation-card-title">PB 相对同行</span>
-              <strong :class="getPeerGapTone(peerRelativeView.pb_vs_peer_median_pct, true)">
-                {{ formatSignedPct(peerRelativeView.pb_vs_peer_median_pct) }}
-              </strong>
-              <p>同行中位 {{ formatMetric(peerMedians.pb, 'pb') }}x</p>
-            </article>
-            <article class="peer-metric-card">
-              <span class="valuation-card-title">PE 相对同行</span>
-              <strong :class="getPeerGapTone(peerRelativeView.pe_vs_peer_median_pct, true)">
-                {{ formatSignedPct(peerRelativeView.pe_vs_peer_median_pct) }}
-              </strong>
-              <p>同行中位 {{ formatMetric(peerMedians.pe, 'pe') }}x</p>
-            </article>
-            <article class="peer-metric-card">
-              <span class="valuation-card-title">前瞻 ROE</span>
-              <strong :class="getPeerGapTone(peerRelativeView.expected_roe_vs_peer_median_pct)">
-                {{ formatSignedPct(peerRelativeView.expected_roe_vs_peer_median_pct) }}
-              </strong>
-              <p>同行中位 {{ formatPct(peerMedians.expected_roe) }}</p>
-            </article>
-            <article class="peer-metric-card">
-              <span class="valuation-card-title">股息率</span>
-              <strong :class="getPeerGapTone(peerRelativeView.dividend_yield_vs_peer_median_pct)">
-                {{ formatSignedDiff(peerRelativeView.dividend_yield_vs_peer_median_pct) }}
-              </strong>
-              <p>同行中位 {{ formatPct(peerMedians.dividend_yield) }} | 展示为差值</p>
-            </article>
-          </div>
-
-          <div class="peer-summary-strip">
-            {{ peerComparison.summary }}
-          </div>
-
-          <div class="peer-table-shell">
-            <table class="peer-table">
-              <thead>
-                <tr>
-                  <th>公司</th>
-                  <th>价格</th>
-                  <th>PE</th>
-                  <th>PB</th>
-                  <th>股息率</th>
-                  <th>前瞻 ROE</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="row in peerRows" :key="row.symbol" :class="{ 'row-target': row.is_target }">
-                  <td>
-                    <div class="peer-name-cell">
-                      <strong>{{ row.name }}</strong>
-                      <span>{{ row.symbol }}</span>
-                    </div>
-                  </td>
-                  <td>{{ formatPrice(row.price) }}</td>
-                  <td>{{ formatMetric(row.pe, 'pe') }}</td>
-                  <td>{{ formatMetric(row.pb, 'pb') }}</td>
-                  <td>{{ formatPct(row.dividend_yield) }}</td>
-                  <td>{{ formatPct(row.expected_roe) }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </template>
-
-        <div v-else class="peer-empty-state">
-          <strong>同行锚点还没配置好</strong>
-          <p>{{ peerComparison.reason || '先在标的管理里补上行业或同行代码，这里才会生成横向估值矩阵。' }}</p>
-        </div>
-      </section>
-
-      <section class="section thesis-section" v-if="investmentThesis">
-        <div class="thesis-header">
-          <div>
-            <p class="section-kicker">Investment Thesis</p>
-            <h2>投资 Thesis 跟踪</h2>
-            <p class="thesis-headline">{{ investmentThesis.headline }}</p>
-          </div>
-          <div class="valuation-summary thesis-stance" :class="`summary-${investmentThesis.stance_color}`">
-            <span class="summary-label">{{ investmentThesis.stance }}</span>
-            <strong>{{ investmentThesis.confidence_score }}/100</strong>
-            <span class="thesis-meta">综合置信度</span>
-          </div>
-        </div>
-
-        <div class="thesis-scoreboard">
-          <article class="thesis-score-card">
-            <span class="mini-label">估值</span>
-            <strong>{{ investmentThesis.scorecard.valuation }}</strong>
-          </article>
-          <article class="thesis-score-card">
-            <span class="mini-label">质量</span>
-            <strong>{{ investmentThesis.scorecard.quality }}</strong>
-          </article>
-          <article class="thesis-score-card">
-            <span class="mini-label">现金流</span>
-            <strong>{{ investmentThesis.scorecard.cashflow }}</strong>
-          </article>
-          <article class="thesis-score-card">
-            <span class="mini-label">稳定性</span>
-            <strong>{{ investmentThesis.scorecard.stability }}</strong>
-          </article>
-        </div>
-
-        <div class="thesis-grid">
-          <article class="thesis-column">
-            <div class="column-header">
-              <span class="mini-label">Why Now</span>
-              <h3>买入理由</h3>
-            </div>
-            <div class="thesis-stack">
-              <div v-for="item in investmentThesis.buy_case" :key="item" class="thesis-item">
-                <p>{{ item }}</p>
-              </div>
-            </div>
-          </article>
-
-          <article class="thesis-column">
-            <div class="column-header">
-              <span class="mini-label">Assumptions</span>
-              <h3>核心假设</h3>
-            </div>
-            <div class="thesis-stack">
-              <div v-for="item in investmentThesis.key_assumptions" :key="item.label" class="thesis-item">
-                <div class="thesis-item-head">
-                  <strong>{{ item.label }}</strong>
-                  <span class="thesis-badge" :class="item.status">{{ item.status_label }}</span>
-                </div>
-                <p>{{ item.detail }}</p>
-              </div>
-            </div>
-          </article>
-
-          <article class="thesis-column">
-            <div class="column-header">
-              <span class="mini-label">Risk Check</span>
-              <h3>风险清单</h3>
-            </div>
-            <div class="thesis-stack">
-              <div v-for="item in investmentThesis.risk_checklist" :key="item.label" class="thesis-item">
-                <div class="thesis-item-head">
-                  <strong>{{ item.label }}</strong>
-                  <span class="thesis-badge" :class="item.level">{{ item.level_label }}风险</span>
-                </div>
-                <p>{{ item.detail }}</p>
-              </div>
-            </div>
-          </article>
-        </div>
-
-        <div class="trigger-panel">
-          <div class="column-header">
-            <span class="mini-label">Review Triggers</span>
-            <h3>财报后复核项</h3>
-          </div>
-          <div class="trigger-grid">
-            <div v-for="item in investmentThesis.review_triggers" :key="item" class="trigger-chip">
-              {{ item }}
-            </div>
-          </div>
-        </div>
-      </section>
+      <InvestmentThesisPanel :investmentThesis="investmentThesis" />
     </div>
   </div>
 </template>
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { echarts, type ECharts } from '@/lib/echarts';
 import { stockApi } from '@/api';
 import { useSentimentStore } from '@/stores/sentiment';
 import { useInvestorLoadingQuotes } from '@/composables/useInvestorLoadingQuotes';
+
+import FScoreMatrix from '@/components/FScoreMatrix.vue'
+import ValuationChart from '@/components/ValuationChart.vue'
+import ValuationConclusionPanel from '@/components/ValuationConclusionPanel.vue'
+import PeerComparison from '@/components/PeerComparison.vue'
+import InvestmentThesisPanel from '@/components/InvestmentThesisPanel.vue'
 
 interface PercentileMetric {
   current: number;
@@ -834,97 +319,24 @@ interface AnalysisPayload {
   investment_thesis?: InvestmentThesis;
 }
 
+
+
 const route = useRoute();
 const router = useRouter();
-const sentimentStore = useSentimentStore();
 const symbol = route.params.symbol as string;
+const sentimentStore = useSentimentStore();
 
-const loading = ref(true);
-const { loadingQuote } = useInvestorLoadingQuotes(loading);
-const loadingCompare = ref(false);
-const analysisData = ref<AnalysisPayload | null>(null);
-const historicalCache = ref<Record<string, AnalysisPayload>>({});
-const compareDataMap = ref<Record<string, AnalysisPayload>>({});
 const stockData = ref<{ symbol: string } | null>(null);
-const activeMetric = ref('pe');
+const analysisData = ref<AnalysisPayload | null>(null);
+const loading = ref(true);
 const compareSymbols = ref<string[]>([]);
-const chartRef = ref<HTMLElement | null>(null);
-let chartInstance: ECharts | null = null;
-let analysisRetryTimer: ReturnType<typeof window.setTimeout> | null = null;
+const compareDataMap = ref<Record<string, AnalysisPayload>>({});
+const loadingCompare = ref(false);
+const historicalCache = ref<Record<string, AnalysisPayload>>({});
+let analysisRetryTimer: number | null = null;
 let analysisRetryCount = 0;
-const MAX_ANALYSIS_REFRESH_RETRIES = 2;
 
-const calcParams = ref({
-  expectedRoe: 15,
-  requiredReturn: 10
-});
-
-const ddmParams = ref({
-  growthYears: 5,
-  growthRate: 6.0,
-  terminalGrowthRate: 2.0,
-  discountRate: 8.0
-});
-
-const ddmD0 = computed(() => {
-  const current = valuationConclusion.value?.current;
-  if (!current) return 0;
-  const price = current.price || 0;
-  const dy = current.dividend_yield || 0;
-  return price * dy;
-});
-
-const ddmPv1 = computed(() => {
-  const d0 = ddmD0.value;
-  const g1 = ddmParams.value.growthRate / 100;
-  const r = ddmParams.value.discountRate / 100;
-  const n = ddmParams.value.growthYears;
-  
-  let pv = 0;
-  for (let t = 1; t <= n; t++) {
-    pv += (d0 * Math.pow(1 + g1, t)) / Math.pow(1 + r, t);
-  }
-  return pv;
-});
-
-const ddmPv2 = computed(() => {
-  const d0 = ddmD0.value;
-  const g1 = ddmParams.value.growthRate / 100;
-  const g2 = ddmParams.value.terminalGrowthRate / 100;
-  const r = ddmParams.value.discountRate / 100;
-  const n = ddmParams.value.growthYears;
-  
-  if (r <= g2) return 0;
-  const dn = d0 * Math.pow(1 + g1, n);
-  const vn = (dn * (1 + g2)) / (r - g2);
-  return vn / Math.pow(1 + r, n);
-});
-
-const ddmFairValue = computed(() => {
-  if (ddmParams.value.discountRate <= ddmParams.value.terminalGrowthRate) return 0;
-  const val = ddmPv1.value + ddmPv2.value;
-  return isNaN(val) || val < 0 ? 0 : val;
-});
-
-const ddmMos = computed(() => {
-  const currentPrice = valuationConclusion.value?.current?.price || 0;
-  const fair = ddmFairValue.value;
-  if (fair <= 0) return 0;
-  return (fair - currentPrice) / fair;
-});
-
-const ddmValuationLabel = computed(() => {
-  const r = ddmParams.value.discountRate;
-  const g2 = ddmParams.value.terminalGrowthRate;
-  if (r <= g2) return '折现不足（要求回报率需大于永续增长率）';
-  
-  const mos = ddmMos.value;
-  if (mos >= 0.25) return '极度低估（黄金坑）';
-  if (mos >= 0.05) return '偏低估（安全边际充足）';
-  if (mos <= -0.15) return '严重高估（情绪泡沫）';
-  return '合理中枢（估值对齐）';
-});
-
+const { loadingQuote } = useInvestorLoadingQuotes(loading);
 
 const currentStep = ref(0);
 const steps = [
@@ -940,9 +352,7 @@ const availableStocks = computed(() => {
   return sentimentStore.dashboardStocks.filter(s => s.stock_symbol !== symbol);
 });
 
-const isMultiView = computed(() => compareSymbols.value.length > 0);
 const mainPercentiles = computed(() => analysisData.value?.percentiles ?? null);
-const activePercentile = computed(() => mainPercentiles.value?.[activeMetric.value] ?? null);
 const valuationConclusion = computed(() => analysisData.value?.valuation_conclusion ?? null);
 const valuationRange = computed(() => valuationConclusion.value?.fair_value_range ?? null);
 const expectedReturn = computed(() => valuationConclusion.value?.expected_return ?? null);
@@ -952,9 +362,6 @@ const valuationModels = computed(() => multiModelValuation.value?.models ?? []);
 const valuationModelCount = computed(() => multiModelValuation.value?.available_model_count ?? 0);
 const normalizedEarnings = computed(() => valuationConclusion.value?.normalized_earnings ?? null);
 const peerComparison = computed(() => analysisData.value?.peer_comparison ?? null);
-const peerRows = computed(() => peerComparison.value?.rows ?? []);
-const peerMedians = computed(() => peerComparison.value?.medians ?? null);
-const peerRelativeView = computed(() => peerComparison.value?.relative_view ?? null);
 const investmentThesis = computed(() => analysisData.value?.investment_thesis ?? null);
 const valuationSummaryClass = computed(() => `summary-${valuationConclusion.value?.summary_color || 'slate'}`);
 const analysisCacheAtText = computed(() => formatCacheTimestamp(analysisData.value?.cached_at));
@@ -975,25 +382,6 @@ const goDashboard = () => {
   loading.value = false;
   router.push('/');
 };
-const manualFairPb = computed(() => {
-  const expectedRoe = Number(calcParams.value.expectedRoe || 0);
-  const requiredReturn = Number(calcParams.value.requiredReturn || 0);
-  if (expectedRoe <= 0 || requiredReturn <= 0) return 0;
-  return expectedRoe / requiredReturn;
-});
-const manualFairPrice = computed(() => {
-  const current = valuationConclusion.value?.current;
-  if (!current || current.pb <= 0) return 0;
-  return (current.price / current.pb) * manualFairPb.value;
-});
-const manualValuationLabel = computed(() => {
-  const currentPrice = valuationConclusion.value?.current.price || 0;
-  if (currentPrice <= 0 || manualFairPrice.value <= 0) return '数据不足';
-  const ratio = manualFairPrice.value / currentPrice;
-  if (ratio >= 1.2) return '偏低估';
-  if (ratio <= 0.85) return '偏贵';
-  return '合理';
-});
 
 onMounted(async () => {
   if (sentimentStore.stocks.length === 0) {
@@ -1003,8 +391,6 @@ onMounted(async () => {
     await sentimentStore.fetchLatestSentiment();
   }
   await fetchMainData();
-  initChart();
-  window.addEventListener('resize', handleResize);
 });
 
 const fetchMainData = async () => {
@@ -1046,8 +432,6 @@ const fetchComparisonData = async () => {
   const symbols = compareSymbols.value;
   if (symbols.length === 0) {
     compareDataMap.value = {};
-    await nextTick();
-    initChart();
     return;
   }
 
@@ -1079,38 +463,13 @@ const fetchComparisonData = async () => {
     }
   });
   compareDataMap.value = newMap;
-  await nextTick();
-  initChart();
 };
 
-const handleResize = () => {
-  chartInstance?.resize();
-};
 
 watch(compareSymbols, () => {
   fetchComparisonData();
 }, { deep: true });
 
-const isUnderValued = computed(() => {
-  const p = mainPercentiles.value?.[activeMetric.value];
-  if (!p) return false;
-  // 股息率越高越安全，其余估值指标越低越安全。
-  if (activeMetric.value === 'dy') return p.current >= p.p90;
-  return p.current <= p.p10;
-});
-
-const getPercentilePos = (metric: string) => {
-  const p = mainPercentiles.value?.[metric];
-  if (!p) return '未知';
-  if (metric === 'dy') {
-    if (p.current >= p.p90) return '极高 (安全)';
-    if (p.current <= p.p10) return '极低 (风险)';
-  } else {
-    if (p.current <= p.p10) return '极低 (安全)';
-    if (p.current >= p.p90) return '极高 (风险)';
-  }
-  return '中性';
-};
 
 
 const getScoreClass = (score: number) => {
@@ -1119,14 +478,6 @@ const getScoreClass = (score: number) => {
   return 'score-mid';
 };
 
-const getMetricLabel = (metric: string) => {
-  return {
-    pe: 'PE',
-    pb: 'PB',
-    roi: 'ROI',
-    dy: '股息率',
-  }[metric] || metric.toUpperCase();
-};
 
 const getSymbolName = (s: string) => {
   return sentimentStore.getStockBySymbol(s)?.stock_name || s;
@@ -1144,42 +495,6 @@ const formatCacheTimestamp = (value?: string | null) => {
   })}`;
 };
 
-const formatPct = (value?: number) => {
-  if (value === undefined || value === null || Number.isNaN(value)) return '--';
-  return `${Number(value).toFixed(1)}%`;
-};
-
-const formatSignedPct = (value?: number) => {
-  if (value === undefined || value === null || Number.isNaN(value)) return '--';
-  const numeric = Number(value);
-  const prefix = numeric > 0 ? '+' : '';
-  return `${prefix}${numeric.toFixed(1)}%`;
-};
-
-const formatSignedDiff = (value?: number) => {
-  if (value === undefined || value === null || Number.isNaN(value)) return '--';
-  const numeric = Number(value);
-  const prefix = numeric > 0 ? '+' : '';
-  return `${prefix}${numeric.toFixed(1)}%`;
-};
-
-const formatPrice = (value?: number) => {
-  if (value === undefined || value === null || Number.isNaN(value) || value <= 0) return '--';
-  return Number(value).toFixed(2);
-};
-
-const getPeerGapTone = (value?: number, reverse = false) => {
-  const numeric = Number(value ?? 0);
-  if (numeric === 0) return 'gap-neutral';
-  const isPositive = reverse ? numeric < 0 : numeric > 0;
-  return isPositive ? 'gap-positive' : 'gap-negative';
-};
-
-const getNormalizedTone = (label?: string) => {
-  if (label === '低于中枢') return 'normalized-positive';
-  if (label === '高于中枢') return 'normalized-warning';
-  return 'normalized-neutral';
-};
 
 const formatMetric = (value?: number, metric = 'pe') => {
   if (value === undefined || value === null || Number.isNaN(value)) return '--';
@@ -1188,7 +503,6 @@ const formatMetric = (value?: number, metric = 'pe') => {
   return metric === 'dy' ? `${base}%` : base;
 };
 
-const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
 
 const clearAnalysisRefreshRetry = () => {
   if (analysisRetryTimer !== null) {
@@ -1200,11 +514,11 @@ const clearAnalysisRefreshRetry = () => {
 
 const applyAnalysisPayload = (payload: AnalysisPayload) => {
   analysisData.value = payload;
-  calcParams.value.expectedRoe =
-    payload.valuation_conclusion?.assumptions?.expected_roe ?? payload.forward.expected_roe;
   stockData.value = { symbol: payload.symbol };
   historicalCache.value[payload.symbol] = payload;
 };
+
+const MAX_ANALYSIS_REFRESH_RETRIES = 3;
 
 const queueAnalysisRefreshRetry = () => {
   if (analysisRetryTimer !== null || analysisRetryCount >= MAX_ANALYSIS_REFRESH_RETRIES) return;
@@ -1218,8 +532,6 @@ const queueAnalysisRefreshRetry = () => {
       const res = await stockApi.getAnalysis(symbol);
       applyAnalysisPayload(res.data);
       syncAnalysisRefreshState(res.data);
-      await nextTick();
-      initChart();
     } catch (error) {
       console.error('Failed to refresh analysis cache:', error);
       if (analysisRetryCount < MAX_ANALYSIS_REFRESH_RETRIES) {
@@ -1238,98 +550,9 @@ const syncAnalysisRefreshState = (payload: AnalysisPayload) => {
   clearAnalysisRefreshRetry();
 };
 
-const initChart = () => {
-  if (!chartRef.value || !analysisData.value) return;
-  if (!chartInstance) chartInstance = echarts.init(chartRef.value);
-  
-  const metric = activeMetric.value;
-  const mainP = mainPercentiles.value ? mainPercentiles.value[metric] : null;
-  const mainHistory = analysisData.value.history || [];
-  
-  if (!mainP || mainHistory.length === 0) {
-    chartInstance.clear();
-    return;
-  }
-
-  const series: any[] = [];
-  const mainName = getSymbolName(symbol);
-  const legendData: string[] = [mainName];
-
-  // 1. 主线数据 (采用公司名)
-  series.push({
-    name: mainName,
-    type: 'line',
-    data: mainHistory.map((h: any) => h[metric] || 0),
-    smooth: true,
-    showSymbol: false,
-    lineStyle: { width: 3, color: colors[0] },
-    zIndex: 10,
-    markArea: isMultiView.value ? null : {
-      silent: true,
-      data: [
-        [
-          { yAxis: 0, itemStyle: { color: activeMetric.value === 'dy' ? 'rgba(248, 113, 113, 0.05)' : 'rgba(52, 211, 153, 0.1)' } },
-          { yAxis: mainP.p10 || 0 }
-        ],
-        [
-          { yAxis: mainP.p90 || 100, itemStyle: { color: activeMetric.value === 'dy' ? 'rgba(52, 211, 153, 0.1)' : 'rgba(248, 113, 113, 0.1)' } },
-          { yAxis: 1000 }
-        ]
-      ]
-    },
-    markLine: isMultiView.value ? null : {
-      symbol: 'none',
-      data: [
-        { yAxis: mainP.p50 || 0, label: { formatter: '50% 中位' }, lineStyle: { color: '#94a3b8', type: 'dashed' } }
-      ]
-
-    }
-  });
-
-  // 2. 对比线数据 (采用公司名)
-  compareSymbols.value.forEach((s, idx) => {
-    const d = compareDataMap.value[s];
-    if (d && d.history) {
-      const name = getSymbolName(s);
-      legendData.push(name);
-      series.push({
-        name: name,
-        type: 'line',
-        data: d.history.map((h: any) => h[metric] || 0),
-        smooth: true,
-        showSymbol: false,
-        lineStyle: { width: 2, color: colors[idx + 1], type: 'dashed', opacity: 0.8 }
-      });
-    }
-  });
-
-  const dates = mainHistory.map((h: any) => h.date);
-  const allValues = series.flatMap(s => s.data);
-  const maxY = Math.max(...allValues, mainP.p90) * 1.1;
-
-  const option = {
-    backgroundColor: 'transparent',
-    legend: { show: isMultiView.value, data: legendData, top: 0, right: 10, textStyle: { color: '#64748b' } },
-    grid: { top: 50, right: 30, bottom: 40, left: 50 },
-    tooltip: { trigger: 'axis', backgroundColor: 'rgba(255, 255, 255, 0.9)', borderColor: '#e2e8f0' },
-    xAxis: { type: 'category', data: dates, axisLabel: { color: '#64748b' }, splitLine: { show: false } },
-    yAxis: { type: 'value', max: maxY, axisLabel: { color: '#64748b' }, splitLine: { lineStyle: { type: 'dashed', color: '#f1f5f9' } } },
-    series: series
-  };
-  
-  chartInstance.setOption(option, true);
-};
-
-// 监听器
-watch([activeMetric, compareDataMap], () => {
-  initChart();
-});
 
 onUnmounted(() => {
   clearAnalysisRefreshRetry();
-  window.removeEventListener('resize', handleResize);
-  chartInstance?.dispose();
-  chartInstance = null;
 });
 </script>
 
@@ -1474,609 +697,13 @@ onUnmounted(() => {
   border-color: #cbd5e1;
 }
 
-.section {
-  background: white;
-  border-radius: 16px;
-  padding: 24px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
-  border: 1px solid #f1f5f9;
-  margin-bottom: 24px;
-}
-
-.title-group h2 {
-  font-size: 1.1rem;
-  font-weight: 800;
-  color: #0f172a;
-}
-
-.title-group .subtitle {
-  font-size: 0.75rem;
-  color: #94a3b8;
-  font-weight: 600;
-  text-transform: uppercase;
-}
-
-.chart-tabs {
-  display: flex;
-  background: #f1f5f9;
-  padding: 4px;
-  border-radius: 10px;
-}
-
-.chart-tabs button {
-  padding: 6px 16px;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  border-radius: 8px;
-  font-size: 0.8rem;
-  font-weight: 700;
-  color: #64748b;
-  transition: all 0.2s;
-}
-
-.chart-tabs button.active {
-  background: white;
-  color: #3b82f6;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-}
-
-.analysis-chart {
-  height: 420px;
-  margin: 10px 0;
-}
-
-.chart-summary {
-  margin-top: 16px;
-  padding: 12px 16px;
-  background: #f8fafc;
-  border-radius: 10px;
-  text-align: right;
-  font-size: 0.85rem;
-  color: #64748b;
-}
-
-.multi-summary {
-  text-align: center;
-  font-weight: 700;
-  color: #3b82f6;
-}
-
-.signal-buy {
-  background: #10b981;
-  color: white;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 0.75rem;
-  margin-left: 12px;
-}
 
 .grid-layout {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(280px, 0.78fr) minmax(0, 1.22fr);
   gap: 24px;
 }
 
-.valuation-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-  margin-bottom: 20px;
-}
-
-.valuation-summary {
-  min-width: 140px;
-  padding: 14px 16px;
-  border-radius: 14px;
-  border: 1px solid transparent;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  text-align: right;
-}
-
-.summary-label {
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-weight: 700;
-}
-
-.summary-emerald {
-  background: #ecfdf5;
-  border-color: #a7f3d0;
-  color: #065f46;
-}
-
-.summary-amber {
-  background: #fffbeb;
-  border-color: #fde68a;
-  color: #92400e;
-}
-
-.summary-rose {
-  background: #fff1f2;
-  border-color: #fecdd3;
-  color: #9f1239;
-}
-
-.summary-slate {
-  background: #f8fafc;
-  border-color: #e2e8f0;
-  color: #334155;
-}
-
-.valuation-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.valuation-grid-secondary {
-  margin-top: 16px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.valuation-card {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 14px;
-  padding: 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.valuation-card-primary {
-  background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%);
-  border-color: #bfdbfe;
-}
-
-.valuation-card-title {
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: #64748b;
-  font-weight: 700;
-}
-
-.valuation-main {
-  font-size: 1.5rem;
-  line-height: 1.1;
-  font-weight: 900;
-  color: #0f172a;
-  font-family: 'Monaco', monospace;
-}
-
-.valuation-sub {
-  font-size: 0.95rem;
-  font-weight: 700;
-  color: #2563eb;
-}
-
-.valuation-note {
-  font-size: 0.78rem;
-  color: #64748b;
-}
-
-.valuation-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 0.88rem;
-  color: #334155;
-}
-
-.section-footer-tight {
-  margin-top: 6px;
-}
-
-.model-grid {
-  margin-top: 16px;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.normalized-panel {
-  margin-top: 16px;
-  padding: 20px;
-  border-radius: 20px;
-  border: 1px solid #dbe4f0;
-  background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%);
-  display: grid;
-  gap: 16px;
-}
-
-.normalized-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: flex-start;
-}
-
-.normalized-header strong {
-  display: block;
-  margin-top: 8px;
-  color: #0f172a;
-  font-size: 1rem;
-}
-
-.normalized-badge {
-  padding: 8px 12px;
-  border-radius: 999px;
-  font-size: 0.78rem;
-  font-weight: 800;
-  border: 1px solid transparent;
-  white-space: nowrap;
-}
-
-.normalized-badge.normalized-positive {
-  background: #dcfce7;
-  border-color: #86efac;
-  color: #166534;
-}
-
-.normalized-badge.normalized-warning {
-  background: #fff7ed;
-  border-color: #fdba74;
-  color: #c2410c;
-}
-
-.normalized-badge.normalized-neutral {
-  background: #e2e8f0;
-  border-color: #cbd5e1;
-  color: #475569;
-}
-
-.normalized-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
-}
-
-.normalized-card {
-  padding: 16px;
-  border-radius: 16px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-}
-
-.normalized-card span {
-  display: block;
-  font-size: 0.76rem;
-  color: #64748b;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-weight: 700;
-}
-
-.normalized-card strong {
-  display: block;
-  margin-top: 10px;
-  color: #0f172a;
-  font-size: 1.35rem;
-  font-weight: 900;
-  font-family: 'Monaco', monospace;
-}
-
-.normalized-card p {
-  margin: 8px 0 0;
-  color: #64748b;
-  font-size: 0.82rem;
-  line-height: 1.6;
-}
-
-.normalized-note {
-  margin: 0;
-  color: #475569;
-  line-height: 1.7;
-}
-
-.peer-section {
-  display: grid;
-  gap: 18px;
-}
-
-.peer-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: flex-start;
-}
-
-.peer-badge-stack {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 10px;
-}
-
-.peer-badge {
-  padding: 8px 12px;
-  border-radius: 999px;
-  background: #eff6ff;
-  color: #1d4ed8;
-  font-size: 0.78rem;
-  font-weight: 700;
-  border: 1px solid #bfdbfe;
-}
-
-.peer-overview-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.peer-metric-card {
-  padding: 18px;
-  border-radius: 18px;
-  border: 1px solid #dbe4f0;
-  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-}
-
-.peer-metric-card strong {
-  display: block;
-  margin-top: 14px;
-  font-size: 1.5rem;
-  font-weight: 900;
-}
-
-.peer-metric-card p {
-  margin: 8px 0 0;
-  color: #64748b;
-  font-size: 0.84rem;
-}
-
-.peer-summary-strip {
-  padding: 16px 18px;
-  border-radius: 18px;
-  background: linear-gradient(90deg, #ecfeff 0%, #f8fafc 100%);
-  border: 1px solid #bae6fd;
-  color: #0f172a;
-  line-height: 1.7;
-}
-
-.peer-table-shell {
-  overflow-x: auto;
-  border-radius: 18px;
-  border: 1px solid #dbe4f0;
-  background: #ffffff;
-}
-
-.peer-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.peer-table th,
-.peer-table td {
-  padding: 14px 16px;
-  text-align: left;
-  border-bottom: 1px solid #e2e8f0;
-  font-size: 0.88rem;
-  color: #334155;
-}
-
-.peer-table th {
-  background: #f8fafc;
-  color: #64748b;
-  font-size: 0.78rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.peer-table tbody tr:last-child td {
-  border-bottom: none;
-}
-
-.row-target {
-  background: #eff6ff;
-}
-
-.peer-name-cell {
-  display: grid;
-  gap: 4px;
-}
-
-.peer-name-cell strong {
-  color: #0f172a;
-}
-
-.peer-name-cell span {
-  color: #64748b;
-  font-size: 0.78rem;
-  font-family: 'Monaco', monospace;
-}
-
-.model-basis {
-  margin: 8px 0 0;
-  color: #2563eb;
-  font-size: 0.76rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.peer-empty-state {
-  padding: 22px;
-  border-radius: 20px;
-  border: 1px dashed #cbd5e1;
-  background: #f8fafc;
-  display: grid;
-  gap: 8px;
-}
-
-.peer-empty-state strong {
-  color: #0f172a;
-  font-size: 1rem;
-}
-
-.peer-empty-state p {
-  margin: 0;
-  color: #64748b;
-  line-height: 1.7;
-}
-
-.gap-positive {
-  color: #047857;
-}
-
-.gap-negative {
-  color: #b91c1c;
-}
-
-.gap-neutral {
-  color: #0f172a;
-}
-
-.model-card {
-  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-  border: 1px solid #dbe4f0;
-  border-radius: 16px;
-  padding: 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.model-card-muted {
-  opacity: 0.72;
-}
-
-.model-card-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.model-badge {
-  padding: 6px 10px;
-  border-radius: 999px;
-  font-size: 0.72rem;
-  font-weight: 800;
-  white-space: nowrap;
-}
-
-.badge-ready {
-  background: #dbeafe;
-  color: #1d4ed8;
-}
-
-.badge-muted {
-  background: #e2e8f0;
-  color: #475569;
-}
-
-.model-desc {
-  margin: 6px 0 0;
-  font-size: 0.78rem;
-  line-height: 1.5;
-  color: #64748b;
-}
-
-.model-state {
-  font-size: 0.86rem;
-  color: #64748b;
-}
-
-.model-highlight-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: auto;
-}
-
-.model-highlight {
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: #e0f2fe;
-  color: #075985;
-  font-size: 0.72rem;
-  font-weight: 700;
-}
-
-.f-score-matrix {
-  display: grid;
-  gap: 10px;
-}
-
-.matrix-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 10px;
-  background: #f8fafc;
-  border-radius: 8px;
-  font-size: 0.85rem;
-}
-
-.matrix-name { font-weight: 600; color: #475569; }
-.matrix-val { font-family: 'Monaco', monospace; font-weight: 700; color: #1e293b; }
-.matrix-status.passed { color: #10b981; font-weight: 800; }
-
-.calculator {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.input-group {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.input-group label { font-size: 0.9rem; font-weight: 600; color: #475569; }
-
-.input-group input {
-  width: 100px;
-  padding: 8px 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  font-weight: 700;
-  color: #3b82f6;
-  background: #f8fafc;
-  text-align: center;
-}
-
-.result-box {
-  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-  padding: 20px;
-  border-radius: 12px;
-  border: 1px solid #e2e8f0;
-}
-
-.compact-result {
-  padding: 16px;
-}
-
-.res-item {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.res-label { font-size: 0.85rem; color: #64748b; font-weight: 600; }
-.res-val { font-weight: 800; font-family: 'Monaco', monospace; }
-
-.main-res {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px dashed #cbd5e1;
-  font-size: 1.2rem;
-}
-
-.main-res .res-val { color: #3b82f6; }
-
-.section-footer {
-  font-size: 0.75rem;
-  color: #94a3b8;
-  margin-top: 16px;
-  font-style: italic;
-}
 
 .loading-overlay {
   position: fixed;
@@ -2208,12 +835,6 @@ onUnmounted(() => {
   .grid-layout {
     grid-template-columns: 1fr;
   }
-  .valuation-grid,
-  .valuation-grid-secondary,
-  .model-grid,
-  .peer-overview-grid {
-    grid-template-columns: 1fr;
-  }
   .page-header {
     flex-direction: column;
     align-items: flex-start;
@@ -2225,42 +846,6 @@ onUnmounted(() => {
   .compare-selector {
     max-width: none;
   }
-  .valuation-header {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .valuation-summary {
-    text-align: left;
-  }
-}
-
-.compare-loading-inline {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: 16px;
-  font-size: 0.75rem;
-  color: #6366f1;
-  font-weight: 700;
-  animation: fadeIn 0.3s ease;
-}
-
-.inline-loader {
-  width: 12px;
-  height: 12px;
-  border: 2px solid #e0e7ff;
-  border-top-color: #6366f1;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateX(-4px); }
-  to { opacity: 1; transform: translateX(0); }
 }
 
 .analysis-detail {
@@ -2389,487 +974,15 @@ onUnmounted(() => {
   background: #1e293b;
 }
 
-.chart-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1.65fr) minmax(250px, 0.7fr);
-  gap: 18px;
-}
-
-.chart-main {
-  min-width: 0;
-}
-
-.chart-sidebar {
-  display: grid;
-  gap: 14px;
-  align-content: start;
-}
-
-.sidebar-card,
-.thesis-score-card,
-.thesis-column,
-.trigger-panel {
-  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-  border: 1px solid #dbe4f0;
-  border-radius: 20px;
-}
-
-.sidebar-card {
-  padding: 18px;
-}
-
-.sidebar-card strong,
-.thesis-score-card strong {
-  display: block;
-  margin-top: 10px;
-  color: #0f172a;
-  font-size: 1.2rem;
-  font-weight: 900;
-}
-
-.sidebar-card p,
-.thesis-headline,
-.thesis-item p,
-.thesis-meta {
-  color: #64748b;
-  line-height: 1.6;
-}
-
-.sidebar-card p {
-  margin: 8px 0 0;
-  font-size: 0.9rem;
-}
-
-.accent-card {
-  background: linear-gradient(180deg, #ecfeff 0%, #f8fafc 100%);
-  border-color: #a5f3fc;
-}
-
-.metric-rows {
-  display: grid;
-  gap: 10px;
-  margin-top: 12px;
-}
-
-.metric-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 0.86rem;
-  color: #475569;
-}
-
-.grid-layout {
-  grid-template-columns: minmax(280px, 0.78fr) minmax(0, 1.22fr);
-}
-
-.compact-header {
-  margin-bottom: 18px;
-}
-
-.score-pill {
-  min-width: 78px;
-  text-align: center;
-  padding: 8px 12px;
-  border-radius: 999px;
-  font-size: 0.84rem;
-  font-weight: 800;
-  font-family: 'Monaco', monospace;
-}
-
-.matrix-copy {
-  display: grid;
-  gap: 4px;
-}
-
-.matrix-item {
-  padding: 14px 16px;
-  border-radius: 16px;
-  border: 1px solid #e2e8f0;
-}
-
-.matrix-status {
-  padding: 6px 10px;
-  border-radius: 999px;
-  font-size: 0.76rem;
-}
-
-.matrix-status.failed {
-  background: #fee2e2;
-  color: #b91c1c;
-  font-weight: 800;
-}
-
-.thesis-section {
-  display: grid;
-  gap: 18px;
-}
-
-.thesis-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: flex-start;
-}
-
-.thesis-scoreboard {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.thesis-score-card {
-  padding: 16px;
-}
-
-.thesis-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.thesis-column,
-.trigger-panel {
-  padding: 18px;
-}
-
-.column-header h3 {
-  margin: 6px 0 0;
-  color: #0f172a;
-}
-
-.thesis-stack {
-  display: grid;
-  gap: 12px;
-  margin-top: 16px;
-}
-
-.thesis-item {
-  padding: 14px;
-  border-radius: 16px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-}
-
-.thesis-badge {
-  padding: 6px 10px;
-  border-radius: 999px;
-  font-size: 0.76rem;
-  font-weight: 800;
-}
-
-.thesis-badge.on_track,
-.thesis-badge.low {
-  background: #dcfce7;
-  color: #166534;
-}
-
-.thesis-badge.watch,
-.thesis-badge.medium {
-  background: #fef3c7;
-  color: #92400e;
-}
-
-.thesis-badge.at_risk,
-.thesis-badge.high {
-  background: #fee2e2;
-  color: #b91c1c;
-}
-
-.trigger-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 16px;
-}
-
-.trigger-chip {
-  padding: 14px 16px;
-  border-radius: 16px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  color: #334155;
-  line-height: 1.6;
-}
-
-/* DDM 股息折现动态沙盘样式 */
-.ddm-sandbox-panel {
-  grid-column: span 2;
-  margin-top: 18px;
-  padding: 24px;
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.75) 0%, rgba(248, 250, 252, 0.75) 100%);
-  border: 1px solid rgba(226, 232, 240, 0.8);
-  border-radius: 24px;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.03);
-}
-
-.ddm-sandbox-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 24px;
-  border-bottom: 1px dashed rgba(226, 232, 240, 0.8);
-  padding-bottom: 16px;
-}
-
-.ddm-sandbox-header strong {
-  display: block;
-  font-size: 0.9rem;
-  color: #64748b;
-  font-weight: 500;
-  margin-top: 4px;
-}
-
-.ddm-badge {
-  padding: 8px 16px;
-  border-radius: 999px;
-  font-size: 0.84rem;
-  font-weight: 800;
-  background: #dcfce7;
-  color: #15803d;
-  box-shadow: 0 2px 8px rgba(22, 163, 74, 0.1);
-  transition: all 0.2s ease;
-}
-
-.ddm-badge.ddm-badge-warning {
-  background: #fef3c7;
-  color: #b45309;
-  box-shadow: 0 2px 8px rgba(217, 119, 6, 0.1);
-}
-
-.ddm-sandbox-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
-  gap: 32px;
-  align-items: start;
-}
-
-.ddm-sliders {
-  display: grid;
-  gap: 20px;
-}
-
-.ddm-slider-group {
-  display: grid;
-  gap: 8px;
-}
-
-.slider-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 0.88rem;
-  font-weight: 700;
-  color: #475569;
-}
-
-.slider-value {
-  color: #0f172a;
-  font-family: 'Monaco', monospace;
-  font-size: 0.95rem;
-  font-weight: 800;
-}
-
-.ddm-sliders input[type="range"] {
-  -webkit-appearance: none;
-  width: 100%;
-  height: 6px;
-  border-radius: 99px;
-  background: #e2e8f0;
-  outline: none;
-}
-
-.ddm-sliders input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: #0f172a;
-  border: 2px solid #ffffff;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
-  cursor: pointer;
-  transition: all 0.1s ease;
-}
-
-.ddm-sliders input[type="range"]::-webkit-slider-thumb:hover {
-  transform: scale(1.2);
-  background: #3b82f6;
-  box-shadow: 0 2px 10px rgba(59, 130, 246, 0.3);
-}
-
-.ddm-results {
-  display: grid;
-  gap: 24px;
-}
-
-.ddm-result-cards {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.ddm-res-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 16px;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  gap: 6px;
-}
-
-.ddm-res-card span {
-  font-size: 0.74rem;
-  color: #64748b;
-  font-weight: 600;
-  text-align: center;
-}
-
-.ddm-res-card strong {
-  font-size: 1.15rem;
-  font-weight: 800;
-  color: #0f172a;
-}
-
-.ddm-res-card-highlight {
-  background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%);
-  border-color: #a7f3d0;
-  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.05);
-}
-
-.ddm-res-card-highlight span {
-  color: #047857;
-}
-
-.ddm-res-card .glow-value {
-  font-size: 1.4rem;
-  color: #10b981;
-  text-shadow: 0 0 10px rgba(16, 185, 129, 0.1);
-}
-
-.ddm-res-card .text-error {
-  color: #ef4444;
-  text-shadow: none;
-}
-
-.ddm-mos-meter {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 16px;
-  padding: 16px;
-  display: grid;
-  gap: 12px;
-}
-
-.mos-meter-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 0.84rem;
-  font-weight: 700;
-  color: #475569;
-}
-
-.mos-meter-header strong {
-  font-size: 1.1rem;
-  font-weight: 800;
-}
-
-.text-success {
-  color: #10b981;
-}
-
-.text-error {
-  color: #f43f5e;
-}
-
-.mos-track {
-  position: relative;
-  height: 8px;
-  background: #e2e8f0;
-  border-radius: 99px;
-  overflow: visible;
-}
-
-.mos-bar {
-  height: 100%;
-  border-radius: 99px;
-  transition: width 0.15s ease, background-color 0.15s ease;
-}
-
-.mos-marker {
-  position: absolute;
-  top: -4px;
-  width: 2px;
-  height: 16px;
-  background: #64748b;
-}
-
-.mos-labels {
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.72rem;
-  color: #94a3b8;
-  font-weight: 600;
-}
-
-.ddm-warning-block {
-  padding: 16px;
-  border-radius: 16px;
-  background: #fffbeb;
-  border: 1px solid #fef3c7;
-  color: #b45309;
-  font-size: 0.84rem;
-  line-height: 1.6;
-  font-weight: 700;
-}
-
-@media (max-width: 1180px) {
-  .ddm-sandbox-panel {
-    grid-column: span 1;
-  }
-  .ddm-sandbox-grid {
-    grid-template-columns: 1fr;
-    gap: 24px;
-  }
-}
 
 
 @media (max-width: 1180px) {
-  .chart-layout,
-  .peer-header,
-  .normalized-grid,
-  .thesis-grid,
-  .thesis-scoreboard,
-  .trigger-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .peer-header {
-    display: grid;
-  }
-
-  .peer-badge-stack {
-    justify-content: flex-start;
-  }
-
-  .normalized-header {
-    display: grid;
-  }
-
   .btn-back {
     align-self: flex-start;
   }
-
   .analysis-cache-banner {
     display: grid;
   }
-
   .analysis-cache-time {
     white-space: normal;
   }

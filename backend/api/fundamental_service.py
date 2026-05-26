@@ -270,13 +270,33 @@ class FundamentalService:
         symbol = cls._fix_symbol(symbol)
         cache_key = f"shareholder_overlay_v3_{symbol}"
         cached = cls._cache_get_value(cache_key)
-        if cached is not None: return cached
-        
+        if cached is not None:
+            return cached
+
+        stale = cls._cache_get_value(f"{cache_key}_stale")
+        if stale is not None:
+            ref_key = f"{cache_key}_refreshing"
+            bg = bool(cache.get(ref_key))
+            if not bg:
+                bg = cache.add(ref_key, True, 600)
+                if bg:
+                    threading.Thread(
+                        target=lambda: (cls._build_shareholder_data(symbol), cache.delete(ref_key)),
+                        daemon=True,
+                    ).start()
+            return stale
+
+        return cls._build_shareholder_data(symbol)
+
+    @classmethod
+    def _build_shareholder_data(cls, symbol):
+        cache_key = f"shareholder_overlay_v3_{symbol}"
         df = cls.get_shareholder_history(symbol)
         if df is None or df.empty: return {'shareholder_history': [], 'shareholder_summary': {}}
         
         payload = Calc.calculate_shareholder_structure(df)
         cls._cache_set_value(cache_key, payload, 3 * 24 * 3600)
+        cls._cache_set_value(f"{cache_key}_stale", payload, 90 * 24 * 3600)
         return payload
 
     @classmethod
@@ -316,6 +336,13 @@ class FundamentalService:
             if payload:
                 cls._cache_set_value(cache_key, payload, cls.CACHE_TTL)
                 cls._cache_set_value(stale_key, payload, cls.STALE_TTL)
+                # 预热含股东结构时，额外存一份不含股东的 key 给前端首次请求用
+                if include_shareholder:
+                    core_key = f"quality_core_v2_{symbol}"
+                    core_stale = f"{core_key}_stale"
+                    core_payload = {k: v for k, v in payload.items() if k not in ('shareholder_history', 'shareholder_summary')}
+                    cls._cache_set_value(core_key, core_payload, cls.CACHE_TTL)
+                    cls._cache_set_value(core_stale, core_payload, cls.STALE_TTL)
             
             logger.info(f"[Quality] Successfully completed quality calculation for {symbol}")
             return payload
