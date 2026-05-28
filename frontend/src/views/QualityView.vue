@@ -1,30 +1,136 @@
 <template>
-  <div class="quality-view">
-    <header class="page-header">
+  <div class="light-page quality-view">
+    <header class="light-hero-card">
       <div v-if="latestStats" class="stock-info">
-        <div class="title-row">
-          <h1 class="stock-name">{{ stockName }} 财务溯源</h1>
-          <span class="symbol-tag">{{ symbol }}</span>
+        <p class="light-hero-kicker">Financial Tracing</p>
+        <div class="hero-title-row">
+          <h1 class="light-hero-title">{{ stockName }} 财务溯源</h1>
+          <span class="light-symbol-chip">{{ symbol }}</span>
         </div>
+        <p class="light-hero-subtitle">
+          追溯 10 年核心财务指标，拆解盈利质量、现金流、资本配置与资产负债表风险。
+        </p>
         <div class="badges">
-          <div class="badge-item" @mouseenter="showTooltip($event, 'roe')" @mouseleave="hideTooltip">
-            <span class="label">最新 ROE <i class="info-icon">i</i></span>
-            <span class="value">{{ formatPct(latestStats.roe) }}</span>
-          </div>
-          <div class="badge-item" @mouseenter="showTooltip($event, 'net_margin')" @mouseleave="hideTooltip">
-            <span class="label">净利率 <i class="info-icon">i</i></span>
-            <span class="value">{{ formatPct(latestStats.net_margin) }}</span>
-          </div>
-          <div class="badge-item" @mouseenter="showTooltip($event, 'payout_ratio')" @mouseleave="hideTooltip">
-            <span class="label">派息率 <i class="info-icon">i</i></span>
-            <span class="value">{{ formatPct(latestStats.payout_ratio) }}</span>
-          </div>
+          <InfoTooltip placement="bottom">
+            <div class="badge-item">
+              <span class="label">最新 ROE</span>
+              <span class="value">{{ formatPct(latestStats.roe) }}</span>
+            </div>
+            <template #content>
+              <strong>净资产收益率 (ROE)</strong><br/>
+              <div class="formula">ROE = 归母净利润 ÷ 归母股东权益 × 100%</div>
+              股东每投入 100 元能获得的利润<br/>
+              <span class="threshold threshold-green">≥15%：优秀</span>
+              <span class="threshold threshold-yellow">10~15%：良好</span>
+              <span class="threshold threshold-red"><10%：一般</span>
+            </template>
+          </InfoTooltip>
+          <InfoTooltip placement="bottom">
+            <div class="badge-item">
+              <span class="label">净利率</span>
+              <span class="value">{{ formatPct(latestStats.net_margin) }}</span>
+            </div>
+            <template #content>
+              <strong>净利率</strong><br/>
+              <div class="formula">净利率 = 归母净利润 ÷ 营业总收入 × 100%</div>
+              每 1 元收入能转化为多少净利润<br/>
+              <span class="threshold threshold-green">≥20%：高毛利</span>
+              <span class="threshold threshold-yellow">10~20%：中等</span>
+              <span class="threshold threshold-red"><10%：低毛利</span>
+            </template>
+          </InfoTooltip>
+          <InfoTooltip placement="bottom">
+            <div class="badge-item">
+              <span class="label">派息率</span>
+              <span class="value">{{ formatPct(latestStats.payout_ratio) }}</span>
+            </div>
+            <template #content>
+              <strong>派息率</strong><br/>
+              <div class="formula">派息率 = 每股分红 ÷ 每股收益 × 100%</div>
+              利润中有多少分给了股东<br/>
+              <span class="threshold threshold-green">≥60%：高分红</span>
+              <span class="threshold threshold-yellow">30~60%：中等</span>
+              <span class="threshold threshold-red"><30%：低分红</span>
+            </template>
+          </InfoTooltip>
         </div>
       </div>
       <div class="header-actions">
-        <button @click="$router.back()" class="btn-back">返回</button>
+        <button @click="$router.back()" class="light-btn-back">返回</button>
       </div>
     </header>
+
+    <AlgorithmExplainer title="财务溯源算法说明" :defaultOpen="false">
+      <h4>现金流质量标签</h4>
+      <p>基于利润含金量和自由现金流判断：</p>
+      <div class="formula">
+        CFO/净利润 = 经营现金流 ÷ 归母净利润 × 100%<br/>
+        FCF/净利润 = (经营现金流 - 资本开支) ÷ 归母净利润 × 100%
+      </div>
+      <div class="thresholds">
+        <span class="threshold threshold-green">强：CFO≥100% 且 FCF≥60%</span>
+        <span class="threshold threshold-yellow">中：CFO≥80% 且 FCF≥30%</span>
+        <span class="threshold threshold-red">弱：低于上述标准</span>
+      </div>
+
+      <h4>ROIC 代理</h4>
+      <p>衡量总投入资本的回报效率（简化版本，未剔除利息和税收）：</p>
+      <div class="formula">
+        投入资本 = 股东权益 + 有息负债 - 货币资金<br/>
+        ROIC代理 = 归母净利润 ÷ 平均投入资本 × 100%
+      </div>
+
+      <h4>资本配置标签</h4>
+      <ul>
+        <li><strong>高质量复投</strong>：ROIC≥12% 且 BVPS 增速≥8% 且 股本变动≤1%</li>
+        <li><strong>摊薄扩张</strong>：股本变动≥3% 且 BVPS 增速≤5%</li>
+        <li><strong>分红兑现</strong>：派息率≥60% 且 BVPS 增速<8%</li>
+        <li><strong>均衡配置</strong>：不满足以上任一条件</li>
+      </ul>
+
+      <h4>护城河强度</h4>
+      <p>基于毛利率水平和稳定性判断：</p>
+      <div class="thresholds">
+        <span class="threshold threshold-green">宽护城河：毛利率≥45% 且 波动≤4%</span>
+        <span class="threshold threshold-yellow">中等护城河：毛利率≥30% 且 波动≤7%</span>
+        <span class="threshold threshold-gray">待验证：低于上述标准</span>
+      </div>
+
+      <h4>周期性标签</h4>
+      <p>基于 4 项指标评分（各 1 分）：</p>
+      <ul>
+        <li>收入波动≥15% → +1 分</li>
+        <li>负增长年份≥2 → +1 分</li>
+        <li>ROE 波动≥8% → +1 分</li>
+        <li>增速极差≥10% → +1 分</li>
+      </ul>
+      <div class="thresholds">
+        <span class="threshold threshold-red">强周期：≥3 分</span>
+        <span class="threshold threshold-yellow">中周期：2 分</span>
+        <span class="threshold threshold-green">弱周期：≤1 分</span>
+      </div>
+
+      <h4>资产负债表风险</h4>
+      <p>综合 4 项指标判断：</p>
+      <div class="formula">
+        有息负债/净资产 = (短期借款+长期借款+债券) ÷ 净资产<br/>
+        短债覆盖率 = 货币资金 ÷ 短期有息负债<br/>
+        营运资产占比 = (应收+存货+预付) ÷ 营业收入<br/>
+        商誉占比 = 商誉 ÷ 净资产
+      </div>
+      <div class="thresholds">
+        <span class="threshold threshold-green">低风险：负债率≤30% 且 覆盖率≥130% 且 营运≤35% 且 商誉≤10%</span>
+        <span class="threshold threshold-yellow">中风险：负债率≤80% 且 覆盖率≥90% 且 营运≤55% 且 商誉≤25%</span>
+        <span class="threshold threshold-red">高风险：超过上述任一阈值</span>
+      </div>
+
+      <h4>股东趋势</h4>
+      <div class="thresholds">
+        <span class="threshold threshold-green">筹码集中：近 10 年股东减少≥10%</span>
+        <span class="threshold threshold-gray">基本稳定：变化 <10%</span>
+        <span class="threshold threshold-red">筹码分散：近 10 年股东增加≥10%</span>
+      </div>
+    </AlgorithmExplainer>
 
     <div v-if="loading" class="loading-overlay">
       <div class="loader-box">
@@ -37,9 +143,94 @@
       </div>
     </div>
 
-    <main v-else class="content-grid quality-layout">
-      <section class="chart-section shareholder-section card chart-card feature-card wide-card">
-        <div class="section-header feature-header">
+    <main v-else class="quality-main">
+      <!-- 信号摘要横排 -->
+      <div class="signal-strip">
+        <div v-if="capitalAllocationSummary" class="signal-group">
+          <div class="signal-group-head">
+            <span>资本配置</span>
+            <strong>{{ capitalAllocationSummary.capital_allocation_label }}</strong>
+          </div>
+          <div class="signal-items">
+            <div class="signal-item" @mouseenter="showTooltip($event, 'roic_proxy')" @mouseleave="hideTooltip">
+              <span>ROIC 代理</span><strong>{{ formatPct(capitalAllocationSummary.latest_roic_proxy_pct) }}</strong>
+            </div>
+            <div class="signal-item" @mouseenter="showTooltip($event, 'reinvestment_rate')" @mouseleave="hideTooltip">
+              <span>再投资率</span><strong>{{ formatPct(capitalAllocationSummary.latest_reinvestment_rate_pct) }}</strong>
+            </div>
+            <div class="signal-item" @mouseenter="showTooltip($event, 'bvps_growth')" @mouseleave="hideTooltip">
+              <span>BVPS 增长</span><strong>{{ formatPct(capitalAllocationSummary.latest_book_value_per_share_growth_pct) }}</strong>
+            </div>
+            <div class="signal-item" @mouseenter="showTooltip($event, 'share_change')" @mouseleave="hideTooltip">
+              <span>股本变动</span><strong>{{ formatPct(capitalAllocationSummary.latest_share_change_pct) }}</strong>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="stabilitySummary" class="signal-group">
+          <div class="signal-group-head">
+            <span>经营稳定性</span>
+            <strong>{{ stabilitySummary.operating_stability_label }}</strong>
+          </div>
+          <div class="signal-items">
+            <div class="signal-item" @mouseenter="showTooltip($event, 'gross_margin_vol')" @mouseleave="hideTooltip">
+              <span>毛利率波动</span><strong>{{ formatPct(stabilitySummary.gross_margin_volatility_pct) }}</strong>
+            </div>
+            <div class="signal-item" @mouseenter="showTooltip($event, 'roe_vol')" @mouseleave="hideTooltip">
+              <span>ROE 波动</span><strong>{{ formatPct(stabilitySummary.roe_volatility_pct) }}</strong>
+            </div>
+            <div class="signal-item" @mouseenter="showTooltip($event, 'roic_vol')" @mouseleave="hideTooltip">
+              <span>ROIC 波动</span><strong>{{ formatPct(stabilitySummary.roic_proxy_volatility_pct) }}</strong>
+            </div>
+            <div class="signal-item">
+              <span>周期性</span><strong>{{ stabilitySummary.cyclical_label }}</strong>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="balanceSheetSummary" class="signal-group">
+          <div class="signal-group-head">
+            <span>资产负债表</span>
+            <strong>{{ balanceSheetSummary.balance_sheet_label }}</strong>
+          </div>
+          <div class="signal-items">
+            <div class="signal-item" @mouseenter="showTooltip($event, 'debt_to_equity')" @mouseleave="hideTooltip">
+              <span>有息负债/净资产</span><strong>{{ formatPct(balanceSheetSummary.latest_debt_to_equity_pct) }}</strong>
+            </div>
+            <div class="signal-item" @mouseenter="showTooltip($event, 'short_debt_coverage')" @mouseleave="hideTooltip">
+              <span>短债覆盖</span><strong>{{ formatCoverage(balanceSheetSummary.latest_short_debt_coverage_pct, balanceSheetSummary.latest_short_debt) }}</strong>
+            </div>
+            <div class="signal-item" @mouseenter="showTooltip($event, 'asset_quality_ratio')" @mouseleave="hideTooltip">
+              <span>营运资产/收入</span><strong>{{ formatPct(balanceSheetSummary.latest_receivable_inventory_prepay_to_revenue_pct) }}</strong>
+            </div>
+            <div class="signal-item" @mouseenter="showTooltip($event, 'goodwill_to_equity')" @mouseleave="hideTooltip">
+              <span>商誉/净资产</span><strong>{{ formatPct(balanceSheetSummary.latest_goodwill_to_equity_pct) }}</strong>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="shareholderSummary" class="signal-group">
+          <div class="signal-group-head">
+            <span>股东趋势</span>
+            <strong>{{ shareholderSummary.holder_trend_label }}</strong>
+          </div>
+          <div class="signal-items">
+            <div class="signal-item">
+              <span>股东户数</span><strong>{{ formatCount(shareholderSummary.latest_holder_count) }}</strong>
+            </div>
+            <div class="signal-item">
+              <span>区间变化</span><strong>{{ formatPct(shareholderSummary.holder_count_change_pct) }}</strong>
+            </div>
+            <div class="signal-item">
+              <span>户均持股</span><strong>{{ formatCount(shareholderSummary.latest_avg_shares_per_holder) }}</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 图表纵排 -->
+      <section class="chart-section">
+        <div class="section-header">
           <div>
             <p class="section-kicker">Holder Structure</p>
             <h2>股价与股东人数对比</h2>
@@ -53,41 +244,24 @@
         <div v-if="shareholderLoading && !shareholderHistory.length" class="deferred-card">
           <div class="deferred-spinner"></div>
           <p>正在同步股东人数统计口径…</p>
-          <div class="deferred-quote">
-            <p>"{{ loadingQuote.text }}"</p>
-            <strong>{{ loadingQuote.author }}</strong>
-          </div>
           <span>核心财务图表已优先加载，这块会随后补齐。</span>
         </div>
         <div v-else-if="!shareholderHistory.length" class="deferred-card deferred-card-empty">
-          <p>{{ shareholderError || '暂未取到可用的股东人数历史，可能是源数据缺失或当前窗口没有可对齐记录。' }}</p>
-          <span>下面的现金流、资本配置和稳定性分析已正常加载，不受影响。</span>
+          <p>{{ shareholderError || '暂未取到可用的股东人数历史。' }}</p>
         </div>
         <template v-else>
           <QualityShareholderChart :shareholderHistory="shareholderHistory" :stockName="stockName" />
           <div class="insight-strip">
-          <div class="insight-chip">
-            <span>最后统计日</span>
-            <strong>{{ latestShareholderDate }}</strong>
-          </div>
-          <div class="insight-chip">
-            <span>统计日股价</span>
-            <strong>{{ formatPrice(shareholderSummary?.latest_price) }}</strong>
-          </div>
-          <div class="insight-chip">
-            <span>股东户数</span>
-            <strong>{{ formatCount(shareholderSummary?.latest_holder_count) }}</strong>
-          </div>
-          <div class="insight-chip">
-            <span>区间变化</span>
-            <strong>{{ formatPct(shareholderSummary?.holder_count_change_pct) }}</strong>
-          </div>
+            <div class="insight-chip"><span>最后统计日</span><strong>{{ latestShareholderDate }}</strong></div>
+            <div class="insight-chip"><span>统计日股价</span><strong>{{ formatPrice(shareholderSummary?.latest_price) }}</strong></div>
+            <div class="insight-chip"><span>股东户数</span><strong>{{ formatCount(shareholderSummary?.latest_holder_count) }}</strong></div>
+            <div class="insight-chip"><span>区间变化</span><strong>{{ formatPct(shareholderSummary?.holder_count_change_pct) }}</strong></div>
           </div>
         </template>
       </section>
 
-      <section class="chart-section cashflow-section card feature-card">
-        <div class="section-header feature-header">
+      <section class="chart-section">
+        <div class="section-header">
           <div>
             <p class="section-kicker">Cash Flow</p>
             <h2>现金流质量矩阵</h2>
@@ -98,135 +272,21 @@
         <QualityCashflowChart :data="qualityData" />
         <div v-if="cashflowSummary" class="insight-strip">
           <div class="insight-chip" @mouseenter="showTooltip($event, 'cfo_to_profit')" @mouseleave="hideTooltip">
-            <span>CFO / 净利润</span>
-            <strong>{{ cashflowSummary.latest_cfo_to_profit_pct.toFixed(1) }}%</strong>
+            <span>CFO / 净利润</span><strong>{{ formatPct(cashflowSummary.latest_cfo_to_profit_pct) }}</strong>
           </div>
           <div class="insight-chip" @mouseenter="showTooltip($event, 'fcf_to_profit')" @mouseleave="hideTooltip">
-            <span>FCF / 净利润</span>
-            <strong>{{ cashflowSummary.latest_fcf_to_profit_pct.toFixed(1) }}%</strong>
+            <span>FCF / 净利润</span><strong>{{ formatPct(cashflowSummary.latest_fcf_to_profit_pct) }}</strong>
           </div>
           <div class="insight-chip" @mouseenter="showTooltip($event, 'fcf_yield')" @mouseleave="hideTooltip">
-            <span>FCF 收益率</span>
-            <strong>{{ cashflowSummary.latest_fcf_yield_pct.toFixed(1) }}%</strong>
+            <span>FCF 收益率</span><strong>{{ formatPct(cashflowSummary.latest_fcf_yield_pct) }}</strong>
           </div>
           <div class="insight-chip" @mouseenter="showTooltip($event, 'capex_intensity')" @mouseleave="hideTooltip">
-            <span>资本开支强度</span>
-            <strong>{{ cashflowSummary.latest_capex_intensity_pct.toFixed(1) }}%</strong>
+            <span>资本开支强度</span><strong>{{ formatPct(cashflowSummary.latest_capex_intensity_pct) }}</strong>
           </div>
         </div>
       </section>
 
-      <aside class="signal-panel card">
-        <section v-if="capitalAllocationSummary" class="signal-block">
-          <div class="signal-block-head">
-            <span class="section-kicker">Capital Allocation</span>
-            <strong>{{ capitalAllocationSummary.capital_allocation_label }}</strong>
-          </div>
-          <div class="signal-grid">
-            <div class="signal-card" @mouseenter="showTooltip($event, 'roic_proxy')" @mouseleave="hideTooltip">
-              <span>ROIC 代理</span>
-              <strong>{{ capitalAllocationSummary.latest_roic_proxy_pct.toFixed(1) }}%</strong>
-            </div>
-            <div class="signal-card" @mouseenter="showTooltip($event, 'reinvestment_rate')" @mouseleave="hideTooltip">
-              <span>再投资率</span>
-              <strong>{{ capitalAllocationSummary.latest_reinvestment_rate_pct.toFixed(1) }}%</strong>
-            </div>
-            <div class="signal-card" @mouseenter="showTooltip($event, 'bvps_growth')" @mouseleave="hideTooltip">
-              <span>BVPS 增长</span>
-              <strong>{{ capitalAllocationSummary.latest_book_value_per_share_growth_pct.toFixed(1) }}%</strong>
-            </div>
-            <div class="signal-card" @mouseenter="showTooltip($event, 'share_change')" @mouseleave="hideTooltip">
-              <span>股本变动</span>
-              <strong>{{ capitalAllocationSummary.latest_share_change_pct.toFixed(1) }}%</strong>
-            </div>
-          </div>
-          <p class="signal-meta">{{ capitalAllocationSummary.financing_signal }}</p>
-        </section>
-
-        <section v-if="stabilitySummary" class="signal-block">
-          <div class="signal-block-head">
-            <span class="section-kicker">Operating Stability</span>
-            <strong>{{ stabilitySummary.operating_stability_label }}</strong>
-          </div>
-          <div class="signal-grid">
-            <div class="signal-card" @mouseenter="showTooltip($event, 'gross_margin_vol')" @mouseleave="hideTooltip">
-              <span>毛利率波动</span>
-              <strong>{{ stabilitySummary.gross_margin_volatility_pct.toFixed(1) }}%</strong>
-            </div>
-            <div class="signal-card" @mouseenter="showTooltip($event, 'roe_vol')" @mouseleave="hideTooltip">
-              <span>ROE 波动</span>
-              <strong>{{ stabilitySummary.roe_volatility_pct.toFixed(1) }}%</strong>
-            </div>
-            <div class="signal-card" @mouseenter="showTooltip($event, 'roic_vol')" @mouseleave="hideTooltip">
-              <span>ROIC 波动</span>
-              <strong>{{ stabilitySummary.roic_proxy_volatility_pct.toFixed(1) }}%</strong>
-            </div>
-            <div class="signal-card">
-              <span>周期性</span>
-              <strong>{{ stabilitySummary.cyclical_label }}</strong>
-            </div>
-          </div>
-          <p class="signal-meta">{{ stabilitySummary.moat_label }}</p>
-        </section>
-
-        <section v-if="balanceSheetSummary" class="signal-block">
-          <div class="signal-block-head">
-            <span class="section-kicker">Balance Sheet</span>
-            <strong>{{ balanceSheetSummary.balance_sheet_label }}</strong>
-          </div>
-          <div class="signal-grid">
-            <div class="signal-card" @mouseenter="showTooltip($event, 'debt_to_equity')" @mouseleave="hideTooltip">
-              <span>有息负债 / 净资产</span>
-              <strong>{{ balanceSheetSummary.latest_debt_to_equity_pct.toFixed(1) }}%</strong>
-            </div>
-            <div class="signal-card" @mouseenter="showTooltip($event, 'short_debt_coverage')" @mouseleave="hideTooltip">
-              <span>短债覆盖</span>
-              <strong>{{ formatCoverage(balanceSheetSummary.latest_short_debt_coverage_pct, balanceSheetSummary.latest_short_debt) }}</strong>
-            </div>
-            <div class="signal-card" @mouseenter="showTooltip($event, 'asset_quality_ratio')" @mouseleave="hideTooltip">
-              <span>营运资产 / 收入</span>
-              <strong>{{ balanceSheetSummary.latest_receivable_inventory_prepay_to_revenue_pct.toFixed(1) }}%</strong>
-            </div>
-            <div class="signal-card" @mouseenter="showTooltip($event, 'goodwill_to_equity')" @mouseleave="hideTooltip">
-              <span>商誉 / 净资产</span>
-              <strong>{{ balanceSheetSummary.latest_goodwill_to_equity_pct.toFixed(1) }}%</strong>
-            </div>
-          </div>
-          <p class="signal-meta">
-            {{ balanceSheetSummary.liquidity_label }} / {{ balanceSheetSummary.asset_quality_label }} · {{ (balanceSheetSummary.risk_flags || []).join(' · ') }}
-          </p>
-        </section>
-
-        <section v-if="shareholderSummary" class="signal-block">
-          <div class="signal-block-head">
-            <span class="section-kicker">Holder Snapshot</span>
-            <strong>{{ shareholderSummary.holder_trend_label }}</strong>
-          </div>
-          <div class="signal-grid">
-            <div class="signal-card">
-              <span>股东户数</span>
-              <strong>{{ formatCount(shareholderSummary.latest_holder_count) }}</strong>
-            </div>
-            <div class="signal-card">
-              <span>区间变化</span>
-              <strong>{{ formatPct(shareholderSummary.holder_count_change_pct) }}</strong>
-            </div>
-            <div class="signal-card">
-              <span>户均持股</span>
-              <strong>{{ formatCount(shareholderSummary.latest_avg_shares_per_holder) }}</strong>
-            </div>
-            <div class="signal-card">
-              <span>观察窗口</span>
-              <strong>{{ shareholderSummary.window_years }} 年</strong>
-            </div>
-          </div>
-          <p class="signal-meta">
-            {{ shareholderSummary.alignment_note }}
-          </p>
-        </section>
-      </aside>
-
-      <section class="chart-section dupont-section card chart-card">
+      <section class="chart-section">
         <div class="section-header">
           <div>
             <h2>杜邦 ROE 归因分析</h2>
@@ -241,7 +301,7 @@
         </div>
       </section>
 
-      <section class="chart-section moat-section card chart-card">
+      <section class="chart-section">
         <div class="section-header">
           <div>
             <h2>盈利护城河追踪</h2>
@@ -255,7 +315,7 @@
         </div>
       </section>
 
-      <section class="chart-section stability-section card chart-card">
+      <section class="chart-section">
         <div class="section-header">
           <div>
             <h2>经营稳定性与周期波动</h2>
@@ -270,7 +330,7 @@
         </div>
       </section>
 
-      <section class="chart-section payout-section card chart-card">
+      <section class="chart-section">
         <div class="section-header">
           <div>
             <h2>股东回馈矩阵</h2>
@@ -284,7 +344,7 @@
         </div>
       </section>
 
-      <section class="chart-section balance-sheet-section card chart-card wide-card">
+      <section class="chart-section">
         <div class="section-header">
           <div>
             <h2>资产负债表风险透视</h2>
@@ -300,7 +360,7 @@
         </div>
       </section>
 
-      <section class="chart-section capital-allocation-section card chart-card wide-card">
+      <section class="chart-section">
         <div class="section-header">
           <div>
             <h2>资本配置与每股价值跟踪</h2>
@@ -314,7 +374,6 @@
           <div class="insight-chip"><span>高留存低回报</span><strong>钱留在公司但效率不高</strong></div>
         </div>
       </section>
-
     </main>
 
     <!-- Premium Glassmorphism Tooltip -->
@@ -354,6 +413,7 @@ import QualityMoatChart from '@/components/QualityMoatChart.vue'
 import QualityPayoutChart from '@/components/QualityPayoutChart.vue'
 import QualityShareholderChart from '@/components/QualityShareholderChart.vue'
 import QualityStabilityChart from '@/components/QualityStabilityChart.vue'
+import AlgorithmExplainer from '@/components/AlgorithmExplainer.vue'
 
 const route = useRoute()
 const sentimentStore = useSentimentStore()
@@ -434,40 +494,21 @@ const applyShareholderPayload = (payload: any) => {
 }
 
 const fetchData = async () => {
-  if (sentimentStore.qualityCache[symbol]) {
-    const cached = sentimentStore.qualityCache[symbol]
-    applyQualityPayload(cached)
-    loading.value = false
-    if (cached.cache_status === 'stale') {
-      void sentimentStore.getQuality(symbol, true).then(res => applyQualityPayload(res))
-    }
-    void fetchShareholderStructure()
-    return
-  }
-
   loading.value = true
   shareholderLoading.value = true
   shareholderError.value = ''
-  let coreLoaded = false
   try {
-    const res = await stockApi.getQualityAnalysis(symbol, false)
-    qualityData.value = res.data.quality_history || []
-    cashflowSummary.value = res.data.cashflow_summary || null
-    capitalAllocationSummary.value = res.data.capital_allocation_summary || null
-    stabilitySummary.value = res.data.stability_summary || null
-    balanceSheetSummary.value = res.data.balance_sheet_summary || null
-    coreLoaded = true
+    const data = await sentimentStore.getQuality(symbol)
+    applyQualityPayload(data)
+    if (data.cache_status === 'stale') {
+      void sentimentStore.getQuality(symbol, true).then(res => applyQualityPayload(res))
+    }
   } catch (err) {
     console.error('Failed to fetch quality data:', err)
   } finally {
     loading.value = false
   }
-
-  if (coreLoaded) {
-    void fetchShareholderStructure()
-  } else {
-    shareholderLoading.value = false
-  }
+  void fetchShareholderStructure()
 }
 
 const applyQualityPayload = (data: any) => {
@@ -512,37 +553,12 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.quality-view {
-  padding: 24px;
-  min-height: 100vh;
-  background: #f8fafc;
-}
-
-.page-header {
+.hero-title-row {
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 32px;
-}
-
-.title-row {
-  display: flex;
-  align-items: baseline;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 12px;
-  margin-bottom: 12px;
-}
-
-.stock-name {
-  font-size: 2rem;
-  font-weight: 800;
-  color: #1e293b;
-  margin: 0;
-}
-
-.symbol-tag {
-  font-size: 1.1rem;
-  color: #64748b;
-  font-family: monospace;
+  margin: 12px 0;
 }
 
 .badges {
@@ -568,22 +584,6 @@ onMounted(async () => {
   color: #3b82f6;
 }
 
-.btn-back {
-  padding: 8px 20px;
-  background: white;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  font-weight: 600;
-  color: #64748b;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.btn-back:hover {
-  background: #f1f5f9;
-  border-color: #cbd5e1;
-}
-
 .loading-overlay {
   display: flex;
   justify-content: center;
@@ -600,9 +600,8 @@ onMounted(async () => {
   max-width: 420px;
   margin-top: 14px;
   padding: 14px 16px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.74);
-  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: #f8fafc;
+  border: 2px solid #e2e8f0;
   text-align: center;
 }
 
@@ -640,43 +639,34 @@ onMounted(async () => {
   }
 }
 
-.content-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 24px;
-}
-
-.dupont-section,
-.cashflow-section,
-.stability-section,
-.capital-allocation-section {
-  grid-column: span 2;
-}
-
 .card {
-  background: rgba(255, 255, 255, 0.8);
-  backdrop-filter: blur(12px);
-  border: 1px solid #f1f5f9;
-  border-radius: 24px;
+  background: #ffffff;
+  border: 2px solid #e2e8f0;
   padding: 24px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
 }
 
 .section-header {
-  margin-bottom: 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #f1f5f9;
 }
 
 .section-header h2 {
-  font-size: 1.25rem;
+  font-size: 1.15rem;
   font-weight: 800;
-  color: #1e293b;
+  color: #0f172a;
   margin: 0 0 4px 0;
 }
 
 .subtitle {
-  font-size: 0.875rem;
+  font-size: 0.82rem;
   color: #64748b;
   margin: 0;
+  line-height: 1.5;
 }
 
 @media (max-width: 1024px) {
@@ -692,52 +682,24 @@ onMounted(async () => {
   }
 }
 
-/* Tooltip Styles */
-.info-icon, .info-icon-mini {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  background: rgba(59, 130, 246, 0.1);
-  color: #3b82f6;
-  border-radius: 50%;
-  font-size: 10px;
-  font-style: italic;
-  font-weight: 800;
-  margin-left: 6px;
-  cursor: help;
-  border: 1px solid rgba(59, 130, 246, 0.3);
-  vertical-align: middle;
-  transition: all 0.2s;
-}
-
-.info-icon:hover, .info-icon-mini:hover {
-  background: #3b82f6;
-  color: #fff;
-}
-
 .premium-tooltip {
   position: absolute;
   z-index: 1000;
   width: 280px;
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  border-radius: 16px;
+  background: #fff;
+  border: 2px solid #0f172a;
   padding: 16px;
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
   pointer-events: none;
 }
 
 .tooltip-title {
   display: block;
   font-weight: 800;
-  color: #1e293b;
+  color: #0f172a;
   font-size: 0.95rem;
   margin-bottom: 12px;
   padding-bottom: 8px;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 2px solid #0f172a;
 }
 
 .tooltip-row {
@@ -764,46 +726,17 @@ onMounted(async () => {
 }
 
 .fade-enter-active, .fade-leave-active {
-  transition: opacity 0.2s, transform 0.2s;
+  transition: opacity 0.15s;
 }
 
 .fade-enter-from, .fade-leave-to {
   opacity: 0;
-  transform: translateY(-5px);
 }
 
-.header-actions {
-  display: flex;
-  align-items: center;
-}
-
-.btn-back {
-  padding: 8px 24px;
-  background: #1e293b;
-  color: #fff;
-  border: none;
-  border-radius: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.btn-back:hover {
-  background: #334155;
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-}
-
-.quality-view {
-  background:
-    radial-gradient(circle at top left, rgba(59, 130, 246, 0.08), transparent 24%),
-    radial-gradient(circle at top right, rgba(16, 185, 129, 0.08), transparent 20%),
-    linear-gradient(180deg, #f8fbff 0%, #f1f5f9 100%);
-}
-
-.quality-layout {
-  grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.95fr);
-  align-items: start;
+/* 单栏布局 */
+.quality-main {
+  display: grid;
+  gap: 16px;
 }
 
 .section-kicker {
@@ -815,52 +748,149 @@ onMounted(async () => {
   color: #0f766e;
 }
 
-.feature-card,
-.signal-panel,
-.chart-card {
-  background: rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(14px);
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  box-shadow: 0 20px 40px -34px rgba(15, 23, 42, 0.3);
+/* 信号摘要横排 */
+.signal-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
 }
 
-.feature-card {
-  grid-column: span 1;
+.signal-group {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-top: 3px solid #cbd5e1;
+  padding: 14px 16px;
 }
 
-.feature-header {
-  align-items: flex-start;
+.signal-group:nth-child(1) { border-top-color: #6366f1; }
+.signal-group:nth-child(2) { border-top-color: #14b8a6; }
+.signal-group:nth-child(3) { border-top-color: #f59e0b; }
+.signal-group:nth-child(4) { border-top-color: #8b5cf6; }
+
+.signal-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.signal-group-head span {
+  font-size: 0.68rem;
+  font-weight: 800;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.signal-group-head strong {
+  font-size: 0.92rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.signal-items {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.signal-item {
+  padding: 8px 10px;
+  background: #f8fafc;
+  border: 1px solid #f1f5f9;
+  cursor: default;
+}
+
+.signal-item span {
+  display: block;
+  font-size: 0.66rem;
+  color: #94a3b8;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.signal-item strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.88rem;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+/* 图表区块 */
+.chart-section {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-left: 3px solid #0f766e;
+  padding: 20px 24px;
+  display: grid;
+  gap: 16px;
 }
 
 .feature-pill {
-  padding: 8px 12px;
-  border-radius: 999px;
+  padding: 4px 10px;
   background: #ecfdf5;
-  color: #166534;
-  font-size: 0.82rem;
+  color: #047857;
+  font-size: 0.72rem;
   font-weight: 800;
   white-space: nowrap;
+  border: 1px solid #a7f3d0;
+  flex-shrink: 0;
 }
 
 .feature-pill-muted {
-  background: #e2e8f0;
+  background: #f1f5f9;
   color: #475569;
+  border-color: #cbd5e1;
 }
 
 .feature-pill-warning {
   background: #fff7ed;
   color: #c2410c;
+  border-color: #fed7aa;
+}
+
+.insight-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.insight-chip {
+  padding: 10px 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-left: 2px solid #cbd5e1;
+}
+
+.insight-chip span {
+  display: block;
+  font-size: 0.72rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+}
+
+.insight-chip strong {
+  display: block;
+  margin-top: 6px;
+  color: #0f172a;
+  font-size: 0.92rem;
+  font-weight: 900;
 }
 
 .deferred-card {
-  min-height: 320px;
+  min-height: 200px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 10px;
-  border-radius: 20px;
-  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+  background: #f8fafc;
   border: 1px dashed #cbd5e1;
   color: #475569;
   text-align: center;
@@ -868,154 +898,40 @@ onMounted(async () => {
 
 .deferred-card p {
   margin: 0;
-  font-size: 0.98rem;
+  font-size: 0.92rem;
   font-weight: 700;
   color: #0f172a;
 }
 
 .deferred-card span {
-  font-size: 0.88rem;
+  font-size: 0.82rem;
   color: #64748b;
 }
 
-.deferred-quote {
-  max-width: 480px;
-  padding: 12px 14px;
-  border-radius: 16px;
-  background: rgba(240, 249, 255, 0.7);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-}
-
-.deferred-quote p {
-  margin: 0;
-  color: #0f172a;
-  font-size: 0.9rem;
-  font-weight: 700;
-  line-height: 1.7;
-}
-
-.deferred-quote strong {
-  display: block;
-  margin-top: 8px;
-  color: #0f766e;
-  font-size: 0.78rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.deferred-card-empty {
-  gap: 12px;
-}
-
-.deferred-card-empty p,
-.deferred-card-empty span {
-  max-width: 560px;
-}
-
 .deferred-spinner {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border: 3px solid #dbeafe;
   border-top-color: #2563eb;
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
 }
 
-.signal-panel {
-  position: sticky;
-  top: 24px;
-  display: grid;
-  gap: 14px;
-}
-
-.signal-block {
-  padding: 18px;
-  border-radius: 18px;
-  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-  border: 1px solid #dbe4f0;
-}
-
-.signal-block-head strong {
-  display: block;
-  margin-top: 8px;
-  color: #0f172a;
-  font-size: 1.05rem;
-}
-
-.signal-grid,
-.insight-strip {
-  display: grid;
-  gap: 12px;
-}
-
-.signal-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-top: 14px;
-}
-
-.signal-card,
-.insight-chip {
-  padding: 14px;
-  border-radius: 16px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-}
-
-.signal-card span,
-.insight-chip span {
-  display: block;
-  font-size: 0.76rem;
-  color: #64748b;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: 700;
-}
-
-.signal-card strong,
-.insight-chip strong {
-  display: block;
-  margin-top: 8px;
-  color: #0f172a;
-  font-size: 1rem;
-  font-weight: 900;
-}
-
-.signal-meta {
-  margin: 12px 0 0;
-  color: #64748b;
-  font-size: 0.88rem;
-  line-height: 1.6;
-}
-
-.chart-card {
-  display: grid;
-  gap: 16px;
-}
-
-.wide-card {
-  grid-column: span 2;
-}
-
-.insight-strip {
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-}
-
 @media (max-width: 1180px) {
-  .quality-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .signal-panel {
-    position: static;
-  }
-
-  .wide-card {
-    grid-column: span 1;
+  .signal-strip {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 
 @media (max-width: 720px) {
-  .signal-grid,
+  .signal-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-items {
+    grid-template-columns: 1fr;
+  }
+
   .insight-strip {
     grid-template-columns: 1fr;
   }

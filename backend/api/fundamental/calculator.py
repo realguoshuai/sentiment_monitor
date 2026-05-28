@@ -349,8 +349,11 @@ class FundamentalCalculator:
                         float(latest.get('interest_bearing_debt', 0)),
                     ),
                 },
-                'history': df.tail(10).select_dtypes(include=[np.number]).round(4).combine_first(df.tail(10)).to_dict(orient='records'),
             }
+            # 同时写入 'quality_history' 和 'history' 以兼容新旧前端
+            history_df = df.tail(10).copy()
+            history_df['year'] = history_df['REPORT_DATE'].dt.year
+            summary['quality_history'] = summary['history'] = history_df.select_dtypes(include=[np.number]).round(4).combine_first(history_df).to_dict(orient='records')
             return cls.clean_json_data(summary)
         except Exception as e:
             logger.error(f"Calculator Quality Error: {e}")
