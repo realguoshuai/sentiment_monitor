@@ -1,25 +1,25 @@
 ﻿<template>
-  <div class="analysis-detail">
-    <header class="page-header hero-card">
-      <div class="stock-info hero-copy" v-if="stockData">
-        <p class="hero-kicker">Deep Analysis</p>
+  <div class="light-page analysis-detail">
+    <header class="light-hero-card">
+      <div class="stock-info" v-if="stockData">
+        <p class="light-hero-kicker">Deep Analysis</p>
         <div class="hero-title-row">
-          <h1 class="stock-name">{{ getSymbolName(stockData.symbol) }} 估值分析矩阵</h1>
-          <span class="symbol-chip">{{ stockData.symbol }}</span>
+          <h1 class="light-hero-title">{{ getSymbolName(stockData.symbol) }} 估值分析矩阵</h1>
+          <span class="light-symbol-chip">{{ stockData.symbol }}</span>
         </div>
-        <p class="hero-subtitle">
+        <p class="light-hero-subtitle">
           深度观测 10 年分位与公允价值区间，结合 F-Score 排雷，构建完整的价值投资决策矩阵。
         </p>
-        <div class="badges hero-badges">
-          <span class="badge color-pe">PE {{ formatMetric(mainPercentiles?.pe?.current, 'pe') }}</span>
-          <span class="badge color-pb">PB {{ formatMetric(mainPercentiles?.pb?.current, 'pb') }}</span>
-          <span class="badge color-dy">DY {{ formatMetric(mainPercentiles?.dy?.current, 'dy') }}</span>
-          <span class="badge" :class="getScoreClass(analysisData?.f_score.score || 0)">
+        <div class="badges">
+          <span class="light-badge light-badge-pe">PE {{ formatMetric(mainPercentiles?.pe?.current, 'pe') }}</span>
+          <span class="light-badge light-badge-pb">PB {{ formatMetric(mainPercentiles?.pb?.current, 'pb') }}</span>
+          <span class="light-badge light-badge-dy">DY {{ formatMetric(mainPercentiles?.dy?.current, 'dy') }}</span>
+          <span class="light-badge" :class="getScoreClass(analysisData?.f_score.score || 0)">
             F-Score {{ analysisData?.f_score.score }}/10
           </span>
         </div>
       </div>
-      <div class="header-actions hero-tools">
+      <div class="header-actions">
         <div class="compare-selector" v-if="sentimentStore.dashboardStocks.length > 1">
           <div class="glass-header compare-header">
             <div>
@@ -45,9 +45,72 @@
             </label>
           </div>
         </div>
-        <button @click="$router.push('/')" class="btn-back">返回列表</button>
+        <button @click="$router.push('/')" class="light-btn-back">返回列表</button>
       </div>
     </header>
+
+    <AlgorithmExplainer title="估值分析算法说明" :defaultOpen="false">
+      <h4>公允价值计算</h4>
+      <p>采用三模型加权估值，综合不同视角给出合理价格区间：</p>
+      <div class="formula">
+        公允价值 = ROE-PB锚点 × 45% + 盈利能力估值 × 30% + 股东现金流估值 × 25%
+      </div>
+
+      <h4>模型 1：ROE-PB 锚点（权重 45%）</h4>
+      <p>用预期 ROE 和要求回报率反推合理 PB：</p>
+      <div class="formula">
+        合理PB = 预期ROE ÷ 要求回报率（基准 10%）<br/>
+        合理价 = 每股净资产 × 合理PB
+      </div>
+      <p class="note">预期ROE 取自 TTM 利润/净资产，或近 5 年均值。</p>
+
+      <h4>模型 2：盈利能力估值（权重 30%）</h4>
+      <p>把 EPS 资本化，用要求回报率反推合理 PE：</p>
+      <div class="formula">
+        合理PE = 1 ÷ 要求回报率（基准 10%）= 10 倍<br/>
+        合理价 = 归一化EPS × 合理PE
+      </div>
+      <p class="note">归一化 EPS = 近 5 年年报 EPS 中位数，剔除周期波动影响。</p>
+
+      <h4>模型 3：股东自由现金流估值（权重 25%）</h4>
+      <p>基于戈登增长模型变体：</p>
+      <div class="formula">
+        合理价 = 每股FCF × (1 + 增长率) ÷ (折现率 - 增长率)<br/>
+        增长率 = min(ROE × 留存率 × 60%, 6%)，限制在 1.5%~6%
+      </div>
+
+      <h4>F-Score 安全性评分（0~10 分）</h4>
+      <p>检查 5 项财务健康指标，按通过比例折算为 10 分制：</p>
+      <ul>
+        <li>ROA > 0（盈利能力）</li>
+        <li>净利润 > 0（盈利能力）</li>
+        <li>经营性现金流 > 0（现金流质量）</li>
+        <li>现金流 > 净利润（利润含金量）</li>
+        <li>ROA 同比提升（增长趋势）</li>
+      </ul>
+      <div class="thresholds">
+        <span class="threshold threshold-green">≥ 7 分：健康</span>
+        <span class="threshold threshold-yellow">4~6 分：关注</span>
+        <span class="threshold threshold-red">≤ 3 分：风险</span>
+      </div>
+
+      <h4>安全边际</h4>
+      <div class="formula">
+        安全边际 = (保守估值 - 当前价) ÷ 保守估值 × 100%
+      </div>
+      <div class="thresholds">
+        <span class="threshold threshold-green">≥ 30%：高安全边际</span>
+        <span class="threshold threshold-yellow">15%~30%：中等</span>
+        <span class="threshold threshold-red">< 15%：低/无</span>
+      </div>
+
+      <h4>预期年化回报（3 年视角）</h4>
+      <div class="formula">
+        总回报 = 经营回报率 + 股息率 + 估值回归年化<br/>
+        经营回报率 = 预期ROE ÷ 当前PB<br/>
+        估值回归 = (基准公允价 ÷ 当前价)^(1/3) - 1
+      </div>
+    </AlgorithmExplainer>
 
     <div class="main-content" v-if="loading && !analysisData">
       <div class="loading-overlay">
@@ -127,6 +190,7 @@ import ValuationChart from '@/components/ValuationChart.vue'
 import ValuationConclusionPanel from '@/components/ValuationConclusionPanel.vue'
 import PeerComparison from '@/components/PeerComparison.vue'
 import InvestmentThesisPanel from '@/components/InvestmentThesisPanel.vue'
+import AlgorithmExplainer from '@/components/AlgorithmExplainer.vue'
 
 interface PercentileMetric {
   current: number;
@@ -473,9 +537,9 @@ watch(compareSymbols, () => {
 
 
 const getScoreClass = (score: number) => {
-  if (score >= 7) return 'score-high';
-  if (score <= 3) return 'score-low';
-  return 'score-mid';
+  if (score >= 7) return 'light-badge-high';
+  if (score <= 3) return 'light-badge-low';
+  return 'light-badge-mid';
 };
 
 
@@ -557,14 +621,6 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 24px;
-  gap: 20px;
-}
-
 .header-actions {
   display: flex;
   flex-direction: column;
@@ -573,16 +629,21 @@ onUnmounted(() => {
   flex: 1;
 }
 
+.hero-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+/* Editorial: 无阴影无圆角，用边框分隔 */
 .compare-selector {
-  background: rgba(255, 255, 255, 0.9); /* 提高不透明度?*/
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid #cbd5e1; /* 明显的边框 */
+  background: #fff;
+  border: 1px solid #d1d5db;
   padding: 16px;
-  border-radius: 20px;
   width: 100%;
   max-width: 550px;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
 }
 
 .glass-header {
@@ -590,14 +651,14 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 2px solid #0f172a;
   padding-bottom: 8px;
 }
 
 .glass-header .label {
   font-size: 0.8rem;
   font-weight: 800;
-  color: #1e293b; /* 加深文字颜色 */
+  color: #0f172a;
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -605,29 +666,27 @@ onUnmounted(() => {
 .glass-header .count {
   font-size: 0.7rem;
   font-weight: 800;
-  background: #3b82f6;
+  background: #0f172a;
   color: white;
   padding: 2px 10px;
-  border-radius: 20px;
 }
 
 .compare-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
   margin-top: 10px;
 }
 
 .glass-pill {
   position: relative;
   font-size: 0.75rem;
-  padding: 8px 14px;
-  background: #f1f5f9; /* 明显的底色?*/
-  border: 1px solid #e2e8f0;
+  padding: 6px 14px;
+  background: #fff;
+  border: 1px solid #d1d5db;
   color: #475569;
-  border-radius: 12px;
   cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.15s;
   user-select: none;
   font-weight: 600;
 }
@@ -637,79 +696,35 @@ onUnmounted(() => {
 }
 
 .glass-pill:hover {
-  background: #f8fafc;
-  border-color: #3b82f6;
-  color: #3b82f6;
-  transform: translateY(-2px);
+  border-color: #0f172a;
+  color: #0f172a;
 }
 
 .glass-pill.active {
-  background: #3b82f6;
+  background: #0f172a;
   color: white;
-  border-color: #2563eb;
+  border-color: #0f172a;
   font-weight: 800;
-  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.4);
-}
-
-.stock-name {
-  font-size: 1.8rem;
-  font-weight: 900;
-  margin-bottom: 12px;
-  background: linear-gradient(135deg, #0f172a 0%, #3b82f6 100%);
-  background-clip: text;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
 }
 
 .badges {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
 }
-
-.badge {
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 0.8rem;
-  font-weight: 700;
-  font-family: 'Monaco', monospace;
-}
-
-.color-pe { background: #dbeafe; color: #1e40af; }
-.color-pb { background: #fef3c7; color: #92400e; }
-.color-dy { background: #dcfce7; color: #166534; }
-.score-high { background: #d1fae5; color: #065f46; }
-.score-mid { background: #f1f5f9; color: #475569; }
-.score-low { background: #fee2e2; color: #991b1b; }
-
-.btn-back {
-  padding: 8px 20px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  cursor: pointer;
-  background: white;
-  font-weight: 600;
-  font-size: 0.9rem;
-  transition: all 0.2s;
-}
-
-.btn-back:hover {
-  background: #f8fafc;
-  border-color: #cbd5e1;
-}
-
 
 .grid-layout {
   display: grid;
   grid-template-columns: minmax(280px, 0.78fr) minmax(0, 1.22fr);
-  gap: 24px;
+  gap: 0;
+  border-top: 1px solid #e5e7eb;
 }
 
-
+/* Editorial: 全屏加载用纯白底，无模糊 */
 .loading-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(10px);
+  background: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -717,11 +732,9 @@ onUnmounted(() => {
 }
 
 .loading-box {
-  background: white;
+  background: #fff;
   padding: 40px;
-  border-radius: 24px;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.1);
-  border: 1px solid #f1f5f9;
+  border: 1px solid #e5e7eb;
   width: 100%;
   max-width: 400px;
   text-align: center;
@@ -730,8 +743,8 @@ onUnmounted(() => {
 .loader-circle {
   width: 48px;
   height: 48px;
-  border: 4px solid #f1f5f9;
-  border-top-color: #3b82f6;
+  border: 3px solid #e5e7eb;
+  border-top-color: #0f172a;
   border-radius: 50%;
   margin: 0 auto 24px;
   animation: spin 1s linear infinite;
@@ -740,10 +753,9 @@ onUnmounted(() => {
 .loading-quote {
   margin-top: 18px;
   padding: 14px 16px;
-  border-radius: 18px;
-  background: linear-gradient(180deg, rgba(239, 246, 255, 0.96) 0%, rgba(248, 250, 252, 0.98) 100%);
-  border: 1px solid rgba(59, 130, 246, 0.18);
-  text-align: center;
+  border-left: 3px solid #0f172a;
+  background: #f9fafb;
+  text-align: left;
 }
 
 .loading-quote p {
@@ -752,12 +764,13 @@ onUnmounted(() => {
   font-size: 0.94rem;
   font-weight: 700;
   line-height: 1.7;
+  font-style: italic;
 }
 
 .loading-quote span {
   display: block;
   margin-top: 8px;
-  color: #2563eb;
+  color: #6b7280;
   font-size: 0.78rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -767,21 +780,18 @@ onUnmounted(() => {
 .loading-back-btn {
   margin-top: 18px;
   width: 100%;
-  border: 1px solid #cbd5e1;
-  background: #0f172a;
-  color: #ffffff;
-  border-radius: 14px;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #0f172a;
   padding: 12px 16px;
   font-size: 0.9rem;
   font-weight: 800;
   cursor: pointer;
-  transition: background 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+  transition: background 0.15s;
 }
 
 .loading-back-btn:hover {
-  background: #1e293b;
-  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.16);
-  transform: translateY(-1px);
+  background: #f9fafb;
 }
 
 @keyframes spin {
@@ -799,19 +809,18 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-  color: #94a3b8;
+  color: #9ca3af;
   font-size: 0.9rem;
-  transition: all 0.3s;
+  transition: color 0.2s;
 }
 
 .step-item.active {
-  color: #3b82f6;
+  color: #0f172a;
   font-weight: 700;
-  transform: translateX(4px);
 }
 
 .step-item.done {
-  color: #10b981;
+  color: #059669;
 }
 
 .step-icon {
@@ -827,17 +836,13 @@ onUnmounted(() => {
   margin-top: 32px;
   font-size: 0.7rem;
   font-weight: 800;
-  color: #cbd5e1;
+  color: #d1d5db;
   letter-spacing: 0.2em;
 }
 
 @media (max-width: 1024px) {
   .grid-layout {
     grid-template-columns: 1fr;
-  }
-  .page-header {
-    flex-direction: column;
-    align-items: flex-start;
   }
   .header-actions {
     width: 100%;
@@ -848,68 +853,48 @@ onUnmounted(() => {
   }
 }
 
-.analysis-detail {
-  min-height: 100vh;
-  padding: 24px;
-  background:
-    radial-gradient(circle at top left, rgba(14, 165, 233, 0.1), transparent 28%),
-    radial-gradient(circle at top right, rgba(16, 185, 129, 0.08), transparent 24%),
-    linear-gradient(180deg, #f8fbff 0%, #eef4fb 100%);
-}
-
+/* Editorial: 缓存提示用左侧色条，无渐变无阴影 */
 .analysis-cache-banner {
   margin-bottom: 18px;
-  padding: 14px 18px;
-  border-radius: 18px;
-  border: 1px solid #fed7aa;
-  background: linear-gradient(135deg, rgba(255, 247, 237, 0.98) 0%, rgba(255, 255, 255, 0.94) 100%);
+  padding: 12px 18px;
+  border-left: 3px solid #d97706;
+  background: #fffbeb;
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 14px;
-  color: #9a3412;
-  box-shadow: 0 16px 32px -28px rgba(154, 52, 18, 0.55);
+  color: #92400e;
 }
 
 .analysis-cache-copy {
   display: grid;
-  gap: 6px;
+  gap: 4px;
 }
 
 .analysis-cache-copy strong {
-  font-size: 0.92rem;
+  font-size: 0.88rem;
   line-height: 1.6;
 }
 
 .analysis-cache-badge {
   width: fit-content;
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: rgba(255, 237, 213, 0.95);
-  color: #c2410c;
-  font-size: 0.74rem;
+  padding: 4px 10px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 0.72rem;
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  border: 1px solid #fcd34d;
 }
 
 .analysis-cache-time {
   white-space: nowrap;
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   font-weight: 700;
-  color: #c2410c;
+  color: #b45309;
 }
 
-.hero-card {
-  padding: 28px;
-  border-radius: 28px;
-  background: rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(14px);
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  box-shadow: 0 20px 48px -36px rgba(15, 23, 42, 0.45);
-}
-
-.hero-kicker,
 .section-kicker,
 .compare-title,
 .mini-label {
@@ -921,41 +906,11 @@ onUnmounted(() => {
   color: #0f766e;
 }
 
-.hero-title-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-  margin: 12px 0;
-}
-
-.hero-subtitle {
-  margin: 0 0 18px;
-  max-width: 720px;
-  color: #475569;
-  font-size: 0.96rem;
-  line-height: 1.7;
-}
-
-.hero-badges {
-  flex-wrap: wrap;
-}
-
-.symbol-chip {
-  padding: 7px 12px;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.06);
-  color: #0f172a;
-  font-size: 0.9rem;
-  font-weight: 700;
-  font-family: 'Monaco', monospace;
-}
-
 .compare-subtitle {
   margin: 6px 0 0;
   font-size: 0.84rem;
   line-height: 1.5;
-  color: #64748b;
+  color: #6b7280;
 }
 
 .compare-count {
@@ -963,23 +918,7 @@ onUnmounted(() => {
   text-align: center;
 }
 
-.btn-back {
-  align-self: flex-end;
-  background: #0f172a;
-  color: #fff;
-  border: none;
-}
-
-.btn-back:hover {
-  background: #1e293b;
-}
-
-
-
 @media (max-width: 1180px) {
-  .btn-back {
-    align-self: flex-start;
-  }
   .analysis-cache-banner {
     display: grid;
   }

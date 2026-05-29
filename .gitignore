@@ -41,3 +41,5 @@ frontend/patch_*.py
 .DS_Store
 check_undefined.py
 clear_cache.py
+backend/check_cache.py
+backend/check_timing.py

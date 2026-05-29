@@ -5,6 +5,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { echarts, type ECharts } from '@/lib/echarts'
+import { safeNum } from '@/lib/chart'
 
 const props = defineProps<{ data: any[] }>()
 
@@ -25,10 +26,10 @@ const initChart = () => {
     xAxis: { type: 'category', data: years.value, axisLabel: { color: '#94a3b8' } },
     yAxis: { type: 'value', axisLabel: { color: '#94a3b8' }, splitLine: { lineStyle: { type: 'dashed', color: '#f1f5f9' } } },
     series: [
-      { name: 'Net Margin', type: 'line', stack: 'Total', areaStyle: { opacity: 0.3 }, emphasis: { focus: 'series' }, data: props.data.map((d: any) => d.net_margin), color: '#3b82f6' },
-      { name: 'Asset Turnover x10', type: 'line', stack: 'Total', areaStyle: { opacity: 0.3 }, emphasis: { focus: 'series' }, data: props.data.map((d: any) => d.asset_turnover * 10), color: '#10b981' },
-      { name: 'Equity Multiplier', type: 'line', stack: 'Total', areaStyle: { opacity: 0.3 }, emphasis: { focus: 'series' }, data: props.data.map((d: any) => d.equity_multiplier), color: '#f59e0b' },
-      { name: 'ROE', type: 'line', data: props.data.map((d: any) => d.roe), lineStyle: { width: 4, type: 'dotted' }, color: '#ef4444' },
+      { name: 'Net Margin', type: 'line', stack: 'Total', areaStyle: { opacity: 0.3 }, emphasis: { focus: 'series' }, data: props.data.map((d: any) => safeNum(d.net_margin)), color: '#3b82f6' },
+      { name: 'Asset Turnover x10', type: 'line', stack: 'Total', areaStyle: { opacity: 0.3 }, emphasis: { focus: 'series' }, data: props.data.map((d: any) => safeNum(d.asset_turnover) * 10), color: '#10b981' },
+      { name: 'Equity Multiplier', type: 'line', stack: 'Total', areaStyle: { opacity: 0.3 }, emphasis: { focus: 'series' }, data: props.data.map((d: any) => safeNum(d.equity_multiplier)), color: '#f59e0b' },
+      { name: 'ROE', type: 'line', data: props.data.map((d: any) => safeNum(d.roe)), lineStyle: { width: 4, type: 'dotted' }, color: '#ef4444' },
     ],
   })
 }

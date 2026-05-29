@@ -562,36 +562,47 @@ class PriceService:
         # 2. 计算股息率 (DY) - [性能优化] 预计算分红总额，消除 apply 循环
         df['year'] = df['date_dt'].dt.year
         df['month'] = df['date_dt'].dt.month
-        
+
         if not df_divs.empty:
             df_divs_copy = df_divs.copy()
             df_divs_copy['year'] = df_divs_copy['ann_date'].dt.year
             # 计算每年的分红总额
             yearly_divs = df_divs_copy.groupby('year')['cash_div'].sum()
-            
+
+            # 用近5年平均分红填充缺失年份，避免历史股息率断档
+            if len(yearly_divs) > 0:
+                avg_div = yearly_divs.tail(5).mean()
+                if pd.isna(avg_div):
+                    avg_div = 0
+                all_years = range(df['year'].min(), df['year'].max() + 1)
+                for y in all_years:
+                    if y not in yearly_divs.index:
+                        yearly_divs[y] = avg_div
+                yearly_divs = yearly_divs.sort_index()
+
             # 映射当年和去年的分红总额
             df['curr_year_div'] = df['year'].map(yearly_divs).fillna(0)
             df['last_year_div'] = (df['year'] - 1).map(yearly_divs).fillna(0)
-            
+
             # 拿到最后一次分红日期 (用于距离判断)
             last_div_date = df_divs['ann_date'].max()
-            
+
             # 默认使用当年分红
             df['dy_sum'] = df['curr_year_div']
-            
+
             # 自然年平滑策略 (对齐 FundamentalService.calculate_dividend_at_date 逻辑)
             # 策略 A: 9月前且分红不足去年 80%，则大概率还没发完，沿用去年
             mask_smooth = (df['month'] < 9) & (df['curr_year_div'] < df['last_year_div'] * 0.8)
             df.loc[mask_smooth, 'dy_sum'] = df['last_year_div']
-            
+
             # 策略 B: 9月后当年若为 0，且距离上次分红在 450 天内，尝试沿用去年
             mask_gap = (df['month'] >= 9) & (df['curr_year_div'] <= 0) & ((df['date_dt'] - last_div_date).dt.days <= 450)
             df.loc[mask_gap, 'dy_sum'] = df['last_year_div']
-            
+
             df['dividend_yield'] = (df['dy_sum'] / df['price'] * 100)
         else:
             df['dividend_yield'] = 0
-        
+
         # 实时股息率补充
         rt_dy = rt.get('dividend_yield', 0)
         if rt_dy > 0:

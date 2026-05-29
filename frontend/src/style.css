@@ -52,6 +52,117 @@
   .glow-cyan {
     @apply shadow-[0_0_20px_rgba(var(--primary),0.3)];
   }
+
+  /* ── Light-theme shared classes ── */
+  .light-page {
+    min-height: 100vh;
+    padding: 28px 32px;
+    background:
+      radial-gradient(ellipse at 15% 0%, rgba(99, 102, 241, 0.06), transparent 40%),
+      radial-gradient(ellipse at 85% 0%, rgba(14, 165, 233, 0.05), transparent 35%),
+      radial-gradient(ellipse at 50% 100%, rgba(16, 185, 129, 0.03), transparent 30%),
+      linear-gradient(180deg, #f8fafc 0%, #f0f4f8 100%);
+  }
+
+  .light-hero-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 20px;
+    margin-bottom: 28px;
+    padding: 28px;
+    border-radius: 28px;
+    background: rgba(255, 255, 255, 0.82);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    box-shadow: 0 20px 48px -36px rgba(15, 23, 42, 0.12);
+  }
+
+  .light-hero-kicker {
+    margin: 0;
+    font-size: 0.75rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #0f766e;
+  }
+
+  .light-hero-title {
+    font-size: 1.8rem;
+    font-weight: 900;
+    margin: 12px 0;
+    background: linear-gradient(135deg, #0f172a 0%, #3b82f6 100%);
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .light-hero-subtitle {
+    margin: 0 0 18px;
+    max-width: 720px;
+    color: #475569;
+    font-size: 0.96rem;
+    line-height: 1.7;
+  }
+
+  .light-symbol-chip {
+    padding: 7px 12px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.06);
+    color: #0f172a;
+    font-size: 0.9rem;
+    font-weight: 700;
+    font-family: 'Monaco', monospace;
+  }
+
+  .light-card {
+    background: rgba(255, 255, 255, 0.78);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 20px;
+    padding: 24px;
+    box-shadow: 0 8px 32px -12px rgba(15, 23, 42, 0.08), 0 2px 6px rgba(15, 23, 42, 0.03);
+    transition: box-shadow 0.3s ease, transform 0.3s ease;
+  }
+
+  .light-card:hover {
+    box-shadow: 0 12px 40px -12px rgba(15, 23, 42, 0.12), 0 4px 8px rgba(15, 23, 42, 0.04);
+  }
+
+  .light-btn-back {
+    padding: 8px 24px;
+    background: #0f172a;
+    color: #fff;
+    border: none;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .light-btn-back:hover {
+    background: #1e293b;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.16);
+  }
+
+  .light-badge {
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    font-family: 'Monaco', monospace;
+  }
+
+  .light-badge-pe { background: #dbeafe; color: #1e40af; }
+  .light-badge-pb { background: #fef3c7; color: #92400e; }
+  .light-badge-dy { background: #dcfce7; color: #166534; }
+  .light-badge-high { background: #d1fae5; color: #065f46; }
+  .light-badge-mid { background: #f1f5f9; color: #475569; }
+  .light-badge-low { background: #fee2e2; color: #991b1b; }
 }
 
 /* Animations */
@@ -62,4 +173,14 @@
 
 .animate-float {
   animation: float 3s ease-in-out infinite;
+}
+
+@media (max-width: 1024px) {
+  .light-hero-card {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .light-page {
+    padding: 20px 16px;
+  }
 }

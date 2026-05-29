@@ -141,6 +141,9 @@ class HistoryBacktestService:
         monthly_df = cls._prepare_monthly_history(fixed_symbol)
         daily_df = cls._prepare_daily_history(fixed_symbol)
 
+        # 计算当前是否处于低估区
+        current_status = cls._get_current_valuation_status(monthly_df)
+
         return {
             'symbol': fixed_symbol,
             'methodology': {
@@ -149,6 +152,7 @@ class HistoryBacktestService:
                 'quality_combo': '同时满足股息率分位 >= 80、ROI 分位 >= 80、PB 分位 <= 20，观察后续收益。',
                 'sentiment_value': '将日频情绪数据与价格数据按日期对齐，筛选 sentiment_score <= -0.2 且满足低估值条件的样本，统计未来 5/20 日收益。',
             },
+            'current_status': current_status,
             'sample_summary': {
                 'monthly_points': int(len(monthly_df)),
                 'daily_points': int(len(daily_df)),
@@ -241,6 +245,56 @@ class HistoryBacktestService:
             future_price = prices[target_idx]
             results.append(round((future_price / price - 1) * 100, 2))
         return results
+
+    @classmethod
+    def _get_current_valuation_status(cls, df: pd.DataFrame) -> dict:
+        """获取当前是否处于低估区"""
+        if df.empty:
+            return {
+                'is_low_valuation': False,
+                'is_quality_combo': False,
+                'current_percentiles': {},
+                'signals': [],
+            }
+
+        latest = df.iloc[-1]
+        pe_pct = latest.get('pe_pct')
+        pb_pct = latest.get('pb_pct')
+        dy_pct = latest.get('dividend_yield_pct')
+        roi_pct = latest.get('roi_pct')
+
+        # 判断低估区（满足任一）
+        pe_low = pe_pct is not None and not pd.isna(pe_pct) and pe_pct <= 20
+        pb_low = pb_pct is not None and not pd.isna(pb_pct) and pb_pct <= 20
+        dy_high = dy_pct is not None and not pd.isna(dy_pct) and dy_pct >= 80
+        roi_high = roi_pct is not None and not pd.isna(roi_pct) and roi_pct >= 80
+        is_low = pe_low or pb_low or dy_high or roi_high
+
+        # 判断优质组合（同时满足）
+        is_quality = dy_high and roi_high and pb_low
+
+        # 收集触发信号
+        signals = []
+        if pe_low:
+            signals.append(f"PE 分位 {pe_pct:.0f}%（历史最低 20%）")
+        if pb_low:
+            signals.append(f"PB 分位 {pb_pct:.0f}%（历史最低 20%）")
+        if dy_high:
+            signals.append(f"股息率分位 {dy_pct:.0f}%（历史最高 20%）")
+        if roi_high:
+            signals.append(f"ROI 分位 {roi_pct:.0f}%（历史最高 20%）")
+
+        return {
+            'is_low_valuation': bool(is_low),
+            'is_quality_combo': bool(is_quality),
+            'current_percentiles': {
+                'pe_pct': round(float(pe_pct), 1) if pe_pct is not None and not pd.isna(pe_pct) else None,
+                'pb_pct': round(float(pb_pct), 1) if pb_pct is not None and not pd.isna(pb_pct) else None,
+                'dividend_yield_pct': round(float(dy_pct), 1) if dy_pct is not None and not pd.isna(dy_pct) else None,
+                'roi_pct': round(float(roi_pct), 1) if roi_pct is not None and not pd.isna(roi_pct) else None,
+            },
+            'signals': signals,
+        }
 
     @staticmethod
     def _normalize_sample_value(value):

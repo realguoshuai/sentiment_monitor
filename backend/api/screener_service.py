@@ -358,16 +358,11 @@ class ScreenerService:
 
     @classmethod
     def _fetch_eastmoney_direct(cls) -> tuple[pd.DataFrame, Exception | None]:
-        """直连东方财富 API，不分页 + 多子域名容错 + 绕过 Windows 系统代理"""
+        """直连东方财富 API，分页获取 + 多子域名容错 + 绕过 Windows 系统代理"""
         import requests as req
+        from math import ceil
+        import time as _time
 
-        params = {
-            'pn': '1', 'pz': '6000', 'po': '1', 'np': '1',
-            'ut': 'bd1d9ddb04089700cf9c27f6f7426281',
-            'fltt': '2', 'invt': '2', 'fid': 'f3',
-            'fs': 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048',
-            'fields': 'f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23,f24,f25,f22,f11,f62,f128,f136,f115,f152',
-        }
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Referer': 'https://quote.eastmoney.com/',
@@ -376,23 +371,92 @@ class ScreenerService:
         session = req.Session()
         session.trust_env = False  # 绕过 Windows 系统代理（PAC/注册表）
 
+        def _try_fetch(url: str, pz: int) -> tuple[list, int, Exception | None]:
+            """尝试用指定 pz 分页拉取全部数据，返回 (rows, total, error)"""
+            params = {
+                'pn': '1', 'pz': str(pz), 'po': '1', 'np': '1',
+                'ut': 'bd1d9ddb04089700cf9c27f6f7426281',
+                'fltt': '2', 'invt': '2', 'fid': 'f3',
+                'fs': 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048',
+                'fields': 'f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23,f24,f25,f22,f11,f62,f128,f136,f115,f152',
+            }
+            try:
+                r = session.get(url, params=params, headers=headers, timeout=(10, 20))
+                if r.status_code != 200:
+                    return [], 0, Exception(f'HTTP {r.status_code}')
+                data = r.json()
+                em_data = data.get('data', {})
+                total = em_data.get('total', 0)
+                first_rows = em_data.get('diff', [])
+                if not first_rows:
+                    return [], total, Exception('empty first page')
+
+                all_rows = list(first_rows)
+                per_page = len(first_rows)
+                total_pages = ceil(total / per_page) if per_page > 0 else 1
+
+                for page in range(2, total_pages + 1):
+                    page_params = {**params, 'pn': str(page)}
+                    for retry in range(2):
+                        try:
+                            r2 = session.get(url, params=page_params, headers=headers, timeout=(10, 20))
+                            if r2.status_code == 200:
+                                page_data = r2.json()
+                                page_rows = page_data.get('data', {}).get('diff', [])
+                                if page_rows:
+                                    all_rows.extend(page_rows)
+                                break
+                        except Exception as page_err:
+                            logger.warning(f"Page fetch failed (page {page}, retry {retry}): {page_err}")
+                            if retry < 1:
+                                _time.sleep(0.5)
+                            else:
+                                break
+
+                return all_rows, total, None
+            except Exception as exc:
+                return [], 0, exc
+
         last_error = None
         for subdomain in cls.EASTMONEY_SUBDOMAINS:
             for proto in ('https', 'http'):
                 url = f'{proto}://{subdomain}.push2.eastmoney.com/api/qt/clist/get'
-                try:
-                    r = session.get(url, params=params, headers=headers, timeout=(10, 20))
-                    if r.status_code == 200:
-                        data = r.json()
-                        rows = data.get('data', {}).get('diff')
-                        if rows:
-                            df = pd.DataFrame(rows)
-                            df = cls._rename_em_fields(df)
-                            if not df.empty:
-                                return df, None
-                except Exception as exc:
-                    last_error = exc
-                    continue
+
+                # 先用 pz=5000 尝试
+                rows, total, err = _try_fetch(url, 5000)
+                if rows and len(rows) >= total * 0.8:
+                    df = pd.DataFrame(rows)
+                    df = cls._rename_em_fields(df)
+                    if not df.empty:
+                        logger.info("East Money direct fetch (pz=5000): total=%d, fetched=%d rows", total, len(df))
+                        return df, None
+
+                # pz=5000 不完整，降级到 pz=100 逐页拉
+                if total > 0:
+                    logger.info("pz=5000 got %d/%d rows, retrying with pz=100", len(rows), total)
+                    rows2, total2, err2 = _try_fetch(url, 100)
+                    if rows2 and len(rows2) >= total2 * 0.8:
+                        df = pd.DataFrame(rows2)
+                        df = cls._rename_em_fields(df)
+                        if not df.empty:
+                            logger.info("East Money direct fetch (pz=100): total=%d, fetched=%d rows", total2, len(df))
+                            return df, None
+                    if rows2:
+                        # pz=100 也不完整，但有数据就返回
+                        df = pd.DataFrame(rows2)
+                        df = cls._rename_em_fields(df)
+                        if not df.empty and len(rows2) > len(rows):
+                            logger.warning("East Money pz=100 partial: total=%d, fetched=%d rows", total2, len(rows2))
+                            return df, None
+
+                last_error = err
+                if rows:
+                    # 即使不完整也返回，总比空好
+                    df = pd.DataFrame(rows)
+                    df = cls._rename_em_fields(df)
+                    if not df.empty:
+                        logger.warning("East Money partial fetch: total=%d, fetched=%d rows", total, len(df))
+                        return df, None
 
         return pd.DataFrame(), last_error
 

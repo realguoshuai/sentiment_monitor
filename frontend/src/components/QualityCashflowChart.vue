@@ -5,6 +5,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { echarts, type ECharts } from '@/lib/echarts'
+import { safeNum } from '@/lib/chart'
 
 const props = defineProps<{ data: any[] }>()
 
@@ -28,11 +29,11 @@ const initChart = () => {
       { type: 'value', name: 'Ratio (%)', axisLabel: { color: '#94a3b8' }, splitLine: { show: false } },
     ],
     series: [
-      { name: 'CFO', type: 'bar', data: props.data.map((d: any) => d.cfo), color: '#0f766e' },
-      { name: 'FCF', type: 'bar', data: props.data.map((d: any) => d.fcf), color: '#2563eb' },
-      { name: 'CFO / Profit', type: 'line', yAxisIndex: 1, data: props.data.map((d: any) => d.cfo_to_profit_pct), lineStyle: { width: 3 }, color: '#f59e0b' },
-      { name: 'FCF / Profit', type: 'line', yAxisIndex: 1, data: props.data.map((d: any) => d.fcf_to_profit_pct), lineStyle: { width: 3 }, color: '#ef4444' },
-      { name: 'Capex Intensity', type: 'line', yAxisIndex: 1, data: props.data.map((d: any) => d.capex_intensity_pct), lineStyle: { width: 2, type: 'dashed' }, color: '#8b5cf6' },
+      { name: 'CFO', type: 'bar', data: props.data.map((d: any) => safeNum(d.cfo)), color: '#0f766e' },
+      { name: 'FCF', type: 'bar', data: props.data.map((d: any) => safeNum(d.fcf)), color: '#2563eb' },
+      { name: 'CFO / Profit', type: 'line', yAxisIndex: 1, data: props.data.map((d: any) => safeNum(d.cfo_to_profit_pct)), lineStyle: { width: 3 }, color: '#f59e0b' },
+      { name: 'FCF / Profit', type: 'line', yAxisIndex: 1, data: props.data.map((d: any) => safeNum(d.fcf_to_profit_pct)), lineStyle: { width: 3 }, color: '#ef4444' },
+      { name: 'Capex Intensity', type: 'line', yAxisIndex: 1, data: props.data.map((d: any) => safeNum(d.capex_intensity_pct)), lineStyle: { width: 2, type: 'dashed' }, color: '#8b5cf6' },
     ],
   })
 }

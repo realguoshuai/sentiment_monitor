@@ -3,8 +3,20 @@
     <div class="section-header compact-header">
       <div>
         <p class="section-kicker">Safety Screen</p>
-        <h2>F-Score 排雷</h2>
-        <p class="subtitle">把九项财务信号压缩到一屏，快速剔除价值陷阱。</p>
+        <h2>
+          F-Score 排雷
+          <InfoTooltip>
+            <template #content>
+              <strong>财务安全性评分（0~10 分）</strong><br/>
+              检查 5 项财务健康指标，按通过比例折算：<br/>
+              <div class="formula">得分 = (通过数 ÷ 总数) × 10</div>
+              <span class="threshold threshold-green">≥7 分：健康</span>
+              <span class="threshold threshold-yellow">4~6 分：关注</span>
+              <span class="threshold threshold-red">≤3 分：风险</span>
+            </template>
+          </InfoTooltip>
+        </h2>
+        <p class="subtitle">把五项财务信号压缩到一屏，快速剔除价值陷阱。</p>
       </div>
       <div class="score-pill" :class="scoreClass">
         {{ score }}/10
@@ -13,7 +25,10 @@
     <div class="f-score-matrix">
       <div v-for="item in details" :key="item.name" class="matrix-item">
         <div class="matrix-copy">
-          <span class="matrix-name">{{ item.name }}</span>
+          <span class="matrix-name">
+            {{ item.name }}
+            <InfoTooltip :text="getItemExplanation(item.name)" placement="right" />
+          </span>
           <span class="matrix-val">{{ item.val }}</span>
         </div>
         <span class="matrix-status" :class="{ passed: item.passed, failed: !item.passed }">
@@ -27,11 +42,24 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import InfoTooltip from '@/components/InfoTooltip.vue'
 
 const props = defineProps<{
   score: number
   details: Array<{ name: string; val: string; passed: boolean }>
 }>()
+
+const itemExplanations: Record<string, string> = {
+  'ROA > 0': '<strong>总资产收益率为正</strong><br/>ROA = 净利润 ÷ 总资产<br/>反映公司运用全部资产赚钱的能力',
+  '净利润 > 0': '<strong>归母净利润为正</strong><br/>最基本的盈利能力检查',
+  '经营性现金流 > 0': '<strong>经营活动现金流为正</strong><br/>确认利润有真金白银支撑，不是纸面富贵',
+  '现金流 > 净利润': '<strong>现金流覆盖净利润</strong><br/>CFO ÷ 净利润 ≥ 100%<br/>利润含金量高，没有大量应收挂账',
+  'ROA同比提升': '<strong>ROA 同比改善</strong><br/>对比去年同期，盈利能力在好转'
+}
+
+function getItemExplanation(name: string): string {
+  return itemExplanations[name] || name
+}
 
 const scoreClass = computed(() => {
   if (props.score >= 7) return 'score-high'
@@ -42,11 +70,13 @@ const scoreClass = computed(() => {
 
 <style scoped>
 .section {
-  background: white;
-  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 20px;
   padding: 24px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
-  border: 1px solid #f1f5f9;
+  box-shadow: 0 8px 32px -12px rgba(15, 23, 42, 0.08), 0 2px 6px rgba(15, 23, 42, 0.03);
   margin-bottom: 24px;
 }
 .section-header {

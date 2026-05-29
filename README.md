@@ -171,6 +171,7 @@ sentiment_monitor/
 
 ## 最近更新
 
+- 代码审查修复：后端 history_backtest 0 值分位被错误丢弃（`if pe_pct and` → `if pe_pct is not None and`）；前端 zoneHint 75-90 分位重复标签；bucket-chart 高度不足；并行数据获取增加异常隔离；模板深层访问增加可选链防护；InfoTooltip 改用 fixed 定位修复滚动错位；AlgorithmExplainer hint 文案跟随展开状态；7 个图表组件 safeNum 重复抽取到 `lib/chart.ts`；price_service NaN 保护；screener 分页失败增加日志。
 - 财务溯源页面修复：图表横坐标 undefined 问题（后端 quality_history 缺少 year 字段）；信号摘要区域数值显示 undefined 问题（前端直接调用 .toFixed() 改为安全格式化函数）。
 - 新增盯盘日记页面：250 日成交量与 20 日均量对照图、分红除权倒计时、PE/PB/股息率安全边际卡片。
 - 首页情感趋势图替换为分红日历：展示所有监控股票的下一次分红时间线，支持已确立/预案/历史估算三级回退。

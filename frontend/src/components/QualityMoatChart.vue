@@ -5,6 +5,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { echarts, type ECharts } from '@/lib/echarts'
+import { safeNum } from '@/lib/chart'
 
 const props = defineProps<{ data: any[] }>()
 
@@ -23,10 +24,10 @@ const initChart = () => {
     legend: { bottom: 0, textStyle: { color: '#64748b' } },
     grid: { top: 40, left: 50, right: 30, bottom: 60 },
     xAxis: { type: 'category', data: years.value, axisLabel: { color: '#94a3b8' } },
-    yAxis: { type: 'value', axisLabel: { color: '#94a3b8' }, splitLine: { lineStyle: { type: 'dashed', color: '#f1f5f9' } } },
+    yAxis: { type: 'value', axisLabel: { color: '#94a3b8', formatter: '{value}%' }, splitLine: { lineStyle: { type: 'dashed', color: '#f1f5f9' } } },
     series: [
-      { name: 'Gross Margin', type: 'line', smooth: true, data: props.data.map((d: any) => d.gross_margin), lineStyle: { width: 3 }, color: '#6366f1' },
-      { name: 'Net Margin', type: 'line', smooth: true, data: props.data.map((d: any) => d.net_margin), lineStyle: { width: 3 }, color: '#10b981' },
+      { name: '毛利率', type: 'line', smooth: true, data: props.data.map((d: any) => safeNum(d.gross_margin)), lineStyle: { width: 3 }, color: '#6366f1' },
+      { name: '净利率', type: 'line', smooth: true, data: props.data.map((d: any) => safeNum(d.net_margin)), lineStyle: { width: 3 }, color: '#10b981' },
     ],
   })
 }

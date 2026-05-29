@@ -13,27 +13,67 @@
 
     <div class="valuation-grid">
       <div class="valuation-card valuation-card-primary">
-        <span class="valuation-card-title">综合合理价值区间</span>
+        <span class="valuation-card-title">
+          综合合理价值区间
+          <InfoTooltip>
+            <template #content>
+              <strong>三模型加权估值</strong><br/>
+              ROE-PB锚点(45%) + 盈利能力(30%) + 股东现金流(25%)<br/>
+              <div class="formula">公允价 = Σ(各模型基准价 × 权重)</div>
+            </template>
+          </InfoTooltip>
+        </span>
         <div class="valuation-main">{{ formatPrice(valuationRange.price_low) }} - {{ formatPrice(valuationRange.price_high) }}</div>
         <div class="valuation-sub">基准价 {{ formatPrice(valuationRange.price_base) }}</div>
         <div class="valuation-note">
           {{ valuationModelCount }} 个模型加权 | 模型分歧 {{ formatPct(valuationBlend?.spread_pct) }}
         </div>
       </div>
-      <div class="valuation-card">
-        <span class="valuation-card-title">折价 / 溢价</span>
-        <div class="valuation-main">{{ valuationConclusion.discount_premium.label }}</div>
+      <div class="valuation-card" :class="discountClass">
+        <span class="valuation-card-title">
+          折价 / 溢价
+          <InfoTooltip>
+            <template #content>
+              <strong>相对综合基准价值的偏离</strong><br/>
+              <div class="formula">(当前价 ÷ 基准公允价 - 1) × 100%</div>
+              <span class="threshold threshold-green">< 0%：折价</span>
+              <span class="threshold threshold-red">> 0%：溢价</span>
+            </template>
+          </InfoTooltip>
+        </span>
+        <div class="valuation-main" :class="discountTextClass">{{ valuationConclusion.discount_premium.label }}</div>
         <div class="valuation-sub">{{ formatPct(valuationConclusion.discount_premium.pct) }}</div>
         <div class="valuation-note">相对综合基准价值</div>
       </div>
-      <div class="valuation-card">
-        <span class="valuation-card-title">安全边际</span>
-        <div class="valuation-main">{{ valuationConclusion.margin_of_safety.label }}</div>
+      <div class="valuation-card" :class="marginClass">
+        <span class="valuation-card-title">
+          安全边际
+          <InfoTooltip>
+            <template #content>
+              <strong>保守估值线的保护空间</strong><br/>
+              <div class="formula">(保守估值 - 当前价) ÷ 保守估值 × 100%</div>
+              <span class="threshold threshold-green">≥30%：高</span>
+              <span class="threshold threshold-yellow">15~30%：中</span>
+              <span class="threshold threshold-red"><15%：低/无</span>
+            </template>
+          </InfoTooltip>
+        </span>
+        <div class="valuation-main" :class="marginTextClass">{{ valuationConclusion.margin_of_safety.label }}</div>
         <div class="valuation-sub">{{ formatPct(valuationConclusion.margin_of_safety.pct) }}</div>
         <div class="valuation-note">保守估值线 {{ formatPrice(valuationConclusion.margin_of_safety.floor_price) }}</div>
       </div>
       <div class="valuation-card">
-        <span class="valuation-card-title">预期年化回报</span>
+        <span class="valuation-card-title">
+          预期年化回报
+          <InfoTooltip>
+            <template #content>
+              <strong>3年持有期的年化回报预期</strong><br/>
+              <div class="formula">总回报 = 经营回报 + 股息率 + 估值回归</div>
+              经营回报 = 预期ROE ÷ 当前PB<br/>
+              估值回归 = (基准公允价÷当前价)^(1/3) - 1
+            </template>
+          </InfoTooltip>
+        </span>
         <div class="valuation-main">{{ formatPct(expectedReturn.total_annual_return_pct) }}</div>
         <div class="valuation-sub">{{ expectedReturn.holding_years }} 年视角</div>
         <div class="valuation-note">经营回报 + 股息 + 估值回归</div>
@@ -265,6 +305,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import InfoTooltip from '@/components/InfoTooltip.vue'
 
 const props = defineProps<{
   valuationConclusion: any
@@ -392,15 +433,49 @@ const getNormalizedTone = (label?: string) => {
   if (label === '高于中枢') return 'normalized-warning'
   return 'normalized-neutral'
 }
+
+const discountClass = computed(() => {
+  const pct = props.valuationConclusion?.discount_premium?.pct
+  if (pct === undefined || pct === null) return ''
+  if (pct <= -10) return 'card-green'
+  if (pct >= 10) return 'card-red'
+  return 'card-yellow'
+})
+
+const discountTextClass = computed(() => {
+  const pct = props.valuationConclusion?.discount_premium?.pct
+  if (pct === undefined || pct === null) return ''
+  if (pct <= -10) return 'text-green'
+  if (pct >= 10) return 'text-red'
+  return 'text-yellow'
+})
+
+const marginClass = computed(() => {
+  const pct = props.valuationConclusion?.margin_of_safety?.pct
+  if (pct === undefined || pct === null) return ''
+  if (pct >= 30) return 'card-green'
+  if (pct >= 15) return 'card-yellow'
+  return 'card-red'
+})
+
+const marginTextClass = computed(() => {
+  const pct = props.valuationConclusion?.margin_of_safety?.pct
+  if (pct === undefined || pct === null) return ''
+  if (pct >= 30) return 'text-green'
+  if (pct >= 15) return 'text-yellow'
+  return 'text-red'
+})
 </script>
 
 <style scoped>
 .section {
-  background: white;
-  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 20px;
   padding: 24px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
-  border: 1px solid #f1f5f9;
+  box-shadow: 0 8px 32px -12px rgba(15, 23, 42, 0.08), 0 2px 6px rgba(15, 23, 42, 0.03);
   margin-bottom: 24px;
 }
 .valuation-header {
@@ -473,6 +548,27 @@ const getNormalizedTone = (label?: string) => {
 .valuation-card-primary {
   background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%);
   border-color: #bfdbfe;
+}
+.card-green {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+}
+.card-yellow {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+.card-red {
+  background: #fff1f2;
+  border-color: #fecdd3;
+}
+.text-green {
+  color: #065f46 !important;
+}
+.text-yellow {
+  color: #92400e !important;
+}
+.text-red {
+  color: #9f1239 !important;
 }
 .valuation-card-title {
   font-size: 0.8rem;

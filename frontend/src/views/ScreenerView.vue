@@ -1,382 +1,237 @@
 <template>
   <div class="screener-shell">
+    <!-- 顶部栏 -->
     <header class="topbar">
       <div class="topbar-title">
         <button class="icon-btn" type="button" title="返回首页" @click="router.push('/')">←</button>
-        <div>
-          <span class="eyebrow">Stock Screener</span>
-          <h1>条件选股工作台</h1>
-        </div>
-      </div>
-
-      <div class="topbar-actions">
+        <h1>条件选股工作台</h1>
         <span class="status-dot" :class="{ ready: screenerMeta.ready }"></span>
-        <span class="topbar-meta">快照 {{ screenerMeta.snapshot_date || '--' }}</span>
+        <span class="topbar-meta">{{ screenerMeta.count || 0 }} 只 / {{ screenerMeta.industry_count || 0 }} 行业</span>
+      </div>
+      <div class="topbar-actions">
         <button class="primary-btn" type="button" @click="refreshSnapshot" :disabled="refreshing">
-          {{ refreshing ? '刷新中...' : '刷新全市场快照' }}
+          {{ refreshing ? '刷新中...' : '刷新快照' }}
         </button>
       </div>
     </header>
 
-    <main class="screener-workspace">
-      <aside class="filter-panel panel">
-        <div class="panel-head compact">
-          <div>
-            <span class="eyebrow">Controls</span>
-            <h2>筛选条件</h2>
-          </div>
-          <button class="text-btn" type="button" @click="resetFilters">重置</button>
+    <!-- 横向筛选条 -->
+    <form class="filter-bar" @submit.prevent="applyFilters(1)">
+      <div class="filter-row">
+        <input v-model.trim="filters.q" class="filter-input search-input" placeholder="搜索名称 / 代码" />
+
+        <div class="filter-group">
+          <label><span>PB ≤</span><input v-model.number="filters.pb_max" type="number" step="0.1" placeholder="--" /></label>
+          <label><span>PE ≤</span><input v-model.number="filters.pe_max" type="number" step="0.1" placeholder="--" /></label>
+          <label><span>ROE ≥</span><input v-model.number="filters.roe_min" type="number" step="0.5" placeholder="--" /></label>
+          <label><span>股息率 ≥</span><input v-model.number="filters.dividend_yield_min" type="number" step="0.1" placeholder="--" /></label>
+          <label><span>市值 ≥</span><input v-model.number="filters.market_cap_min_100m" type="number" step="1" placeholder="--" /><span class="unit">亿</span></label>
+          <label><span>净现比 ≥</span><input v-model.number="filters.net_cash_ratio_min" type="number" step="0.1" placeholder="--" /></label>
+          <label><span>现金流收益 ≥</span><input v-model.number="filters.cfo_yield_min" type="number" step="0.5" placeholder="--" /><span class="unit">%</span></label>
         </div>
 
-        <form class="filter-form" @submit.prevent="applyFilters(1)">
-          <label class="field full">
-            <span>名称 / 代码</span>
-            <input v-model.trim="filters.q" placeholder="银行 / 600000 / 贵州茅台" />
-          </label>
+        <div class="filter-actions">
+          <button class="primary-btn" type="submit" :disabled="loading">筛选</button>
+          <button class="secondary-btn" type="button" @click="resetFilters">重置</button>
+        </div>
+      </div>
 
-          <div class="field-pair">
-            <label class="field">
-              <span>PB ≤</span>
-              <input v-model.number="filters.pb_max" type="number" step="0.1" placeholder="1.5" />
-            </label>
-            <label class="field">
-              <span>PE ≤</span>
-              <input v-model.number="filters.pe_max" type="number" step="0.1" placeholder="15" />
-            </label>
-          </div>
-
-          <div class="field-pair">
-            <label class="field">
-              <span>ROE ≥</span>
-              <input v-model.number="filters.roe_min" type="number" step="0.5" placeholder="12" />
-            </label>
-            <label class="field">
-              <span>股息率 ≥</span>
-              <input v-model.number="filters.dividend_yield_min" type="number" step="0.1" placeholder="4" />
-            </label>
-          </div>
-
-          <label class="field full">
-            <span>市值 ≥（亿）</span>
-            <input v-model.number="filters.market_cap_min_100m" type="number" step="1" placeholder="100" />
-          </label>
-
-          <div class="field-pair">
-            <label class="field">
-              <span>净现比 ≥</span>
-              <input v-model.number="filters.net_cash_ratio_min" type="number" step="0.1" placeholder="1.0" />
-            </label>
-            <label class="field">
-              <span>现金流收益率 ≥</span>
-              <input v-model.number="filters.cfo_yield_min" type="number" step="0.5" placeholder="6" />
-            </label>
-          </div>
-
-          <div class="field-pair">
-            <label class="field">
-              <span>排序字段</span>
-              <select v-model="filters.sort_by">
-                <option value="pb">PB</option>
-                <option value="pe">PE</option>
-                <option value="roe">ROE</option>
-                <option value="roi">ROI</option>
-                <option value="dividend_yield">股息率</option>
-                <option value="market_cap">总市值</option>
-                <option value="price">价格</option>
-                <option value="net_cash_ratio">净现比</option>
-                <option value="cfo_yield">现金流收益率</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>排序方向</span>
-              <select v-model="filters.sort_order">
-                <option value="asc">升序</option>
-                <option value="desc">降序</option>
-              </select>
-            </label>
-          </div>
-
-          <label class="toggle-row">
-            <input v-model="filters.include_anomalies" type="checkbox" />
-            <span>包含异常估值样本</span>
-          </label>
-
-          <button class="primary-btn full" type="submit" :disabled="loading">开始筛选</button>
-        </form>
-
-        <section class="preset-section">
-          <div class="section-label">策略预设</div>
+      <div class="filter-row-secondary">
+        <div class="preset-pills">
+          <span class="preset-label">策略：</span>
           <button
             v-for="preset in presetCards"
             :key="preset.key"
-            class="preset-card"
+            class="preset-pill"
             :class="`preset-${preset.tone}`"
             type="button"
             @click="applyPreset(preset.key)"
           >
-            <div>
-              <span>{{ preset.tagline }}</span>
-              <strong>{{ preset.title }}</strong>
-            </div>
-            <p>{{ preset.metrics.join(' / ') }}</p>
+            {{ preset.title }}
+            <small>{{ preset.metrics.join(' / ') }}</small>
           </button>
-        </section>
-      </aside>
+        </div>
 
-      <section class="main-panel">
-        <section class="summary-grid">
-          <article class="metric-card panel">
-            <span>快照状态</span>
-            <strong>{{ screenerMeta.ready ? '可筛选' : '未准备' }}</strong>
-            <p>{{ screenerMeta.count || 0 }} 只股票 / {{ screenerMeta.industry_count || 0 }} 个行业</p>
-          </article>
-          <article class="metric-card panel">
-            <span>当前命中</span>
-            <strong>{{ pagination.total }}</strong>
-            <p>第 {{ pagination.page }} / {{ pagination.total_pages || 1 }} 页</p>
-          </article>
-          <article class="metric-card panel">
-            <span>筛选强度</span>
-            <strong>{{ activeFilterCount }} 项</strong>
-            <p>{{ activeFilterCount ? coverageDensityLabel : '全市场浏览模式' }}</p>
-          </article>
-          <article class="metric-card panel">
-            <span>排序</span>
-            <strong>{{ activeSortLabel }}</strong>
-            <p>{{ screenerMeta.roe_basis_label || '年报 ROE / 现价股息率 / ROI' }}</p>
-          </article>
-        </section>
+        <div class="sort-controls">
+          <select v-model="filters.sort_by" class="filter-select">
+            <option value="pb">PB</option>
+            <option value="pe">PE</option>
+            <option value="roe">ROE</option>
+            <option value="roi">ROI</option>
+            <option value="dividend_yield">股息率</option>
+            <option value="market_cap">总市值</option>
+            <option value="price">价格</option>
+            <option value="net_cash_ratio">净现比</option>
+            <option value="cfo_yield">现金流收益率</option>
+          </select>
+          <button class="sort-dir-btn" type="button" @click="filters.sort_order = filters.sort_order === 'asc' ? 'desc' : 'asc'; applyFilters(1)">
+            {{ filters.sort_order === 'asc' ? '↑ 升序' : '↓ 降序' }}
+          </button>
+          <label class="toggle-label">
+            <input v-model="filters.include_anomalies" type="checkbox" />
+            <span>含异常</span>
+          </label>
+        </div>
+      </div>
 
-        <div v-if="errorMessage" class="error-banner panel">{{ errorMessage }}</div>
+      <div v-if="activeFilterTags.length" class="active-tags">
+        <span v-for="tag in activeFilterTags" :key="tag" class="active-tag">{{ tag }}</span>
+      </div>
+    </form>
 
-        <section class="result-panel panel">
-          <div class="result-toolbar">
-            <div>
-              <span class="eyebrow">Candidates</span>
-              <h2>候选股票池</h2>
-            </div>
-            <div class="result-actions">
-              <span v-if="loading" class="loading-chip">筛选中...</span>
-              <span v-else class="loading-chip muted">{{ pagination.total }} 条结果</span>
-            </div>
+    <div v-if="errorMessage" class="error-banner">{{ errorMessage }}</div>
+
+    <!-- 结果区 -->
+    <main class="main-area">
+      <!-- 空状态 -->
+      <div v-if="!screenerMeta.ready" class="empty-state">
+        <strong>还没有可用快照</strong>
+        <p>先刷新一次全市场快照，之后就可以连续筛选和排序。</p>
+        <button class="primary-btn" type="button" @click="refreshSnapshot" :disabled="refreshing">
+          {{ refreshing ? '刷新中...' : '立即生成快照' }}
+        </button>
+      </div>
+
+      <div v-else-if="loading" class="empty-state">
+        <strong>正在更新候选池</strong>
+        <p>当前只查询本地快照，不会重新抓取全市场数据。</p>
+      </div>
+
+      <div v-else-if="!results.length" class="empty-state">
+        <strong>当前没有命中结果</strong>
+        <p>建议先放宽 PB、PE 或股息率阈值，再重新筛选。</p>
+        <button class="secondary-btn" type="button" @click="resetFilters">回到默认视图</button>
+      </div>
+
+      <template v-else>
+        <!-- 统计条 -->
+        <div class="stats-bar">
+          <div class="stat-item">
+            <span>命中</span><strong>{{ pagination.total }}</strong>
           </div>
-
-          <div class="active-tag-row">
-            <span v-for="tag in activeFilterTags" :key="tag" class="active-tag">{{ tag }}</span>
-            <span v-if="!activeFilterTags.length" class="active-tag muted">当前没有额外筛选条件</span>
+          <div class="stat-item">
+            <span>低 PB</span><strong>{{ valuationBuckets.lowPb }}</strong>
           </div>
-
-          <div v-if="!screenerMeta.ready" class="empty-state">
-            <strong>还没有可用快照</strong>
-            <p>先刷新一次全市场快照，之后就可以连续筛选和排序。</p>
-            <button class="primary-btn" type="button" @click="refreshSnapshot" :disabled="refreshing">
-              {{ refreshing ? '刷新中...' : '立即生成快照' }}
-            </button>
+          <div class="stat-item">
+            <span>高股息</span><strong>{{ valuationBuckets.highDividend }}</strong>
           </div>
-
-          <div v-else-if="loading" class="empty-state">
-            <strong>正在更新候选池</strong>
-            <p>当前只查询本地快照，不会重新抓取全市场数据。</p>
+          <div class="stat-item">
+            <span>高 ROE</span><strong>{{ valuationBuckets.highRoe }}</strong>
           </div>
-
-          <div v-else-if="!results.length" class="empty-state">
-            <strong>当前没有命中结果</strong>
-            <p>建议先放宽 PB、PE 或股息率阈值，再重新筛选。</p>
-            <button class="secondary-btn" type="button" @click="resetFilters">回到默认视图</button>
+          <div class="stat-item">
+            <span>已监控</span><strong>{{ monitoredCount }}</strong>
           </div>
-
-          <template v-else>
-            <div class="table-summary">
-              <div>
-                <strong>本页 {{ results.length }} 只</strong>
-                <span>低 PB {{ valuationBuckets.lowPb }} / 高股息 {{ valuationBuckets.highDividend }} / 高 ROE {{ valuationBuckets.highRoe }}</span>
-              </div>
-            </div>
-
-            <div class="table-shell">
-              <table class="result-table">
-                <thead>
-                  <tr>
-                    <th>公司</th>
-                    <th class="action-col">动作</th>
-                    <th>
-                      <button class="sort-header" type="button" @click="toggleSort('price')">
-                        价格 / 市值 <span :class="{ active: filters.sort_by === 'price' }">{{ getSortIndicator('price') }}</span>
-                      </button>
-                    </th>
-                    <th>
-                      <button class="sort-header" type="button" @click="toggleSort('pe')">
-                        PE <span :class="{ active: filters.sort_by === 'pe' }">{{ getSortIndicator('pe') }}</span>
-                      </button>
-                    </th>
-                    <th>
-                      <button class="sort-header" type="button" @click="toggleSort('pb')">
-                        PB <span :class="{ active: filters.sort_by === 'pb' }">{{ getSortIndicator('pb') }}</span>
-                      </button>
-                    </th>
-                    <th>
-                      <button class="sort-header" type="button" @click="toggleSort('roe')">
-                        ROE <span :class="{ active: filters.sort_by === 'roe' }">{{ getSortIndicator('roe') }}</span>
-                      </button>
-                    </th>
-                    <th>
-                      <button class="sort-header" type="button" @click="toggleSort('roi')">
-                        ROI <span :class="{ active: filters.sort_by === 'roi' }">{{ getSortIndicator('roi') }}</span>
-                      </button>
-                    </th>
-                    <th>
-                      <button class="sort-header" type="button" @click="toggleSort('dividend_yield')">
-                        股息率 <span :class="{ active: filters.sort_by === 'dividend_yield' }">{{ getSortIndicator('dividend_yield') }}</span>
-                      </button>
-                    </th>
-                    <th>
-                      <button class="sort-header" type="button" @click="toggleSort('net_cash_ratio')">
-                        净现比 <span :class="{ active: filters.sort_by === 'net_cash_ratio' }">{{ getSortIndicator('net_cash_ratio') }}</span>
-                      </button>
-                    </th>
-                    <th>
-                      <button class="sort-header" type="button" @click="toggleSort('cfo_yield')">
-                        现金流收益率 <span :class="{ active: filters.sort_by === 'cfo_yield' }">{{ getSortIndicator('cfo_yield') }}</span>
-                      </button>
-                    </th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  <tr v-for="row in results" :key="row.symbol">
-                    <td data-label="公司">
-                      <div class="company-cell">
-                        <div class="company-mainline">
-                          <strong>{{ row.name }}</strong>
-                          <span v-if="row.is_monitored" class="monitor-badge">已监控</span>
-                        </div>
-                        <div class="company-subline">
-                          <span class="symbol-badge">{{ row.symbol }}</span>
-                          <span v-if="row.industry" class="industry-badge">{{ row.industry }}</span>
-                        </div>
-                      </div>
-                    </td>
-                    <td class="action-col" data-label="动作">
-                      <div class="row-actions">
-                        <button class="mini-btn" type="button" @click="openAnalysis(row.symbol)">分析</button>
-                        <button
-                          class="mini-btn primary"
-                          type="button"
-                          @click="addToMonitor(row)"
-                          :disabled="row.is_monitored || addLoadingSymbol === row.symbol"
-                        >
-                          {{ row.is_monitored ? '已监控' : (addLoadingSymbol === row.symbol ? '加入中...' : '加入') }}
-                        </button>
-                      </div>
-                    </td>
-                    <td data-label="价格 / 市值">
-                      <div class="price-cell">
-                        <strong class="price-text">{{ formatPrice(row.price) }}</strong>
-                        <span class="market-cap-inline">{{ formatMarketCap(row.market_cap) }}</span>
-                      </div>
-                    </td>
-                    <td data-label="PE"><span class="metric-pill" :class="getMetricTone('pe', row.pe)">{{ formatNumber(row.pe) }}</span></td>
-                    <td data-label="PB"><span class="metric-pill" :class="getMetricTone('pb', row.pb)">{{ formatNumber(row.pb) }}</span></td>
-                    <td data-label="ROE"><span class="metric-pill" :class="getMetricTone('roe', row.roe_pct)">{{ formatPctValue(row.roe_pct) }}</span></td>
-                    <td data-label="ROI"><span class="metric-pill" :class="getMetricTone('roi', row.roi_pct)">{{ formatPctValue(row.roi_pct) }}</span></td>
-                    <td data-label="股息率"><span class="metric-pill" :class="getMetricTone('dividend', row.dividend_yield)">{{ formatPct(row.dividend_yield) }}</span></td>
-                    <td data-label="净现比"><span class="metric-pill" :class="getMetricTone('net_cash_ratio', row.net_cash_ratio)">{{ formatNumber(row.net_cash_ratio) }}</span></td>
-                    <td data-label="现金流收益率"><span class="metric-pill" :class="getMetricTone('cfo_yield', row.cfo_yield)">{{ formatPct(row.cfo_yield) }}</span></td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div class="pager">
-              <button class="secondary-btn" type="button" @click="goToPage(pagination.page - 1)" :disabled="pagination.page <= 1 || loading">
-                上一页
-              </button>
-              <span>第 {{ pagination.page }} 页 / 共 {{ pagination.total_pages || 1 }} 页</span>
-              <button
-                class="secondary-btn"
-                type="button"
-                @click="goToPage(pagination.page + 1)"
-                :disabled="pagination.page >= pagination.total_pages || loading"
-              >
-                下一页
-              </button>
-            </div>
-          </template>
-        </section>
-      </section>
-
-      <aside class="insight-panel-wrap">
-        <section class="insight-card panel">
-          <div class="panel-head compact">
-            <div>
-              <span class="eyebrow">Readout</span>
-              <h2>筛选雷达</h2>
-            </div>
+          <div class="stat-item">
+            <span>排序</span><strong>{{ activeSortLabel }}</strong>
           </div>
-          <div class="radar-list">
-            <div><span>低 PB</span><strong>{{ valuationBuckets.lowPb }}</strong></div>
-            <div><span>高股息</span><strong>{{ valuationBuckets.highDividend }}</strong></div>
-            <div><span>高 ROE</span><strong>{{ valuationBuckets.highRoe }}</strong></div>
-            <div><span>已监控</span><strong>{{ monitoredCount }}</strong></div>
-          </div>
-        </section>
+        </div>
 
-        <section class="insight-card panel">
-          <div class="panel-head compact">
-            <div>
-              <span class="eyebrow">Ideas</span>
-              <h2>优先研究</h2>
-            </div>
-          </div>
-          <div v-if="topIdeas.length" class="idea-list">
-            <article v-for="idea in topIdeas" :key="idea.symbol" class="idea-card">
-              <div class="idea-head">
-                <div>
-                  <strong>{{ idea.name }}</strong>
-                  <span>{{ idea.symbol }} · {{ idea.industry || '未分类' }}</span>
+        <!-- 表格 -->
+        <div class="table-shell">
+          <table class="result-table">
+            <thead>
+              <tr>
+                <th>公司</th>
+                <th class="action-col">动作</th>
+                <th><button class="sort-header" type="button" @click="toggleSort('price')">价格/市值 <span :class="{ active: filters.sort_by === 'price' }">{{ getSortIndicator('price') }}</span></button></th>
+                <th><button class="sort-header" type="button" @click="toggleSort('pe')">PE <span :class="{ active: filters.sort_by === 'pe' }">{{ getSortIndicator('pe') }}</span></button></th>
+                <th><button class="sort-header" type="button" @click="toggleSort('pb')">PB <span :class="{ active: filters.sort_by === 'pb' }">{{ getSortIndicator('pb') }}</span></button></th>
+                <th><button class="sort-header" type="button" @click="toggleSort('roe')">ROE <span :class="{ active: filters.sort_by === 'roe' }">{{ getSortIndicator('roe') }}</span></button></th>
+                <th><button class="sort-header" type="button" @click="toggleSort('roi')">ROI <span :class="{ active: filters.sort_by === 'roi' }">{{ getSortIndicator('roi') }}</span></button></th>
+                <th><button class="sort-header" type="button" @click="toggleSort('dividend_yield')">股息率 <span :class="{ active: filters.sort_by === 'dividend_yield' }">{{ getSortIndicator('dividend_yield') }}</span></button></th>
+                <th><button class="sort-header" type="button" @click="toggleSort('net_cash_ratio')">净现比 <span :class="{ active: filters.sort_by === 'net_cash_ratio' }">{{ getSortIndicator('net_cash_ratio') }}</span></button></th>
+                <th><button class="sort-header" type="button" @click="toggleSort('cfo_yield')">现金流收益 <span :class="{ active: filters.sort_by === 'cfo_yield' }">{{ getSortIndicator('cfo_yield') }}</span></button></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in results" :key="row.symbol">
+                <td>
+                  <div class="company-cell">
+                    <strong>{{ row.name }}</strong>
+                    <span v-if="row.is_monitored" class="monitor-badge">监控</span>
+                    <div class="company-sub">
+                      <span class="symbol-badge">{{ row.symbol }}</span>
+                      <span v-if="row.industry" class="industry-badge">{{ row.industry }}</span>
+                    </div>
+                  </div>
+                </td>
+                <td class="action-col">
+                  <div class="row-actions">
+                    <button class="mini-btn" type="button" @click="openAnalysis(row.symbol)">分析</button>
+                    <button class="mini-btn primary" type="button" @click="addToMonitor(row)" :disabled="row.is_monitored || addLoadingSymbol === row.symbol">
+                      {{ row.is_monitored ? '已监控' : (addLoadingSymbol === row.symbol ? '...' : '加入') }}
+                    </button>
+                  </div>
+                </td>
+                <td>
+                  <div class="price-cell">
+                    <strong>{{ formatPrice(row.price) }}</strong>
+                    <small>{{ formatMarketCap(row.market_cap) }}</small>
+                  </div>
+                </td>
+                <td><span class="metric-pill" :class="getMetricTone('pe', row.pe)">{{ formatNumber(row.pe) }}</span></td>
+                <td><span class="metric-pill" :class="getMetricTone('pb', row.pb)">{{ formatNumber(row.pb) }}</span></td>
+                <td><span class="metric-pill" :class="getMetricTone('roe', row.roe_pct)">{{ formatPctValue(row.roe_pct) }}</span></td>
+                <td><span class="metric-pill" :class="getMetricTone('roi', row.roi_pct)">{{ formatPctValue(row.roi_pct) }}</span></td>
+                <td><span class="metric-pill" :class="getMetricTone('dividend', row.dividend_yield)">{{ formatPct(row.dividend_yield) }}</span></td>
+                <td><span class="metric-pill" :class="getMetricTone('net_cash_ratio', row.net_cash_ratio)">{{ formatNumber(row.net_cash_ratio) }}</span></td>
+                <td><span class="metric-pill" :class="getMetricTone('cfo_yield', row.cfo_yield)">{{ formatPct(row.cfo_yield) }}</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 分页 -->
+        <div class="pager">
+          <button class="secondary-btn" type="button" @click="goToPage(pagination.page - 1)" :disabled="pagination.page <= 1 || loading">上一页</button>
+          <span>第 {{ pagination.page }} / {{ pagination.total_pages || 1 }} 页</span>
+          <button class="secondary-btn" type="button" @click="goToPage(pagination.page + 1)" :disabled="pagination.page >= pagination.total_pages || loading">下一页</button>
+        </div>
+
+        <!-- 底部洞察 -->
+        <div class="insight-row">
+          <section class="insight-card">
+            <h3>优先研究</h3>
+            <div v-if="topIdeas.length" class="idea-list">
+              <article v-for="idea in topIdeas" :key="idea.symbol" class="idea-card">
+                <div class="idea-head">
+                  <div>
+                    <strong>{{ idea.name }}</strong>
+                    <span>{{ idea.symbol }} · {{ idea.industry || '未分类' }}</span>
+                  </div>
+                  <b>{{ idea.score }}</b>
                 </div>
-                <b>{{ idea.score }}</b>
-              </div>
-              <div class="idea-reasons">
-                <span v-for="reason in idea.reasons" :key="reason">{{ reason }}</span>
-              </div>
-              <div class="idea-actions">
-                <button class="mini-btn" type="button" @click="openAnalysis(idea.symbol)">分析</button>
-                <button
-                  class="mini-btn primary"
-                  type="button"
-                  @click="addToMonitor(idea)"
-                  :disabled="idea.is_monitored || addLoadingSymbol === idea.symbol"
-                >
-                  {{ idea.is_monitored ? '已监控' : '加入' }}
-                </button>
-              </div>
-            </article>
-          </div>
-          <p v-else class="side-empty">拿到结果后，这里会自动列出更值得先看的标的。</p>
-        </section>
+                <div class="idea-reasons">
+                  <span v-for="reason in idea.reasons" :key="reason">{{ reason }}</span>
+                </div>
+                <div class="idea-actions">
+                  <button class="mini-btn" type="button" @click="openAnalysis(idea.symbol)">分析</button>
+                  <button class="mini-btn primary" type="button" @click="addToMonitor(idea)" :disabled="idea.is_monitored || addLoadingSymbol === idea.symbol">
+                    {{ idea.is_monitored ? '已监控' : '加入' }}
+                  </button>
+                </div>
+              </article>
+            </div>
+            <p v-else class="side-empty">拿到结果后，这里会自动列出更值得先看的标的。</p>
+          </section>
 
-        <section class="insight-card panel">
-          <div class="panel-head compact">
-            <div>
-              <span class="eyebrow">Industry</span>
-              <h2>行业分布</h2>
-            </div>
-          </div>
-          <div v-if="industryHighlights.length" class="industry-list">
-            <div v-for="item in industryHighlights" :key="item.name" class="industry-row">
-              <div class="industry-label">
-                <strong>{{ item.name }}</strong>
-                <span>{{ item.count }} 只</span>
-              </div>
-              <div class="industry-bar-track">
-                <div class="industry-bar-fill" :style="{ width: `${item.ratio}%` }"></div>
+          <section class="insight-card">
+            <h3>行业分布</h3>
+            <div v-if="industryHighlights.length" class="industry-list">
+              <div v-for="item in industryHighlights" :key="item.name" class="industry-row">
+                <div class="industry-label">
+                  <strong>{{ item.name }}</strong>
+                  <span>{{ item.count }} 只</span>
+                </div>
+                <div class="industry-bar-track">
+                  <div class="industry-bar-fill" :style="{ width: `${item.ratio}%` }"></div>
+                </div>
               </div>
             </div>
-          </div>
-          <p v-else class="side-empty">当前结果还不足以观察行业分布。</p>
-        </section>
-      </aside>
+            <p v-else class="side-empty">当前结果还不足以观察行业分布。</p>
+          </section>
+        </div>
+      </template>
     </main>
   </div>
 </template>
@@ -863,227 +718,288 @@ onMounted(() => {
 
 <style scoped>
 .screener-shell {
-  --bg: #f4f6f8;
-  --panel: #ffffff;
-  --panel-soft: #f8fafc;
-  --ink: #152033;
-  --muted: #637083;
-  --faint: #8a96a8;
-  --line: #dde4ee;
-  --line-strong: #cbd5e1;
+  --bg: #f8fafc;
+  --ink: #0f172a;
+  --muted: #64748b;
+  --faint: #94a3b8;
+  --line: #e2e8f0;
   --accent: #0f766e;
   --accent-dark: #0b5f59;
-  --warn: #b45309;
   --danger: #b42318;
   min-height: 100vh;
   background: var(--bg);
   color: var(--ink);
-  padding: 18px;
+  padding: 16px 20px;
+  max-width: 1600px;
+  margin: 0 auto;
 }
 
+/* 顶部栏 */
 .topbar {
-  height: 64px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  max-width: 1760px;
-  margin: 0 auto 14px;
-  padding: 0 4px;
+  margin-bottom: 12px;
 }
 
-.topbar-title,
-.topbar-actions,
-.result-actions,
-.row-actions,
-.idea-actions,
-.active-tag-row {
+.topbar-title {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
-}
-
-.result-table .row-actions {
-  gap: 6px;
-  flex-wrap: nowrap;
-}
-
-.result-table .mini-btn {
-  min-height: 30px;
-  padding: 0 8px;
-  font-size: 0.8rem;
-}
-
-.topbar-title h1,
-.panel-head h2,
-.result-toolbar h2 {
-  margin: 0;
-  letter-spacing: 0;
-  color: var(--ink);
 }
 
 .topbar-title h1 {
-  font-size: 1.35rem;
-  line-height: 1.2;
-}
-
-.eyebrow,
-.section-label,
-.field span,
-.metric-card span,
-.radar-list span {
-  color: var(--faint);
-  font-size: 0.72rem;
+  margin: 0;
+  font-size: 1.2rem;
   font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
-.panel {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  box-shadow: 0 18px 42px -34px rgba(15, 23, 42, 0.34);
-}
-
-.screener-workspace {
-  max-width: 1760px;
-  margin: 0 auto;
-  display: grid;
-  grid-template-columns: 300px minmax(0, 1fr) 320px;
-  gap: 14px;
-  align-items: start;
-}
-
-.filter-panel,
-.result-panel,
-.insight-card,
-.metric-card {
-  padding: 16px;
-}
-
-.filter-panel,
-.insight-panel-wrap {
-  position: sticky;
-  top: 14px;
-}
-
-.panel-head,
-.result-toolbar {
+.topbar-actions {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--line);
+  align-items: center;
+  gap: 10px;
 }
 
-.panel-head.compact h2,
-.result-toolbar h2 {
-  font-size: 1rem;
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d97706;
 }
 
-.filter-form,
-.preset-section,
-.main-panel,
-.insight-panel-wrap,
-.idea-list,
-.industry-list {
-  display: grid;
-  gap: 12px;
+.status-dot.ready {
+  background: #16a34a;
 }
 
-.filter-form {
-  margin-top: 14px;
+.topbar-meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-weight: 600;
 }
 
-.field,
-.field-pair {
-  display: grid;
-  gap: 8px;
-}
-
-.field-pair {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.field input,
-.field select {
-  width: 100%;
-  height: 38px;
-  border: 1px solid var(--line-strong);
-  border-radius: 6px;
+/* 横向筛选条 */
+.filter-bar {
   background: #fff;
-  color: var(--ink);
-  padding: 0 10px;
-  font-size: 0.9rem;
+  border: 1px solid var(--line);
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  display: grid;
+  gap: 10px;
 }
 
-.field input:focus,
-.field select:focus {
-  outline: none;
-  border-color: rgba(15, 118, 110, 0.65);
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
-}
-
-.toggle-row {
-  min-height: 38px;
+.filter-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--muted);
-  font-size: 0.88rem;
+  flex-wrap: wrap;
 }
 
-.toggle-row input {
+.search-input {
+  width: 180px;
+  flex-shrink: 0;
+}
+
+.filter-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.filter-group label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.filter-group label span {
+  color: var(--faint);
+  font-size: 0.72rem;
+}
+
+.filter-group input,
+.filter-input {
+  width: 64px;
+  height: 32px;
+  border: 1px solid var(--line);
+  padding: 0 8px;
+  font-size: 0.82rem;
+  background: #f8fafc;
+  color: var(--ink);
+}
+
+.filter-group input:focus,
+.filter-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.search-input {
+  height: 32px;
+  border: 1px solid var(--line);
+  padding: 0 10px;
+  font-size: 0.82rem;
+  background: #fff;
+  color: var(--ink);
+}
+
+.unit {
+  font-size: 0.7rem;
+  color: var(--faint);
+}
+
+.filter-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.filter-row-secondary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.preset-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.preset-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--faint);
+}
+
+.preset-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  background: #f8fafc;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.preset-pill:hover {
+  background: #f1f5f9;
+}
+
+.preset-pill small {
+  font-size: 0.68rem;
+  color: var(--faint);
+  font-weight: 600;
+}
+
+.preset-income { border-left: 3px solid #f59e0b; }
+.preset-quality { border-left: 3px solid #10b981; }
+.preset-steady { border-left: 3px solid #3b82f6; }
+
+.sort-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.filter-select {
+  height: 32px;
+  border: 1px solid var(--line);
+  padding: 0 8px;
+  font-size: 0.78rem;
+  background: #f8fafc;
+  color: var(--ink);
+}
+
+.sort-dir-btn {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  background: #f8fafc;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.toggle-label input {
   accent-color: var(--accent);
 }
 
+.active-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.active-tag {
+  padding: 3px 8px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  background: #f1f5f9;
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+/* 按钮 */
 .icon-btn,
 .primary-btn,
 .secondary-btn,
-.text-btn,
 .mini-btn {
-  border: 1px solid var(--line-strong);
-  border-radius: 6px;
+  border: 1px solid var(--line);
   cursor: pointer;
-  font-weight: 800;
-  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
+  font-weight: 700;
+  transition: background 0.15s;
 }
 
 .icon-btn {
-  width: 38px;
-  height: 38px;
-  background: var(--panel);
+  width: 32px;
+  height: 32px;
+  background: #fff;
   color: var(--ink);
-  font-size: 1.1rem;
+  font-size: 1rem;
+  display: grid;
+  place-items: center;
 }
 
 .primary-btn {
-  min-height: 38px;
+  height: 32px;
   padding: 0 14px;
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
-}
-
-.primary-btn.full {
-  width: 100%;
+  font-size: 0.82rem;
 }
 
 .secondary-btn,
-.mini-btn,
-.text-btn {
-  min-height: 32px;
+.mini-btn {
+  height: 30px;
   padding: 0 10px;
   background: #fff;
   color: var(--ink);
-}
-
-.text-btn {
-  border-color: transparent;
-  color: var(--accent);
+  font-size: 0.78rem;
 }
 
 .mini-btn.primary {
@@ -1092,208 +1008,88 @@ onMounted(() => {
   color: var(--accent-dark);
 }
 
-.primary-btn:hover,
-.icon-btn:hover,
-.secondary-btn:hover,
-.text-btn:hover,
-.mini-btn:hover,
-.preset-card:hover {
-  transform: translateY(-1px);
-}
+.primary-btn:hover { background: var(--accent-dark); }
+.secondary-btn:hover { background: #f8fafc; }
+.mini-btn:hover { background: #f8fafc; }
 
 .primary-btn:disabled,
 .secondary-btn:disabled,
 .mini-btn:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: not-allowed;
-  transform: none;
 }
 
-.status-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 99px;
-  background: var(--warn);
-  box-shadow: 0 0 0 4px rgba(180, 83, 9, 0.12);
-}
-
-.status-dot.ready {
-  background: var(--accent);
-  box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
-}
-
-.topbar-meta,
-.loading-chip,
-.active-tag,
-.symbol-badge,
-.industry-badge,
-.monitor-badge,
-.idea-reasons span {
-  border-radius: 999px;
-  font-weight: 800;
-  font-size: 0.76rem;
-}
-
-.topbar-meta,
-.loading-chip,
-.active-tag,
-.idea-reasons span {
-  padding: 6px 9px;
-  background: #fff;
-  border: 1px solid var(--line);
-  color: var(--muted);
-}
-
-.loading-chip {
-  background: #ecfdf5;
-  color: var(--accent-dark);
-  border-color: #99f6e4;
-}
-
-.loading-chip.muted,
-.active-tag.muted {
-  background: var(--panel-soft);
-  color: var(--faint);
-}
-
-.preset-section {
-  margin-top: 4px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
-}
-
-.preset-card {
-  display: grid;
-  gap: 6px;
-  text-align: left;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel-soft);
-  padding: 11px;
-  cursor: pointer;
-}
-
-.preset-card div {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.preset-card span {
-  color: var(--faint);
-  font-size: 0.68rem;
-  font-weight: 900;
-  text-transform: uppercase;
-}
-
-.preset-card strong {
-  color: var(--ink);
-}
-
-.preset-card p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.78rem;
-  line-height: 1.45;
-}
-
-.preset-income { border-left: 3px solid #f59e0b; }
-.preset-quality { border-left: 3px solid #10b981; }
-.preset-steady { border-left: 3px solid #3b82f6; }
-
-.summary-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.metric-card {
-  display: grid;
-  gap: 6px;
-}
-
-.metric-card strong {
-  color: var(--ink);
-  font-size: 1.35rem;
-  line-height: 1.1;
-}
-
-.metric-card p,
-.table-summary span,
-.side-empty,
-.idea-head span {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.82rem;
-  line-height: 1.5;
-}
-
+/* 错误 */
 .error-banner {
-  padding: 12px 14px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
   color: var(--danger);
   background: #fff7ed;
-  border-color: #fed7aa;
-  font-weight: 800;
+  border: 1px solid #fed7aa;
+  font-size: 0.85rem;
+  font-weight: 700;
 }
 
-.result-panel {
-  min-width: 0;
+/* 主区域 */
+.main-area {
   display: grid;
   gap: 12px;
 }
 
-.active-tag-row {
-  align-items: flex-start;
-}
-
-.table-summary {
+/* 统计条 */
+.stats-bar {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
+  gap: 2px;
+  background: #fff;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel-soft);
+  overflow: hidden;
 }
 
-.table-summary div {
+.stat-item {
+  flex: 1;
+  padding: 10px 14px;
   display: grid;
-  gap: 3px;
+  gap: 2px;
+  border-right: 1px solid var(--line);
 }
 
+.stat-item:last-child {
+  border-right: 0;
+}
+
+.stat-item span {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.stat-item strong {
+  font-size: 1rem;
+  font-weight: 900;
+  color: var(--ink);
+}
+
+/* 表格 */
 .table-shell {
   overflow: auto;
-  scrollbar-gutter: stable;
-  max-height: calc(100vh - 320px);
-  min-height: 420px;
+  max-height: calc(100vh - 380px);
+  min-height: 400px;
   border: 1px solid var(--line);
-  border-radius: 8px;
   background: #fff;
 }
 
 .result-table {
   width: 100%;
-  min-width: 850px;
+  min-width: 900px;
   border-collapse: collapse;
-}
-
-.result-table th:first-child,
-.result-table td:first-child {
-  width: 180px;
-  min-width: 180px;
-}
-
-.result-table th.action-col,
-.result-table td.action-col {
-  width: 124px;
-  min-width: 124px;
 }
 
 .result-table th,
 .result-table td {
-  padding: 10px 9px;
-  border-bottom: 1px solid #eef2f7;
+  padding: 8px 10px;
+  border-bottom: 1px solid #f1f5f9;
   text-align: left;
   vertical-align: middle;
   white-space: nowrap;
@@ -1305,8 +1101,9 @@ onMounted(() => {
   z-index: 2;
   background: #f8fafc;
   color: var(--faint);
-  font-size: 0.72rem;
-  letter-spacing: 0.05em;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
@@ -1316,7 +1113,6 @@ onMounted(() => {
   left: 0;
   z-index: 1;
   background: #fff;
-  box-shadow: 10px 0 18px -18px rgba(15, 23, 42, 0.34);
 }
 
 .result-table th:first-child {
@@ -1327,10 +1123,9 @@ onMounted(() => {
 .result-table th.action-col,
 .result-table td.action-col {
   position: sticky;
-  left: 180px;
+  left: 160px;
   z-index: 1;
   background: #fff;
-  box-shadow: 10px 0 18px -18px rgba(15, 23, 42, 0.34);
 }
 
 .result-table th.action-col {
@@ -1358,7 +1153,7 @@ onMounted(() => {
 
 .sort-header span {
   color: var(--faint);
-  margin-left: 4px;
+  margin-left: 2px;
 }
 
 .sort-header span.active {
@@ -1366,30 +1161,31 @@ onMounted(() => {
 }
 
 .company-cell {
-  display: grid;
-  gap: 5px;
-}
-
-.company-mainline,
-.company-subline {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
-.company-mainline strong,
-.idea-head strong {
+.company-cell strong {
+  font-size: 0.85rem;
   color: var(--ink);
-  font-size: 0.88rem;
+}
+
+.company-sub {
+  display: flex;
+  gap: 4px;
+  align-items: center;
 }
 
 .symbol-badge,
 .industry-badge,
 .monitor-badge {
-  padding: 2px 6px;
+  padding: 1px 5px;
+  font-size: 0.68rem;
+  font-weight: 700;
   border: 1px solid var(--line);
-  background: var(--panel-soft);
+  background: #f8fafc;
   color: var(--muted);
 }
 
@@ -1399,42 +1195,43 @@ onMounted(() => {
   background: #ecfdf5;
 }
 
-.price-text {
+.row-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.price-cell {
+  display: grid;
+  gap: 2px;
+}
+
+.price-cell strong {
+  font-size: 0.85rem;
   color: var(--ink);
   font-variant-numeric: tabular-nums;
 }
 
-.price-cell {
-  display: inline-grid;
-  gap: 3px;
-  align-items: center;
-}
-
-.market-cap-inline {
+.price-cell small {
+  font-size: 0.68rem;
   color: var(--faint);
-  font-size: 0.72rem;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
+  font-weight: 700;
 }
 
 .metric-pill {
   display: inline-flex;
-  min-width: 48px;
+  min-width: 44px;
   justify-content: center;
-  padding: 5px 7px;
+  padding: 3px 6px;
   border-radius: 999px;
-  font-weight: 900;
-  font-size: 0.78rem;
+  font-weight: 800;
+  font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
   border: 1px solid var(--line);
-  background: var(--panel-soft);
+  background: #f8fafc;
   color: var(--muted);
 }
 
-.tone-cheap,
-.tone-income,
-.tone-strong,
-.tone-quality {
+.tone-cheap, .tone-income, .tone-strong, .tone-quality {
   background: #ecfdf5;
   border-color: #99f6e4;
   color: #047857;
@@ -1457,26 +1254,27 @@ onMounted(() => {
   color: var(--faint);
 }
 
+/* 分页 */
 .pager {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 12px;
   color: var(--muted);
-  font-size: 0.86rem;
+  font-size: 0.82rem;
 }
 
+/* 空状态 */
 .empty-state {
-  min-height: 420px;
+  min-height: 300px;
   display: grid;
   place-items: center;
   align-content: center;
   gap: 10px;
   text-align: center;
   color: var(--muted);
-  border: 1px dashed var(--line-strong);
-  border-radius: 8px;
-  background: var(--panel-soft);
+  border: 1px dashed var(--line);
+  background: #fff;
 }
 
 .empty-state strong {
@@ -1488,40 +1286,44 @@ onMounted(() => {
   margin: 0;
   max-width: 360px;
   line-height: 1.6;
+  font-size: 0.88rem;
+}
+
+/* 底部洞察 */
+.insight-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
 }
 
 .insight-card {
+  background: #fff;
+  border: 1px solid var(--line);
+  padding: 14px 16px;
   display: grid;
   gap: 12px;
 }
 
-.radar-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.radar-list div {
-  display: grid;
-  gap: 5px;
-  padding: 10px;
-  border-radius: 8px;
-  background: var(--panel-soft);
-  border: 1px solid var(--line);
-}
-
-.radar-list strong {
-  font-size: 1.25rem;
+.insight-card h3 {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 800;
   color: var(--ink);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.idea-list {
+  display: grid;
+  gap: 8px;
 }
 
 .idea-card {
   display: grid;
-  gap: 10px;
-  padding: 11px;
-  border-radius: 8px;
+  gap: 8px;
+  padding: 10px;
   border: 1px solid var(--line);
-  background: var(--panel-soft);
+  background: #f8fafc;
 }
 
 .idea-head {
@@ -1532,37 +1334,64 @@ onMounted(() => {
 
 .idea-head div {
   display: grid;
-  gap: 3px;
+  gap: 2px;
+}
+
+.idea-head strong {
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+
+.idea-head span {
+  font-size: 0.72rem;
+  color: var(--muted);
 }
 
 .idea-head b {
-  min-width: 36px;
-  height: 28px;
+  min-width: 32px;
+  height: 24px;
   display: inline-grid;
   place-items: center;
-  border-radius: 999px;
   background: #ecfdf5;
   color: var(--accent-dark);
-  font-size: 0.8rem;
+  font-size: 0.75rem;
+  font-weight: 800;
 }
 
 .idea-reasons {
   display: flex;
-  gap: 6px;
+  gap: 4px;
   flex-wrap: wrap;
+}
+
+.idea-reasons span {
+  padding: 2px 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  background: #fff;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.idea-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.industry-list {
+  display: grid;
+  gap: 8px;
 }
 
 .industry-row {
   display: grid;
-  gap: 6px;
+  gap: 4px;
 }
 
 .industry-label {
   display: flex;
-  align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
 }
 
 .industry-label strong {
@@ -1571,49 +1400,39 @@ onMounted(() => {
 
 .industry-label span {
   color: var(--faint);
+  font-size: 0.72rem;
 }
 
 .industry-bar-track {
-  height: 7px;
+  height: 6px;
   overflow: hidden;
-  border-radius: 999px;
   background: #edf2f7;
 }
 
 .industry-bar-fill {
   height: 100%;
-  border-radius: inherit;
   background: linear-gradient(90deg, var(--accent), #38bdf8);
 }
 
-@media (max-width: 1380px) {
-  .screener-workspace {
-    grid-template-columns: 280px minmax(0, 1fr);
-  }
-
-  .insight-panel-wrap {
-    grid-column: 1 / -1;
-    position: static;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    display: grid;
-  }
+.side-empty {
+  margin: 0;
+  color: var(--faint);
+  font-size: 0.82rem;
 }
 
+/* 响应式 */
 @media (max-width: 1040px) {
-  .screener-workspace,
-  .summary-grid,
-  .insight-panel-wrap {
+  .filter-group {
+    display: none;
+  }
+
+  .insight-row {
     grid-template-columns: 1fr;
   }
 
-  .filter-panel {
-    position: static;
-  }
-
   .topbar {
-    height: auto;
-    align-items: flex-start;
     flex-direction: column;
+    align-items: flex-start;
   }
 
   .table-shell {
@@ -1623,23 +1442,19 @@ onMounted(() => {
 
 @media (max-width: 720px) {
   .screener-shell {
-    padding: 12px;
+    padding: 10px;
   }
 
-  .field-pair,
-  .radar-list {
-    grid-template-columns: 1fr;
+  .stats-bar {
+    flex-wrap: wrap;
+  }
+
+  .stat-item {
+    flex: 0 0 50%;
+    border-bottom: 1px solid var(--line);
   }
 
   .result-table {
-    min-width: 0;
-  }
-
-  .result-table th:first-child,
-  .result-table td:first-child,
-  .result-table th.action-col,
-  .result-table td.action-col {
-    width: 100%;
     min-width: 0;
   }
 
@@ -1657,7 +1472,7 @@ onMounted(() => {
 
   .result-table tr {
     border-bottom: 1px solid var(--line);
-    padding: 10px 0;
+    padding: 8px 0;
   }
 
   .result-table td,
@@ -1676,10 +1491,7 @@ onMounted(() => {
     content: attr(data-label);
     color: var(--faint);
     font-weight: 800;
-  }
-
-  .company-cell {
-    text-align: right;
+    font-size: 0.72rem;
   }
 }
 </style>

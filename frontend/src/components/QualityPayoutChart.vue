@@ -5,6 +5,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { echarts, type ECharts } from '@/lib/echarts'
+import { safeNum } from '@/lib/chart'
 
 const props = defineProps<{ data: any[] }>()
 
@@ -28,9 +29,9 @@ const initChart = () => {
       { type: 'value', name: 'Payout (%)', axisLabel: { color: '#94a3b8' }, splitLine: { show: false } },
     ],
     series: [
-      { name: 'EPS', type: 'bar', data: props.data.map((d: any) => d.BASIC_EPS), color: '#94a3b8' },
-      { name: 'DPS', type: 'bar', data: props.data.map((d: any) => d.dps), color: '#3b82f6' },
-      { name: 'Payout Ratio', type: 'line', yAxisIndex: 1, data: props.data.map((d: any) => d.payout_ratio), lineStyle: { width: 3 }, color: '#ef4444' },
+      { name: 'EPS', type: 'bar', data: props.data.map((d: any) => safeNum(d.BASIC_EPS)), color: '#94a3b8' },
+      { name: 'DPS', type: 'bar', data: props.data.map((d: any) => safeNum(d.dps)), color: '#3b82f6' },
+      { name: 'Payout Ratio', type: 'line', yAxisIndex: 1, data: props.data.map((d: any) => safeNum(d.payout_ratio)), lineStyle: { width: 3 }, color: '#ef4444' },
     ],
   })
 }

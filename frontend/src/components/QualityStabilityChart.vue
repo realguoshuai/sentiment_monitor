@@ -5,6 +5,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { echarts, type ECharts } from '@/lib/echarts'
+import { safeNum } from '@/lib/chart'
 
 const props = defineProps<{ data: any[] }>()
 
@@ -28,9 +29,9 @@ const initChart = () => {
       { type: 'value', name: 'Return (%)', axisLabel: { color: '#94a3b8' }, splitLine: { show: false } },
     ],
     series: [
-      { name: 'Revenue Growth', type: 'bar', data: props.data.map((d: any) => d.revenue_growth_pct), color: '#94a3b8' },
-      { name: 'ROE', type: 'line', yAxisIndex: 1, data: props.data.map((d: any) => d.roe), lineStyle: { width: 3 }, color: '#2563eb' },
-      { name: 'ROIC Proxy', type: 'line', yAxisIndex: 1, data: props.data.map((d: any) => d.roic_proxy_pct), lineStyle: { width: 3 }, color: '#f59e0b' },
+      { name: 'Revenue Growth', type: 'bar', data: props.data.map((d: any) => safeNum(d.revenue_growth_pct)), color: '#94a3b8' },
+      { name: 'ROE', type: 'line', yAxisIndex: 1, data: props.data.map((d: any) => safeNum(d.roe)), lineStyle: { width: 3 }, color: '#2563eb' },
+      { name: 'ROIC Proxy', type: 'line', yAxisIndex: 1, data: props.data.map((d: any) => safeNum(d.roic_proxy_pct)), lineStyle: { width: 3 }, color: '#f59e0b' },
     ],
   })
 }

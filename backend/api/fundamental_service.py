@@ -313,19 +313,31 @@ class FundamentalService:
         stale_key = f"{cache_key}_stale"
         try:
             logger.info(f"[Quality] Start fetching full quality data for {symbol}")
-            df_p = cls._fetch_profit_sheet_by_report(symbol)
-            df_b = cls._fetch_balance_sheet_by_report(symbol)
-            df_c = cls.get_yearly_cashflow(symbol)
-            df_d = cls.get_historical_dividends(symbol)
-            
+
+            # 并行获取 5 个数据源，减少等待时间
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                future_p = executor.submit(cls._fetch_profit_sheet_by_report, symbol)
+                future_b = executor.submit(cls._fetch_balance_sheet_by_report, symbol)
+                future_c = executor.submit(cls.get_yearly_cashflow, symbol)
+                future_d = executor.submit(cls.get_historical_dividends, symbol)
+                future_cap = executor.submit(cls._fetch_market_cap, symbol)
+
+                # 逐个收集结果，单个数据源失败不拖垮整体
+                def _safe_result(future, name, fallback=None):
+                    try:
+                        return future.result()
+                    except Exception as e:
+                        logger.warning(f"[Quality] {name} fetch failed for {symbol}: {e}")
+                        return fallback
+
+                df_p = _safe_result(future_p, 'profit_sheet', pd.DataFrame())
+                df_b = _safe_result(future_b, 'balance_sheet', pd.DataFrame())
+                df_c = _safe_result(future_c, 'cashflow', pd.DataFrame())
+                df_d = _safe_result(future_d, 'dividends', pd.DataFrame())
+                m_cap = _safe_result(future_cap, 'market_cap', 0)
+
             logger.info(f"[Quality] Data fetched for {symbol}, calculating metrics...")
-            # 获取市值用于 FCF Yield 计算
-            m_cap = 0
-            try:
-                from .price_service import PriceService
-                rt = PriceService.get_realtime_price([symbol], fetch_fundamentals=False)
-                m_cap = float((rt.get(symbol) or {}).get('market_cap', 0) or 0)
-            except Exception: pass
 
             payload = Calc.calculate_quality_metrics(df_p, df_b, df_c, df_d, m_cap)
             
@@ -482,6 +494,16 @@ class FundamentalService:
     def _call_akshare(cls, fetcher, *args, **kwargs):
         """测试兼容性存根：将底层外部请求请求委托给 Fetcher 内部封装"""
         return Fetcher.call_akshare(fetcher, *args, **kwargs)
+
+    @classmethod
+    def _fetch_market_cap(cls, symbol):
+        """获取市值（用于 FCF Yield 计算）"""
+        try:
+            from .price_service import PriceService
+            rt = PriceService.get_realtime_price([symbol], fetch_fundamentals=False)
+            return float((rt.get(symbol) or {}).get('market_cap', 0) or 0)
+        except Exception:
+            return 0
 
     @classmethod
     def get_margin_history_aligned(cls, symbol, target_dates):
