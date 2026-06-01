@@ -117,10 +117,10 @@
                 <span class="text-[10px] font-mono text-slate-400">{{ sym }}</span>
              </div>
              <div class="flex items-baseline gap-2">
-                <span class="text-3xl font-bold font-mono text-slate-800">{{ rtPrices[sym]?.price.toFixed(2) || '--.--' }}</span>
+                <span class="text-3xl font-bold font-mono text-slate-800">{{ rtPrices[sym]?.price?.toFixed(2) || '--.--' }}</span>
                 <span class="text-xs text-slate-500 font-bold uppercase">CNY</span>
                 <span v-if="rtPrices[sym]" :class="rtPrices[sym].change_percent > 0 ? 'text-rose-600' : 'text-emerald-600'" class="text-[10px] font-bold ml-auto bg-slate-50 px-2 py-1 rounded">
-                  {{ rtPrices[sym].change_percent > 0 ? '+' : '' }}{{ rtPrices[sym].change_percent.toFixed(2) }}%
+                  {{ rtPrices[sym].change_percent > 0 ? '+' : '' }}{{ (rtPrices[sym].change_percent ?? 0).toFixed(2) }}%
                 </span>
              </div>
           </div>

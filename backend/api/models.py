@@ -25,7 +25,7 @@ class Stock(models.Model):
         """获取关键词列表"""
         try:
             return json.loads(self.keywords)
-        except:
+        except (json.JSONDecodeError, TypeError):
             return []
     
     def set_keywords(self, keywords_list):
@@ -47,7 +47,7 @@ class Stock(models.Model):
         """获取估值配置"""
         try:
             return json.loads(self.valuation_config)
-        except:
+        except (json.JSONDecodeError, TypeError):
             return {}
 
     def set_valuation_config(self, config_dict):

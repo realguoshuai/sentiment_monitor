@@ -150,7 +150,7 @@ def collect_stock_data(stock: Stock, days: int = 7):
 
     symbol_code = stock.symbol[2:]  # 去掉SH/SZ前缀
 
-    print(f"\n[{stock.name}] 开始采集 (过去 {days} 天)...")
+    logger.info("[%s] 开始采集 (过去 %d 天)...", stock.name, days)
 
     # 1. 并发采集新闻（跳过研报/公告以提速）
     with ThreadPoolExecutor(max_workers=3) as executor:
@@ -188,7 +188,7 @@ def collect_stock_data(stock: Stock, days: int = 7):
     for item in all_items:
         date_groups[item['date']].append(item)
         
-    print(f"  [OK] Found data for {len(date_groups)} distinct days in range.")
+    logger.info("  [OK] Found data for %d distinct days in range.", len(date_groups))
 
     # 3. 为每一天生成情感记录
     success_dates = 0
@@ -242,27 +242,27 @@ def run_collection(is_manual=False):
     lock_acquired = False
     if not is_manual:
         if not cache.add(LOCK_KEY, True, LOCK_TTL):
-            print("\n[WARN] Another collection task is already running, skipping scheduled/cli collection.")
+            logger.warning("Another collection task is already running, skipping scheduled/cli collection.")
             return
         lock_acquired = True
         
     try:
-        print("=" * 60)
-        print("  Sentiment Data Collection System (Backfill Mode)")
-        print(f"  Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print("=" * 60)
+        logger.info("=" * 60)
+        logger.info("  Sentiment Data Collection System (Backfill Mode)")
+        logger.info("  Time: %s", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        logger.info("=" * 60)
         
         stocks = Stock.objects.all()
         if not stocks.exists():
-            print("\n[WARN] No stocks configured!")
+            logger.warning("No stocks configured!")
             return
-        
-        print(f"\nMonitoring {stocks.count()} stocks:")
+
+        logger.info("Monitoring %d stocks:", stocks.count())
         for stock in stocks:
-            print(f"  - {stock.name} ({stock.symbol})")
-        
-        print("\nStarting collection...")
-        print("-" * 60)
+            logger.info("  - %s (%s)", stock.name, stock.symbol)
+
+        logger.info("Starting collection...")
+        logger.info("-" * 60)
         
         success_count = 0
         for stock in stocks:
@@ -270,11 +270,11 @@ def run_collection(is_manual=False):
                 collect_stock_data(stock)
                 success_count += 1
             except Exception as e:
-                print(f"  [ERROR] Failed for {stock.name}: {str(e)[:100]}")
+                logger.error("  [ERROR] Failed for %s: %s", stock.name, str(e)[:100])
         
-        print("\n" + "=" * 60)
-        print(f"  Done! Success: {success_count}/{stocks.count()}")
-        print("=" * 60)
+        logger.info("=" * 60)
+        logger.info("  Done! Success: %d/%d", success_count, stocks.count())
+        logger.info("=" * 60)
         
         sync_fundamentals_for_all(stocks)
     finally:
@@ -287,9 +287,9 @@ def sync_fundamentals_for_all(stocks):
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from api.fundamental_service import FundamentalService
 
-    print("\n" + "-" * 60)
-    print("  [PREHEAT] Syncing fundamental data...")
-    print("-" * 60)
+    logger.info("-" * 60)
+    logger.info("  [PREHEAT] Syncing fundamental data...")
+    logger.info("-" * 60)
 
     def _sync_one(stock):
         FundamentalService.get_ttm_fundamentals(stock.symbol)
@@ -302,9 +302,9 @@ def sync_fundamentals_for_all(stocks):
             stock = futures[f]
             try:
                 f.result()
-                print(f"  [OK] {stock.name} ({stock.symbol}) synced")
+                logger.info("  [OK] %s (%s) synced", stock.name, stock.symbol)
             except Exception as e:
-                print(f"  [ERR] {stock.name} ({stock.symbol}): {str(e)[:80]}")
+                logger.error("  [ERR] %s (%s): %s", stock.name, stock.symbol, str(e)[:80])
 
 
 if __name__ == "__main__":

@@ -666,6 +666,8 @@ class ScreenerService:
                 )
                 return retained
 
+        # transaction.atomic 保证 delete + bulk_create 要么全成功要么全回滚
+        # SQLite WAL 模式下即使进程被 kill，未提交事务也会在下次访问时自动回滚
         with transaction.atomic():
             StockScreenerSnapshot.objects.all().delete()
             StockScreenerSnapshot.objects.bulk_create(rows, batch_size=500)

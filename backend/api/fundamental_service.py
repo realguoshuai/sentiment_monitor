@@ -7,6 +7,7 @@ import time
 import requests
 from datetime import datetime
 from django.core.cache import cache
+from django.utils import timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .utils import format_symbol
@@ -37,26 +38,14 @@ class FundamentalService:
 
     @classmethod
     def _cache_set(cls, key, value, timeout):
-        cache.set(key, value, timeout)
-
-    @classmethod
-    def _cache_get_value(cls, key):
-        try:
-            return cache.get(key)
-        except Exception as e:
-            logger.warning(f"Cache deserialization failed for {key}: {e}")
-            try:
-                cache.delete(key)
-            except Exception:
-                pass
-            return None
-
-    @classmethod
-    def _cache_set_value(cls, key, value, timeout):
         try:
             cache.set(key, value, timeout)
         except Exception as e:
-            logger.warning(f"Payload cache storage failed for {key}: {e}")
+            logger.warning(f"Cache storage failed for {key}: {e}")
+
+    # 向后兼容：_cache_get_value / _cache_set_value 已合并到 _cache_get / _cache_set
+    _cache_get_value = _cache_get
+    _cache_set_value = _cache_set
 
     @classmethod
     def _fix_symbol(cls, symbol):
@@ -303,7 +292,7 @@ class FundamentalService:
     def _schedule_quality_refresh(cls, symbol, include_sh):
         key = f"quality_v12_{symbol}_refreshing"
         if not cache.add(key, True, 600): return False
-        threading.Thread(target=lambda: (cls.get_quality_data(symbol, include_sh), cache.delete(key)), daemon=True).start()
+        threading.Thread(target=lambda: (cls.get_quality_data(symbol, include_shareholder=include_sh), cache.delete(key)), daemon=True).start()
         return True
 
     @classmethod
@@ -537,7 +526,6 @@ class FundamentalService:
     @classmethod
     def get_next_dividend(cls, symbol: str) -> dict:
         """获取单只股票的下一次分红信息（含三级回退：确认/预案/历史估算）"""
-        from datetime import datetime
         symbol = cls._fix_symbol(symbol)
         cache_key = f"next_dividend_v1_{symbol}"
         cached = cls._cache_get_value(cache_key)
@@ -567,14 +555,18 @@ class FundamentalService:
         transfer_col = next((c for c in cols if '转增' in c or '转' in c), None)
         cash_col = next((c for c in cols if '派息' in c or '派' in c), None)
 
+        def _safe_float(value):
+            val = pd.to_numeric(value, errors='coerce')
+            return float(val) if pd.notna(val) else 0.0
+
         def _build_plan(row):
             parts = []
-            if bonus_col and float(row.get(bonus_col, 0) or 0) > 0:
-                parts.append(f"送{float(row[bonus_col]):.2f}")
-            if transfer_col and float(row.get(transfer_col, 0) or 0) > 0:
-                parts.append(f"转{float(row[transfer_col]):.2f}")
-            if cash_col and float(row.get(cash_col, 0) or 0) > 0:
-                parts.append(f"派{float(row[cash_col]):.2f}元")
+            if bonus_col and _safe_float(row.get(bonus_col)) > 0:
+                parts.append(f"送{_safe_float(row[bonus_col]):.2f}")
+            if transfer_col and _safe_float(row.get(transfer_col)) > 0:
+                parts.append(f"转{_safe_float(row[transfer_col]):.2f}")
+            if cash_col and _safe_float(row.get(cash_col)) > 0:
+                parts.append(f"派{_safe_float(row[cash_col]):.2f}元")
             return ' '.join(parts) if parts else '暂无方案'
 
         df_parsed = []
@@ -587,7 +579,7 @@ class FundamentalService:
             })
 
         df_p = pd.DataFrame(df_parsed).dropna(subset=['ann_date']).sort_values('ann_date', ascending=False)
-        today = pd.Timestamp(datetime.now().date())
+        today = pd.Timestamp(timezone.now().date())
 
         # A. 已宣告但未除权的未来分红
         confirmed_row = None

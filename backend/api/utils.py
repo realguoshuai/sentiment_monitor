@@ -76,7 +76,7 @@ def get_valuation_config(symbol: str) -> dict:
             config = stock.get_valuation_config()
         else:
             config = {}
-    except:
+    except Exception:
         config = {}
         
     # 缓存 1 小时

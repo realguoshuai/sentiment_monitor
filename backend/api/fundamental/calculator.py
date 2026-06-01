@@ -232,7 +232,10 @@ class FundamentalCalculator:
             df['retention_ratio_pct'] = 100 - df.get('payout_ratio', 0)
             
             # Invested Capital & ROIC 兼容计算
+            # 当 invested_capital 全为 0（数据源缺少现金/负债字段）时，用归母净资产兜底
             df['invested_capital'] = df.get('invested_capital', 0)
+            if (df['invested_capital'] == 0).all():
+                df['invested_capital'] = df['TOTAL_PARENT_EQUITY'].fillna(0)
             previous_invested_capital = df['invested_capital'].shift(1)
             df['avg_invested_capital'] = df.apply(
                 lambda r: (r['invested_capital'] + (previous_invested_capital.loc[r.name] if pd.notnull(previous_invested_capital.loc[r.name]) else r['invested_capital'])) / 2,

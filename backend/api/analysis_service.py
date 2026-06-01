@@ -744,8 +744,9 @@ class AnalysisService:
         expected_roe: float,
         quality_data: dict,
         normalized_earnings: Optional[dict] = None,
-        val_config: dict = {},
+        val_config: Optional[dict] = None,
     ) -> List[dict]:
+        val_config = val_config or {}
         models = [
             cls._build_roe_anchor_model(current_price, current_pb, expected_roe, val_config),
             cls._build_earnings_power_model(current_price, current_pe, normalized_earnings or {}),
@@ -775,8 +776,9 @@ class AnalysisService:
         current_price: float,
         current_pb: float,
         expected_roe: float,
-        val_config: dict = {},
+        val_config: Optional[dict] = None,
     ) -> dict:
+        val_config = val_config or {}
         if current_price <= 0 or current_pb <= 0 or expected_roe <= 0:
             return cls._build_unavailable_model(
                 key='roe_anchor',

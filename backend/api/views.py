@@ -216,7 +216,7 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
     
     def get_queryset(self):
         """只返回最近30天的数据"""
-        thirty_days_ago = datetime.now().date() - timedelta(days=30)
+        thirty_days_ago = timezone.now().date() - timedelta(days=30)
         return SentimentData.objects.filter(date__gte=thirty_days_ago).select_related('stock')
 
     def _latest_per_stock_queryset(self):
@@ -245,7 +245,7 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'])
     def today(self, request):
         """获取今日舆情数据"""
-        today = datetime.now().date()
+        today = timezone.now().date()
         queryset = SentimentData.objects.filter(date=today)
         
         if not queryset.exists():
@@ -316,29 +316,46 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
                 if r.stock.name in monitored_stock_names:
                     stock_data[r.stock.name][idx] = r.sentiment_score
             
-            # 仅对每日热度前 3 的数据获取最新一条标题 (懒加载，比全量 Prefetch 快得多)
+            # 仅对每日热度前 3 的数据获取最新一条标题
+            # 批量预取：用 3 次查询替代最多 63 次逐条查询
             day_sentiments = sorted(records, key=lambda x: x.hot_score, reverse=True)[:3]
             day_items = []
-            for s_data in day_sentiments:
-                title = ""
-                url = ""
-                # 这里会产生 LIMIT 1 查询，对于 7天*3条数据=21次查询，总开销远小于 Prefetch 数千条新闻
-                r_all = list(s_data.reports.all()[:1])
-                a_all = list(s_data.announcements.all()[:1])
-                n_all = list(s_data.news.all()[:1])
-                
-                if r_all: 
-                    title = f"[{s_data.stock.name}] {r_all[0].title}"
-                    url = r_all[0].url
-                elif a_all: 
-                    title = f"[{s_data.stock.name}] {a_all[0].title}"
-                    url = a_all[0].url
-                elif n_all: 
-                    title = f"[{s_data.stock.name}] {n_all[0].title}"
-                    url = n_all[0].url
-                
-                if title:
-                    day_items.append({'title': title, 'score': s_data.sentiment_score, 'url': url})
+            if day_sentiments:
+                top_ids = [s.id for s in day_sentiments]
+                # 批量取每种关联的最新一条（按 pub_date 降序，Python 端取每个 sentiment_data_id 的第一条）
+                from .models import News, Report, Announcement
+                all_reports = Report.objects.filter(sentiment_data_id__in=top_ids).order_by('sentiment_data_id', '-pub_date')
+                all_announcements = Announcement.objects.filter(sentiment_data_id__in=top_ids).order_by('sentiment_data_id', '-pub_date')
+                all_news = News.objects.filter(sentiment_data_id__in=top_ids).order_by('sentiment_data_id', '-pub_date')
+
+                def _first_per_sentiment(qs):
+                    result = {}
+                    for item in qs:
+                        if item.sentiment_data_id not in result:
+                            result[item.sentiment_data_id] = item
+                    return result
+
+                report_map = _first_per_sentiment(all_reports)
+                announcement_map = _first_per_sentiment(all_announcements)
+                news_map = _first_per_sentiment(all_news)
+
+                for s_data in day_sentiments:
+                    title = ""
+                    url = ""
+                    r = report_map.get(s_data.id)
+                    a = announcement_map.get(s_data.id)
+                    n = news_map.get(s_data.id)
+                    if r:
+                        title = f"[{s_data.stock.name}] {r.title}"
+                        url = r.url
+                    elif a:
+                        title = f"[{s_data.stock.name}] {a.title}"
+                        url = a.url
+                    elif n:
+                        title = f"[{s_data.stock.name}] {n.title}"
+                        url = n.url
+                    if title:
+                        day_items.append({'title': title, 'score': s_data.sentiment_score, 'url': url})
             top_items_map[d.isoformat()] = day_items
 
         return Response({
@@ -649,14 +666,14 @@ def trigger_collection(request):
                 'status': 'completed',
                 'finished_at': timezone.now().isoformat(),
             }, 300)
-            print("[API] Manual collection completed successfully.")
+            logger.info("Manual collection completed successfully.")
         except Exception as e:
             cache.set(COLLECTION_STATUS_KEY, {
                 'status': 'failed',
                 'finished_at': timezone.now().isoformat(),
                 'error': str(e),
             }, 300)
-            print(f"[API] Manual collection failed: {str(e)}")
+            logger.error("Manual collection failed: %s", e)
         finally:
             cache.delete(COLLECTION_LOCK_KEY)
 

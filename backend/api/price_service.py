@@ -113,7 +113,7 @@ class PriceService:
                 'pb': pb,
                 'dividend_yield': 0.0,
                 'total_shares': (market_cap / price) if price > 0 and market_cap > 0 else 0.0,
-                'time': datetime.now().strftime('%Y%m%d%H%M%S'),
+                'time': timezone.now().strftime('%Y%m%d%H%M%S'),
             }
 
         return result
@@ -132,7 +132,7 @@ class PriceService:
             'dividend_yield': cls._safe_float(data.get('dividend_yield')),
             'market_cap': cls._safe_float(data.get('market_cap')),
             'total_shares': cls._safe_float(data.get('total_shares')),
-            'time': str(data.get('time') or datetime.now().strftime('%Y%m%d%H%M%S')),
+            'time': str(data.get('time') or timezone.now().strftime('%Y%m%d%H%M%S')),
             'source': data.get('source') or source,
         }
 
@@ -317,7 +317,7 @@ class PriceService:
                 'dividend_yield': cls._field_float(fields, 49),
                 'market_cap': market_cap, # 总市值 (元)
                 'total_shares': (market_cap / price) if price > 0 and market_cap > 0 else 0.0,
-                'time': fields[30] if len(fields) > 30 else datetime.now().strftime('%Y%m%d%H%M%S')
+                'time': fields[30] if len(fields) > 30 else timezone.now().strftime('%Y%m%d%H%M%S')
             }
         return results
 
@@ -338,7 +338,7 @@ class PriceService:
     @classmethod
     def _intraday_single_cache_key(cls, symbol):
         fixed_symbol = cls._fix_symbol(symbol)
-        trade_date = datetime.now().strftime('%Y%m%d')
+        trade_date = timezone.now().strftime('%Y%m%d')
         return f"intraday_single_v1_{fixed_symbol}_{trade_date}"
 
     @classmethod
