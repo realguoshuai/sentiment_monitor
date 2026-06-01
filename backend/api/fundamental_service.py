@@ -673,22 +673,47 @@ class FundamentalService:
                 cls._cache_set_value(cache_key, result, 12 * 3600)
                 return result
 
-        # C. 历史估算
-        for _, r in df_p.iterrows():
-            if pd.notna(r['ex_date']) and r['ex_date'] < today:
-                est = r['ex_date'] + pd.Timedelta(days=365)
-                while est < today:
-                    est += pd.Timedelta(days=365)
-                result = {
-                    'symbol': symbol,
-                    'date': est.strftime('%Y-%m-%d'),
-                    'days_left': max(0, int((est - today).days)),
-                    'plan': r['plan_str'],
-                    'status': 'estimated',
-                    'status_desc': '历史估算',
-                    'progress': '历史估算'
-                }
-                cls._cache_set_value(cache_key, result, 12 * 3600)
-                return result
+        # C. 历史估算（检测分红频率，用实际间隔而非硬编码 365 天）
+        past_ex_dates = sorted(
+            [r['ex_date'] for _, r in df_p.iterrows()
+             if pd.notna(r['ex_date']) and r['ex_date'] < today],
+            reverse=True
+        )
+
+        if past_ex_dates:
+            # 计算相邻除权日的间隔，检测分红频率
+            intervals = []
+            for i in range(len(past_ex_dates) - 1):
+                diff = (past_ex_dates[i] - past_ex_dates[i + 1]).days
+                if 60 < diff < 400:  # 过滤异常值
+                    intervals.append(diff)
+
+            # 如果有多个间隔且中位数 < 300 天，说明一年多次分红
+            if intervals:
+                intervals.sort()
+                median_interval = intervals[len(intervals) // 2]
+            else:
+                median_interval = 365
+
+            last_ex = past_ex_dates[0]
+            # 取最近一次分红的方案作为参考
+            last_row = df_p[df_p['ex_date'] == last_ex].iloc[0]
+
+            est = last_ex + pd.Timedelta(days=median_interval)
+            while est < today:
+                est += pd.Timedelta(days=median_interval)
+
+            freq_label = '半年报分红' if median_interval < 250 else '年度分红'
+            result = {
+                'symbol': symbol,
+                'date': est.strftime('%Y-%m-%d'),
+                'days_left': max(0, int((est - today).days)),
+                'plan': last_row['plan_str'],
+                'status': 'estimated',
+                'status_desc': f'历史估算（{freq_label}）',
+                'progress': '历史估算'
+            }
+            cls._cache_set_value(cache_key, result, 12 * 3600)
+            return result
 
         return none_result
