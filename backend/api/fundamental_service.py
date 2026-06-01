@@ -210,16 +210,6 @@ class FundamentalService:
             cls._cache_set(cache_key, df, cls.CACHE_TTL)
             return df
         except Exception:
-            # 兜底：尝试 Tushare 获取分红数据
-            try:
-                from .providers.tushare_provider import TushareProvider
-                df = cls._fetch_dividends_from_tushare(symbol, TushareProvider)
-                if not df.empty:
-                    cls._cache_set(cache_key, df, cls.CACHE_TTL)
-                    logger.info("Tushare fallback succeeded for dividends %s", symbol)
-                    return df
-            except Exception as ts_err:
-                logger.warning("Tushare dividend fallback failed for %s: %s", symbol, ts_err)
             return pd.DataFrame()
 
     @classmethod
@@ -501,25 +491,6 @@ class FundamentalService:
         except Exception as e:
             logger.error(f"Failed to calculate forward metrics for {symbol}: {e}")
             return {'expected_roe': 12.0, 'avg_roe_5y': 12.0}
-
-    @classmethod
-    def _fetch_dividends_from_tushare(cls, symbol, TushareProvider):
-        """从 Tushare 获取分红数据并转换为 Calc.extract_dividend_metrics 期望的格式"""
-        df = TushareProvider.fetch_dividend(symbol)
-        if df.empty:
-            return pd.DataFrame()
-
-        # 转换列名：tushare → AkShare 格式
-        rename = {
-            'ann_date': '公告日期',
-            'cash_div': '派息',
-            'end_date': '分红方案',
-        }
-        df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
-        # 只保留有现金分红的记录
-        if '派息' in df.columns:
-            df = df[pd.to_numeric(df['派息'], errors='coerce').fillna(0) > 0]
-        return df
 
     @classmethod
     def _fetch_fundamentals_from_tushare(cls, symbol, TushareProvider):

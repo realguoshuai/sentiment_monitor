@@ -3,9 +3,21 @@ Tushare Pro 数据源 Provider
 
 特点：
 - 需要注册获取 token（免费积分可获取基础数据）
-- 覆盖财务报表、北向持仓、融资融券、分红、内部人交易
 - 数据结构化程度高，质量好
 - 免费用户有频率限制（200 次/分钟），通过缓存规避
+
+免费可用接口（2026-06 验证）：
+  ✅ income / balancesheet / cashflow — 三大财务报表
+  ✅ fina_indicator — 财务指标（ROE/ROA/净利率等）
+  ✅ margin_detail — 融资融券明细
+
+需要更高积分的接口：
+  ❌ daily_basic — 每日估值（PE/PB/股息率）
+  ❌ dividend — 分红送股
+  ❌ daily — 日 K 线
+  ❌ stock_basic — 股票列表
+  ❌ stk_holdertrade — 股东增减持
+  ❌ hsgt_top10 — 北向十大成交
 
 依赖：pip install tushare
 配置：在 .env 中设置 TUSHARE_TOKEN=your_token
@@ -26,6 +38,11 @@ class TushareProvider:
     _pro = None
     _initialized = False
     _available = False
+
+    # 免费可用的接口（已验证）
+    FREE_ENDPOINTS = {'income', 'balancesheet', 'cashflow', 'fina_indicator', 'margin_detail'}
+    # 需要更高积分的接口（调用会报权限错误，直接跳过）
+    PAID_ENDPOINTS = {'daily_basic', 'dividend', 'daily', 'stock_basic', 'stk_holdertrade', 'hsgt_top10'}
 
     @classmethod
     def _ensure_init(cls):
@@ -58,6 +75,8 @@ class TushareProvider:
         code = symbol[2:]
         return f"{code}.{prefix}"
 
+    # ===== 免费可用接口 =====
+
     @classmethod
     def fetch_financial_report(
         cls,
@@ -65,7 +84,7 @@ class TushareProvider:
         report_type: str = 'income',
     ) -> pd.DataFrame:
         """
-        获取财务报表数据
+        获取财务报表数据（免费可用）
 
         Args:
             symbol: SH600519 格式
@@ -104,79 +123,57 @@ class TushareProvider:
             return pd.DataFrame()
 
     @classmethod
-    def fetch_daily_basic(
+    def fetch_fina_indicator(
         cls,
         symbol: str,
-        days: int = 30,
-    ) -> pd.DataFrame:
+        period: str = None,
+    ) -> Optional[Dict]:
         """
-        获取每日估值指标（PE、PB、股息率等）
+        获取财务指标（免费可用）：ROE、ROA、净利率、毛利率等
+
+        Args:
+            symbol: SH600519 格式
+            period: 报告期，如 '20251231'，默认最近一期
 
         Returns:
-            DataFrame with columns: trade_date, pe, pb, ps, dv_ratio, ...
+            dict 如 {'roe': 8.15, 'roa': 0.9, 'net_margin': 32.43, ...} 或 None
         """
         if not cls._ensure_init():
-            return pd.DataFrame()
+            return None
 
         ts_code = cls._to_ts_code(symbol)
         if not ts_code:
-            return pd.DataFrame()
-
-        end_date = datetime.now().strftime('%Y%m%d')
-        start_date = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
+            return None
 
         try:
-            df = cls._pro.daily_basic(
-                ts_code=ts_code,
-                start_date=start_date,
-                end_date=end_date,
-                fields='trade_date,ts_code,close,pe,pe_ttm,pb,ps,ps_ttm,'
-                       'dv_ratio,dv_ttm,total_mv,circ_mv',
-            )
-            return df if df is not None and not df.empty else pd.DataFrame()
-        except Exception as e:
-            logger.warning("Tushare daily_basic error for %s: %s", symbol, e)
-            return pd.DataFrame()
+            kwargs = {
+                'ts_code': ts_code,
+                'fields': 'ts_code,end_date,roe,roa,roe_waa,grossprofit_margin,'
+                          'netprofit_margin,opincome_of_ebt,investincome_of_ebt,'
+                          'dt_netprofit_to_profit,ocfps,eps,bps,cfps',
+            }
+            if period:
+                kwargs['period'] = period
 
-    @classmethod
-    def fetch_northbound_holding(
-        cls,
-        symbol: str,
-        days: int = 365,
-    ) -> pd.DataFrame:
-        """
-        获取北向资金持仓数据
-
-        Returns:
-            DataFrame with columns: trade_date, ts_code, name, vol, ratio, ...
-        """
-        if not cls._ensure_init():
-            return pd.DataFrame()
-
-        ts_code = cls._to_ts_code(symbol)
-        if not ts_code:
-            return pd.DataFrame()
-
-        end_date = datetime.now().strftime('%Y%m%d')
-        start_date = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
-
-        try:
-            # hsgt_top10 获取北向十大成交股
-            df = cls._pro.hsgt_top10(
-                trade_date=end_date,
-                ts_code=ts_code,
-                market_type='1',  # 沪股通
-            )
+            df = cls._pro.fina_indicator(**kwargs)
             if df is None or df.empty:
-                df = cls._pro.hsgt_top10(
-                    trade_date=end_date,
-                    ts_code=ts_code,
-                    market_type='3',  # 深股通
-                )
-            return df if df is not None and not df.empty else pd.DataFrame()
+                return None
+
+            r = df.iloc[0]
+            return {
+                'roe': cls._safe_float(r.get('roe')),
+                'roa': cls._safe_float(r.get('roa')),
+                'gross_margin': cls._safe_float(r.get('grossprofit_margin')),
+                'net_margin': cls._safe_float(r.get('netprofit_margin')),
+                'eps': cls._safe_float(r.get('eps')),
+                'bps': cls._safe_float(r.get('bps')),
+                'ocfps': cls._safe_float(r.get('ocfps')),
+                'cfps': cls._safe_float(r.get('cfps')),
+                'end_date': str(r.get('end_date', '')),
+            }
         except Exception as e:
-            logger.warning("Tushare northbound error for %s: %s", symbol, e)
-            return pd.DataFrame()
+            logger.warning("Tushare fina_indicator error for %s: %s", symbol, e)
+            return None
 
     @classmethod
     def fetch_margin_detail(
@@ -185,7 +182,7 @@ class TushareProvider:
         days: int = 365,
     ) -> pd.DataFrame:
         """
-        获取融资融券明细
+        获取融资融券明细（免费可用）
 
         Returns:
             DataFrame with columns: trade_date, rzye, rzmre, rzche, rqye, rqmcl, ...
@@ -211,70 +208,48 @@ class TushareProvider:
             logger.warning("Tushare margin error for %s: %s", symbol, e)
             return pd.DataFrame()
 
-    @classmethod
-    def fetch_dividend(
-        cls,
-        symbol: str,
-    ) -> pd.DataFrame:
-        """
-        获取分红送股数据
-
-        Returns:
-            DataFrame with columns: ts_code, end_date, ann_date, div_proc, ...
-        """
-        if not cls._ensure_init():
-            return pd.DataFrame()
-
-        ts_code = cls._to_ts_code(symbol)
-        if not ts_code:
-            return pd.DataFrame()
-
-        try:
-            df = cls._pro.dividend(
-                ts_code=ts_code,
-                fields='ts_code,end_date,ann_date,div_proc,stk_div,stk_bo_rate,'
-                       'stk_co_rate,cash_div,cash_div_tax,record_date,ex_date,'
-                       'pay_date,div_listdate,imp_ann_date,base_date,base_share',
-            )
-            return df if df is not None and not df.empty else pd.DataFrame()
-        except Exception as e:
-            logger.warning("Tushare dividend error for %s: %s", symbol, e)
-            return pd.DataFrame()
+    # ===== 需要更高积分的接口（直接返回空，不浪费 API 调用） =====
 
     @classmethod
-    def fetch_stk_holdertrade(
-        cls,
-        symbol: str,
-        days: int = 365,
-    ) -> pd.DataFrame:
-        """
-        获取股东增减持数据（内部人交易）
+    def fetch_daily_basic(cls, symbol: str, days: int = 30) -> pd.DataFrame:
+        """每日估值指标 — 需要更高积分，当前不可用"""
+        logger.debug("Tushare daily_basic requires higher credits, skipping for %s", symbol)
+        return pd.DataFrame()
 
-        Returns:
-            DataFrame with columns: ts_code, ann_date, holder_name, in_de, ...
-        """
-        if not cls._ensure_init():
-            return pd.DataFrame()
+    @classmethod
+    def fetch_dividend(cls, symbol: str) -> pd.DataFrame:
+        """分红送股数据 — 需要更高积分，当前不可用"""
+        logger.debug("Tushare dividend requires higher credits, skipping for %s", symbol)
+        return pd.DataFrame()
 
-        ts_code = cls._to_ts_code(symbol)
-        if not ts_code:
-            return pd.DataFrame()
+    @classmethod
+    def fetch_northbound_holding(cls, symbol: str, days: int = 365) -> pd.DataFrame:
+        """北向持仓数据 — 需要更高积分，当前不可用"""
+        logger.debug("Tushare northbound requires higher credits, skipping for %s", symbol)
+        return pd.DataFrame()
 
-        end_date = datetime.now().strftime('%Y%m%d')
-        start_date = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
+    @classmethod
+    def fetch_stk_holdertrade(cls, symbol: str, days: int = 365) -> pd.DataFrame:
+        """股东增减持 — 需要更高积分，当前不可用"""
+        logger.debug("Tushare holdertrade requires higher credits, skipping for %s", symbol)
+        return pd.DataFrame()
 
-        try:
-            df = cls._pro.stk_holdertrade(
-                ts_code=ts_code,
-                start_date=start_date,
-                end_date=end_date,
-            )
-            return df if df is not None and not df.empty else pd.DataFrame()
-        except Exception as e:
-            logger.warning("Tushare holdertrade error for %s: %s", symbol, e)
-            return pd.DataFrame()
+    # ===== 工具方法 =====
 
     @classmethod
     def is_available(cls) -> bool:
         """检查 tushare 是否已配置且可用"""
         return cls._ensure_init()
+
+    @classmethod
+    def get_available_endpoints(cls) -> list:
+        """返回当前可用的接口列表"""
+        return list(cls.FREE_ENDPOINTS)
+
+    @staticmethod
+    def _safe_float(value) -> float:
+        try:
+            f = float(value)
+            return f if f == f else 0.0  # NaN check
+        except (TypeError, ValueError):
+            return 0.0
