@@ -466,7 +466,19 @@ class PriceService:
                     cache.set(raw_cache_key, price_list, 86400 * 7)
             except Exception as e:
                 logger.error(f"Full fetch failed for {fixed_symbol}: {e}")
-                return []
+                # 兜底：尝试 Baostock 获取历史 K 线
+                try:
+                    from .providers.baostock_provider import BaostockProvider
+                    bs_rows = BaostockProvider.fetch_daily_kline(fixed_symbol, days=fetch_limit * 3)
+                    if bs_rows:
+                        price_list = bs_rows
+                        price_list.sort(key=lambda x: x['date'])
+                        cache.set(raw_cache_key, price_list, 86400 * 7)
+                        logger.info("Baostock fallback succeeded for %s (%d rows)", fixed_symbol, len(price_list))
+                except Exception as bs_err:
+                    logger.warning("Baostock fallback also failed for %s: %s", fixed_symbol, bs_err)
+                if not price_list:
+                    return []
 
         if not price_list:
             return []
