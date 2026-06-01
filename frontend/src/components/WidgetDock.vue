@@ -73,6 +73,9 @@ const tools = [
   { id: 'heatmap', name: '集中度热力图', icon: '🔥', desc: 'Treemap 展示持仓分布和行业集中度',
     bg: 'bg-orange-500/8', border: 'border border-orange-500/20', ring: 'ring-orange-500/40',
     iconBg: 'bg-orange-500/15', nameColor: 'text-orange-300', checkColor: 'text-orange-400' },
+  { id: 'swap', name: '换股计算器', icon: '🔄', desc: '设置换股比例，计算溢价/折价和目标价',
+    bg: 'bg-pink-500/8', border: 'border border-pink-500/20', ring: 'ring-pink-500/40',
+    iconBg: 'bg-pink-500/15', nameColor: 'text-pink-300', checkColor: 'text-pink-400' },
 ]
 
 function isWidgetOpen(id: string) {

@@ -143,6 +143,9 @@
     <WidgetContainer widgetId="heatmap" title="集中度热力图" icon="🔥">
       <HeatmapWidget />
     </WidgetContainer>
+    <WidgetContainer widgetId="swap" title="换股计算器" icon="🔄">
+      <SwapWidget />
+    </WidgetContainer>
   </div>
 </template>
 
@@ -163,6 +166,7 @@ import MarginWidget from '@/components/widgets/MarginWidget.vue'
 import PositionWidget from '@/components/widgets/PositionWidget.vue'
 import DividendCalWidget from '@/components/widgets/DividendCalWidget.vue'
 import HeatmapWidget from '@/components/widgets/HeatmapWidget.vue'
+import SwapWidget from '@/components/widgets/SwapWidget.vue'
 
 const store = useSentimentStore()
 const router = useRouter()
