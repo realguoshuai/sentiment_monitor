@@ -2,18 +2,18 @@
   <div class="space-y-3">
     <div>
       <label class="mb-1 block text-[10px] font-bold text-slate-500">合理估值（元/股）</label>
-      <input v-model.number="intrinsic" type="number" class="w-full rounded-lg border border-slate-600 bg-slate-900/50 px-3 py-1.5 text-xs font-mono text-cyan-400 outline-none focus:border-cyan-500" />
+      <input v-model.number="intrinsic" type="number" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-mono text-cyan-600 outline-none focus:border-cyan-400" />
     </div>
     <div>
       <label class="mb-1 block text-[10px] font-bold text-slate-500">当前价格（元/股）</label>
-      <input v-model.number="current" type="number" class="w-full rounded-lg border border-slate-600 bg-slate-900/50 px-3 py-1.5 text-xs font-mono text-cyan-400 outline-none focus:border-cyan-500" />
+      <input v-model.number="current" type="number" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-mono text-cyan-600 outline-none focus:border-cyan-400" />
     </div>
 
     <!-- Auto-fill from stock selector -->
     <div>
       <label class="mb-1 block text-[10px] font-bold text-slate-500">从监控股票填充</label>
       <select
-        class="w-full rounded-lg border border-slate-600 bg-slate-900/50 px-3 py-1.5 text-xs text-slate-200 outline-none focus:border-cyan-500"
+        class="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-700 outline-none focus:border-cyan-400"
         @change="fillFromStock($event)"
       >
         <option value="">选择股票...</option>
@@ -28,7 +28,7 @@
       <div class="grid grid-cols-2 gap-2">
         <div>
           <div class="text-[10px] text-slate-500">折价/溢价率</div>
-          <div class="text-sm font-mono font-bold" :class="discountPct < 0 ? 'text-emerald-400' : 'text-rose-400'">
+          <div class="text-sm font-mono font-bold" :class="discountPct < 0 ? 'text-emerald-600' : 'text-rose-500'">
             {{ discountPct > 0 ? '+' : '' }}{{ discountPct.toFixed(1) }}%
           </div>
         </div>
@@ -40,7 +40,7 @@
         </div>
         <div>
           <div class="text-[10px] text-slate-500">建议买入价（7折）</div>
-          <div class="text-sm font-mono font-bold text-cyan-400">
+          <div class="text-sm font-mono font-bold text-cyan-600">
             ¥{{ buyPrice.toFixed(2) }}
           </div>
         </div>

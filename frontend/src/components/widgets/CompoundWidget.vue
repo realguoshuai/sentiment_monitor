@@ -3,44 +3,44 @@
     <div class="grid grid-cols-2 gap-2">
       <div>
         <label class="mb-1 block text-[10px] font-bold text-slate-500">初始资金</label>
-        <input v-model.number="initial" type="number" class="w-full rounded-lg border border-slate-600 bg-slate-900/50 px-3 py-1.5 text-xs font-mono text-cyan-400 outline-none focus:border-cyan-500" />
+        <input v-model.number="initial" type="number" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-mono text-cyan-600 outline-none focus:border-cyan-400" />
       </div>
       <div>
         <label class="mb-1 block text-[10px] font-bold text-slate-500">年化收益率 %</label>
-        <input v-model.number="annualReturn" type="number" class="w-full rounded-lg border border-slate-600 bg-slate-900/50 px-3 py-1.5 text-xs font-mono text-cyan-400 outline-none focus:border-cyan-500" />
+        <input v-model.number="annualReturn" type="number" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-mono text-cyan-600 outline-none focus:border-cyan-400" />
       </div>
       <div>
         <label class="mb-1 block text-[10px] font-bold text-slate-500">每月追加</label>
-        <input v-model.number="monthly" type="number" class="w-full rounded-lg border border-slate-600 bg-slate-900/50 px-3 py-1.5 text-xs font-mono text-cyan-400 outline-none focus:border-cyan-500" />
+        <input v-model.number="monthly" type="number" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-mono text-cyan-600 outline-none focus:border-cyan-400" />
       </div>
       <div>
         <label class="mb-1 block text-[10px] font-bold text-slate-500">年限</label>
-        <input v-model.number="years" type="number" min="1" max="50" class="w-full rounded-lg border border-slate-600 bg-slate-900/50 px-3 py-1.5 text-xs font-mono text-cyan-400 outline-none focus:border-cyan-500" />
+        <input v-model.number="years" type="number" min="1" max="50" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-mono text-cyan-600 outline-none focus:border-cyan-400" />
       </div>
     </div>
 
-    <label class="flex items-center gap-2 text-[10px] text-slate-400">
-      <input v-model="reinvest" type="checkbox" class="h-3.5 w-3.5 rounded border-slate-600 bg-slate-900 text-cyan-400" />
+    <label class="flex items-center gap-2 text-[10px] text-slate-500">
+      <input v-model="reinvest" type="checkbox" class="h-3.5 w-3.5 rounded border-slate-300 bg-slate-900 text-cyan-600" />
       分红再投资（复利）
     </label>
 
     <!-- Summary -->
-    <div class="grid grid-cols-2 gap-2 rounded-lg border border-slate-700/50 bg-slate-900/30 p-3">
+    <div class="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-slate-50/80 p-3">
       <div>
         <div class="text-[10px] text-slate-500">总投入</div>
-        <div class="text-sm font-mono font-bold text-slate-200">{{ fmt(totalInvested) }}</div>
+        <div class="text-sm font-mono font-bold text-slate-700">{{ fmt(totalInvested) }}</div>
       </div>
       <div>
         <div class="text-[10px] text-slate-500">终值</div>
-        <div class="text-sm font-mono font-bold text-emerald-400">{{ fmt(finalValue) }}</div>
+        <div class="text-sm font-mono font-bold text-emerald-600">{{ fmt(finalValue) }}</div>
       </div>
       <div>
         <div class="text-[10px] text-slate-500">总收益</div>
-        <div class="text-sm font-mono font-bold" :class="gain >= 0 ? 'text-emerald-400' : 'text-rose-400'">{{ fmt(gain) }}</div>
+        <div class="text-sm font-mono font-bold" :class="gain >= 0 ? 'text-emerald-600' : 'text-rose-500'">{{ fmt(gain) }}</div>
       </div>
       <div>
         <div class="text-[10px] text-slate-500">收益率</div>
-        <div class="text-sm font-mono font-bold" :class="gainPct >= 0 ? 'text-emerald-400' : 'text-rose-400'">{{ gainPct.toFixed(1) }}%</div>
+        <div class="text-sm font-mono font-bold" :class="gainPct >= 0 ? 'text-emerald-600' : 'text-rose-500'">{{ gainPct.toFixed(1) }}%</div>
       </div>
     </div>
 
@@ -57,10 +57,10 @@
         </thead>
         <tbody>
           <tr v-for="row in table" :key="row.year" class="border-t border-slate-800">
-            <td class="py-1 text-slate-400">第{{ row.year }}年</td>
-            <td class="py-1 text-right font-mono text-slate-300">{{ fmt(row.invested) }}</td>
-            <td class="py-1 text-right font-mono text-cyan-400">{{ fmt(row.value) }}</td>
-            <td class="py-1 text-right font-mono" :class="row.gain >= 0 ? 'text-emerald-400' : 'text-rose-400'">{{ fmt(row.gain) }}</td>
+            <td class="py-1 text-slate-500">第{{ row.year }}年</td>
+            <td class="py-1 text-right font-mono text-slate-700">{{ fmt(row.invested) }}</td>
+            <td class="py-1 text-right font-mono text-cyan-600">{{ fmt(row.value) }}</td>
+            <td class="py-1 text-right font-mono" :class="row.gain >= 0 ? 'text-emerald-600' : 'text-rose-500'">{{ fmt(row.gain) }}</td>
           </tr>
         </tbody>
       </table>

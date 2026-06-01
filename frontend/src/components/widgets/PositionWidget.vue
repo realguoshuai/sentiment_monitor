@@ -3,11 +3,11 @@
     <div class="grid grid-cols-2 gap-2">
       <div>
         <label class="mb-1 block text-[10px] font-bold text-slate-500">总资金</label>
-        <input v-model.number="totalCapital" type="number" class="w-full rounded-lg border border-slate-600 bg-slate-900/50 px-3 py-1.5 text-xs font-mono text-cyan-400 outline-none focus:border-cyan-500" />
+        <input v-model.number="totalCapital" type="number" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-mono text-cyan-600 outline-none focus:border-cyan-400" />
       </div>
       <div>
         <label class="mb-1 block text-[10px] font-bold text-slate-500">单笔最大亏损 %</label>
-        <input v-model.number="maxLossPct" type="number" min="0.5" max="10" step="0.5" class="w-full rounded-lg border border-slate-600 bg-slate-900/50 px-3 py-1.5 text-xs font-mono text-cyan-400 outline-none focus:border-cyan-500" />
+        <input v-model.number="maxLossPct" type="number" min="0.5" max="10" step="0.5" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-mono text-cyan-600 outline-none focus:border-cyan-400" />
       </div>
     </div>
 
@@ -15,7 +15,7 @@
       <label class="mb-1 block text-[10px] font-bold text-slate-500">选择股票</label>
       <select
         v-model="selectedSymbol"
-        class="w-full rounded-lg border border-slate-600 bg-slate-900/50 px-3 py-1.5 text-xs text-slate-200 outline-none focus:border-cyan-500"
+        class="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-700 outline-none focus:border-cyan-400"
       >
         <option value="">选择...</option>
         <option v-for="s in store.dashboardStocks" :key="s.stock_symbol" :value="s.stock_symbol">
@@ -26,43 +26,43 @@
 
     <div>
       <label class="mb-1 block text-[10px] font-bold text-slate-500">止损幅度 %</label>
-      <input v-model.number="stopLossPct" type="number" min="1" max="50" class="w-full rounded-lg border border-slate-600 bg-slate-900/50 px-3 py-1.5 text-xs font-mono text-cyan-400 outline-none focus:border-cyan-500" />
+      <input v-model.number="stopLossPct" type="number" min="1" max="50" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-mono text-cyan-600 outline-none focus:border-cyan-400" />
     </div>
 
     <!-- Results -->
-    <div v-if="currentPrice > 0" class="rounded-lg border border-slate-700/50 bg-slate-900/30 p-3 space-y-2">
+    <div v-if="currentPrice > 0" class="rounded-lg border border-slate-200 bg-slate-50/80 p-3 space-y-2">
       <div class="grid grid-cols-2 gap-2">
         <div>
           <div class="text-[10px] text-slate-500">当前价</div>
-          <div class="text-sm font-mono font-bold text-slate-200">¥{{ currentPrice.toFixed(2) }}</div>
+          <div class="text-sm font-mono font-bold text-slate-700">¥{{ currentPrice.toFixed(2) }}</div>
         </div>
         <div>
           <div class="text-[10px] text-slate-500">止损价</div>
-          <div class="text-sm font-mono font-bold text-rose-400">¥{{ stopPrice.toFixed(2) }}</div>
+          <div class="text-sm font-mono font-bold text-rose-500">¥{{ stopPrice.toFixed(2) }}</div>
         </div>
         <div>
           <div class="text-[10px] text-slate-500">最大仓位金额</div>
-          <div class="text-sm font-mono font-bold text-cyan-400">{{ formatMoney(maxPosition) }}</div>
+          <div class="text-sm font-mono font-bold text-cyan-600">{{ formatMoney(maxPosition) }}</div>
         </div>
         <div>
           <div class="text-[10px] text-slate-500">可买股数</div>
-          <div class="text-sm font-mono font-bold text-emerald-400">{{ shares }} 股</div>
+          <div class="text-sm font-mono font-bold text-emerald-600">{{ shares }} 股</div>
         </div>
         <div>
           <div class="text-[10px] text-slate-500">实际投入</div>
-          <div class="text-sm font-mono font-bold text-slate-200">{{ formatMoney(actualCost) }}</div>
+          <div class="text-sm font-mono font-bold text-slate-700">{{ formatMoney(actualCost) }}</div>
         </div>
         <div>
           <div class="text-[10px] text-slate-500">最大亏损</div>
-          <div class="text-sm font-mono font-bold text-rose-400">{{ formatMoney(maxLossAmount) }}</div>
+          <div class="text-sm font-mono font-bold text-rose-500">{{ formatMoney(maxLossAmount) }}</div>
         </div>
       </div>
-      <div class="border-t border-slate-700/50 pt-2">
+      <div class="border-t border-slate-200 pt-2">
         <div class="text-[10px] text-slate-500">仓位占比</div>
         <div class="mt-1 h-2 w-full rounded-full bg-slate-800">
           <div class="h-full rounded-full bg-cyan-500" :style="{ width: Math.min(100, positionPct) + '%' }"></div>
         </div>
-        <div class="mt-1 text-[10px] font-mono text-slate-400">{{ positionPct.toFixed(1) }}%</div>
+        <div class="mt-1 text-[10px] font-mono text-slate-500">{{ positionPct.toFixed(1) }}%</div>
       </div>
     </div>
   </div>

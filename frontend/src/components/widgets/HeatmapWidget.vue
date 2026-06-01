@@ -4,7 +4,7 @@
       Treemap 展示监控股票的市值分布，颜色按行业区分。
     </div>
     <div ref="chartRef" class="w-full" style="height: 280px;"></div>
-    <div v-if="hhi > 0" class="rounded-lg border border-slate-700/50 bg-slate-900/30 p-2 text-[10px]">
+    <div v-if="hhi > 0" class="rounded-lg border border-slate-200 bg-slate-50/80 p-2 text-[10px]">
       <span class="text-slate-500">HHI 指数:</span>
       <span class="ml-1 font-mono font-bold" :class="hhiClass">{{ hhi.toFixed(0) }}</span>
       <span class="ml-2 text-slate-500">({{ hhiLabel }})</span>

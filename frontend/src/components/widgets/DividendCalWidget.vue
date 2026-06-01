@@ -1,11 +1,11 @@
 <template>
   <div class="space-y-3">
     <div class="flex items-center justify-between">
-      <div class="text-xs font-bold text-slate-200">{{ currentYear }} 分红日历</div>
+      <div class="text-xs font-bold text-slate-700">{{ currentYear }} 分红日历</div>
       <div class="flex gap-1">
-        <button class="rounded px-2 py-0.5 text-[10px] text-slate-400 hover:bg-white/5" @click="currentYear--">◀</button>
-        <span class="text-[10px] font-mono text-slate-300">{{ currentYear }}</span>
-        <button class="rounded px-2 py-0.5 text-[10px] text-slate-400 hover:bg-white/5" @click="currentYear++">▶</button>
+        <button class="rounded px-2 py-0.5 text-[10px] text-slate-500 hover:bg-white/5" @click="currentYear--">◀</button>
+        <span class="text-[10px] font-mono text-slate-700">{{ currentYear }}</span>
+        <button class="rounded px-2 py-0.5 text-[10px] text-slate-500 hover:bg-white/5" @click="currentYear++">▶</button>
       </div>
     </div>
 
@@ -18,10 +18,10 @@
         :class="monthBorderClass(m)"
       >
         <div class="mb-1 flex items-center justify-between">
-          <span class="text-[10px] font-bold" :class="m === nowMonth && currentYear === nowYear ? 'text-cyan-400' : 'text-slate-400'">
+          <span class="text-[10px] font-bold" :class="m === nowMonth && currentYear === nowYear ? 'text-cyan-600' : 'text-slate-500'">
             {{ m }}月
           </span>
-          <span v-if="monthDividends(m).length > 0" class="text-[9px] font-mono text-emerald-400">
+          <span v-if="monthDividends(m).length > 0" class="text-[9px] font-mono text-emerald-600">
             {{ monthTotal(m).toFixed(0) }}
           </span>
         </div>
@@ -29,12 +29,12 @@
           <div
             v-for="d in monthDividends(m)"
             :key="d.symbol"
-            class="flex items-center justify-between rounded px-1 py-0.5 text-[9px] bg-slate-800/40"
+            class="flex items-center justify-between rounded px-1 py-0.5 text-[9px] bg-slate-50"
           >
-            <span class="truncate text-slate-300">{{ d.name }}</span>
-            <span class="font-mono text-emerald-400">{{ d.days_left ?? '--' }}天</span>
+            <span class="truncate text-slate-700">{{ d.name }}</span>
+            <span class="font-mono text-emerald-600">{{ d.days_left ?? '--' }}天</span>
           </div>
-          <div v-if="monthDividends(m).length === 0" class="text-[9px] text-slate-600">—</div>
+          <div v-if="monthDividends(m).length === 0" class="text-[9px] text-slate-400">—</div>
         </div>
       </div>
     </div>

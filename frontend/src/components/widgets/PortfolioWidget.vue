@@ -6,7 +6,7 @@
       <input
         v-model.number="totalCapital"
         type="number"
-        class="w-full rounded-lg border border-slate-600 bg-slate-900/50 px-3 py-2 text-sm font-mono text-cyan-400 outline-none focus:border-cyan-500"
+        class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono text-cyan-600 outline-none focus:border-cyan-400"
         placeholder="1000000"
       />
     </div>
@@ -16,7 +16,7 @@
       <div class="mb-2 flex items-center justify-between">
         <span class="text-[10px] font-bold text-slate-500 uppercase">持仓分配</span>
         <button
-          class="text-[10px] text-cyan-400 hover:text-cyan-300"
+          class="text-[10px] text-cyan-600 hover:text-cyan-300"
           @click="equalWeight"
         >
           等权分配
@@ -26,7 +26,7 @@
         <div
           v-for="s in store.dashboardStocks"
           :key="s.stock_symbol"
-          class="flex items-center gap-2 rounded-lg bg-slate-800/40 px-2.5 py-1.5"
+          class="flex items-center gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5"
         >
           <span class="w-16 truncate text-[10px] text-slate-400">{{ s.stock_name }}</span>
           <input
@@ -34,7 +34,7 @@
             type="number"
             min="0"
             max="100"
-            class="w-16 rounded border border-slate-700 bg-slate-900/50 px-2 py-0.5 text-right text-xs font-mono text-slate-200 outline-none focus:border-cyan-500"
+            class="w-16 rounded border border-slate-300 bg-slate-900/50 px-2 py-0.5 text-right text-xs font-mono text-slate-700 outline-none focus:border-cyan-500"
             placeholder="0"
           />
           <span class="text-[10px] text-slate-500">%</span>
@@ -45,36 +45,36 @@
           </div>
         </div>
       </div>
-      <div v-if="totalPct !== 100" class="mt-1 text-[10px]" :class="totalPct > 100 ? 'text-rose-400' : 'text-amber-400'">
+      <div v-if="totalPct !== 100" class="mt-1 text-[10px]" :class="totalPct > 100 ? 'text-rose-500' : 'text-amber-600'">
         合计 {{ totalPct }}%{{ totalPct > 100 ? '（超额）' : '（未满仓）' }}
       </div>
     </div>
 
     <!-- Results -->
-    <div class="rounded-lg border border-slate-700/50 bg-slate-900/30 p-3 space-y-2">
+    <div class="rounded-lg border border-slate-300/50 bg-slate-900/30 p-3 space-y-2">
       <div class="text-[10px] font-bold text-slate-500 uppercase mb-2">组合指标</div>
       <div class="grid grid-cols-2 gap-2">
         <div>
           <div class="text-[10px] text-slate-500">年分红总额</div>
-          <div class="text-sm font-mono font-bold text-emerald-400">
+          <div class="text-sm font-mono font-bold text-emerald-600">
             {{ formatMoney(annualDividend) }}
           </div>
         </div>
         <div>
           <div class="text-[10px] text-slate-500">加权股息率</div>
-          <div class="text-sm font-mono font-bold text-cyan-400">
+          <div class="text-sm font-mono font-bold text-cyan-600">
             {{ weightedDY.toFixed(2) }}%
           </div>
         </div>
         <div>
           <div class="text-[10px] text-slate-500">加权 PE</div>
-          <div class="text-sm font-mono font-bold text-slate-200">
+          <div class="text-sm font-mono font-bold text-slate-700">
             {{ weightedPE.toFixed(1) }}
           </div>
         </div>
         <div>
           <div class="text-[10px] text-slate-500">加权 PB</div>
-          <div class="text-sm font-mono font-bold text-slate-200">
+          <div class="text-sm font-mono font-bold text-slate-700">
             {{ weightedPB.toFixed(2) }}
           </div>
         </div>
