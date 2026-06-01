@@ -109,7 +109,7 @@ const updateChart = () => {
     },
     grid: {
       left: 4,
-      right: 4,
+      right: 50,
       top: 24,
       bottom: 0,
       containLabel: true,
@@ -156,6 +156,18 @@ const updateChart = () => {
         },
         emphasis: { itemStyle: { color: '#f9a8d4' } },
         data: dividend,
+        label: {
+          show: true,
+          position: 'right',
+          color: '#e2e8f0',
+          fontSize: 10,
+          fontWeight: 'bold',
+          fontFamily: 'monospace',
+          formatter: (p: any) => {
+            const total = (capital[p.dataIndex] || 0) + (p.value || 0)
+            return total.toFixed(1) + '%'
+          },
+        },
       },
     ],
   }
