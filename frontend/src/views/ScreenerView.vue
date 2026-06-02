@@ -528,9 +528,10 @@ const refreshSnapshot = async () => {
     if ((res.data as any)?.source !== 'upstream' && res.data?.message) {
       errorMessage.value = res.data.message
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to refresh screener snapshot:', error)
-    errorMessage.value = '全市场快照刷新失败，上游数据源可能暂时不稳定。'
+    const detail = error?.response?.data?.error || error?.response?.data?.message || error?.message || ''
+    errorMessage.value = `快照刷新失败：${detail || '网络请求异常，请检查后端是否运行'}`
   } finally {
     refreshing.value = false
   }
