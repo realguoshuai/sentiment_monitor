@@ -681,29 +681,40 @@ class FundamentalService:
         )
 
         if past_ex_dates:
-            # 计算相邻除权日的间隔，检测分红频率
-            intervals = []
-            for i in range(len(past_ex_dates) - 1):
-                diff = (past_ex_dates[i] - past_ex_dates[i + 1]).days
-                if 60 < diff < 400:  # 过滤异常值
-                    intervals.append(diff)
-
-            # 如果有多个间隔且中位数 < 300 天，说明一年多次分红
-            if intervals:
-                intervals.sort()
-                median_interval = intervals[len(intervals) // 2]
-            else:
-                median_interval = 365
-
             last_ex = past_ex_dates[0]
-            # 取最近一次分红的方案作为参考
             last_row = df_p[df_p['ex_date'] == last_ex].iloc[0]
 
-            est = last_ex + pd.Timedelta(days=median_interval)
-            while est < today:
-                est += pd.Timedelta(days=median_interval)
+            # 检测分红频率：是否有同一年出现 2 个以上除权日
+            year_counts = {}
+            for d in past_ex_dates:
+                y = d.year
+                year_counts[y] = year_counts.get(y, 0) + 1
+            recent_years = sorted(year_counts.keys(), reverse=True)[:3]
+            is_semi_annual = any(year_counts[y] >= 2 for y in recent_years)
 
-            freq_label = '半年报分红' if median_interval < 250 else '年度分红'
+            if is_semi_annual:
+                # 一年多次分红：找同年间隔中的最短正间隔
+                short_intervals = []
+                for i in range(len(past_ex_dates) - 1):
+                    diff = (past_ex_dates[i] - past_ex_dates[i + 1]).days
+                    if 60 < diff < 180:  # 同年间隔通常 60~150 天
+                        short_intervals.append(diff)
+                interval = min(short_intervals) if short_intervals else 120
+                freq_label = '半年报分红'
+            else:
+                # 一年一次：用年同比间隔
+                year_intervals = []
+                for i in range(len(past_ex_dates) - 1):
+                    diff = (past_ex_dates[i] - past_ex_dates[i + 1]).days
+                    if 200 < diff < 500:
+                        year_intervals.append(diff)
+                interval = year_intervals[0] if year_intervals else 365
+                freq_label = '年度分红'
+
+            est = last_ex + pd.Timedelta(days=interval)
+            while est < today:
+                est += pd.Timedelta(days=interval)
+
             result = {
                 'symbol': symbol,
                 'date': est.strftime('%Y-%m-%d'),
