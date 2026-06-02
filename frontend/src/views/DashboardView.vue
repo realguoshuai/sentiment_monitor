@@ -173,7 +173,7 @@ const router = useRouter()
 const showManageModal = ref(false)
 const showReleaseNotes = ref(false)
 const isRefreshing = ref(false)
-const releaseVersion = '0.1.0'
+const releaseVersion = '0.1.4'
 const releaseNotesStorageKey = `sentiment-monitor-release-notes-${releaseVersion}`
 
 const lastUpdate = computed(() => {

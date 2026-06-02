@@ -32,9 +32,9 @@ desktop/release/
 
 | 文件 | 用途 | 建议 |
 | --- | --- | --- |
-| `SentimentMonitor-Setup-0.1.3-x64.exe` | Windows 安装包 | 推荐发给普通用户 |
-| `SentimentMonitor-Portable-0.1.3-x64.exe` | 免安装便携版 | 适合临时测试 |
-| `SentimentMonitor-Setup-0.1.3-x64.exe.blockmap` | 自动更新差分文件 | 当前无需单独分发 |
+| `SentimentMonitor-Setup-0.1.4-x64.exe` | Windows 安装包 | 推荐发给普通用户 |
+| `SentimentMonitor-Portable-0.1.4-x64.exe` | 免安装便携版 | 适合临时测试 |
+| `SentimentMonitor-Setup-0.1.4-x64.exe.blockmap` | 自动更新差分文件 | 当前无需单独分发 |
 | `win-unpacked/` | 解包后的调试目录 | 仅用于本机调试 |
 
 说明：
@@ -184,7 +184,7 @@ sentiment_monitor/
 - 后端缓存防御：所有 `cache.get` 调用增加 pickle 反序列化异常捕获，pandas 版本升级不再导致服务崩溃。
 - SQLite 配置优化：WAL 模式 + busy_timeout=5000，解决并发写入锁冲突。
 - 定时任务保护：scheduler 启动延迟 1 小时执行，避免 misfire 导致启动时批量采集。
-- 便携版分发文件名从 `0.1.0` 更新到 `0.1.3`。
+- 便携版分发文件名从 `0.1.0` 更新到 `0.1.4`。
 
 ## 数据同步
 
@@ -239,7 +239,7 @@ file:///.../resources/app.asar/frontend-dist/index.html#/
 
 ### 便携版启动慢
 
-便携版需要先自解压到临时目录，还可能被系统安全软件扫描。正式分发建议使用 `SentimentMonitor-Setup-0.1.3-x64.exe`。
+便携版需要先自解压到临时目录，还可能被系统安全软件扫描。正式分发建议使用 `SentimentMonitor-Setup-0.1.4-x64.exe`。
 
 ### 新增股票后旧股票不见了
 
