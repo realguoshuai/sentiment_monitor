@@ -317,13 +317,23 @@ class ScreenerService:
         last_error = None
 
         # 1) 直连东财 API（单请求不分页 + 多子域名容错 + 绕过 Windows 系统代理）
-        df, error = cls._fetch_eastmoney_direct()
-        if df is not None and not df.empty:
-            return df, None
-        last_error = error
+        try:
+            df, error = cls._fetch_eastmoney_direct()
+            if df is not None and not df.empty:
+                return df, None
+            last_error = error
+        except Exception as direct_err:
+            logger.error("East Money direct fetch exception: %s", direct_err)
+            last_error = direct_err
 
         # 2) AkShare 东财接口（带自动分页，固定子域名 82）
         saved_proxy = cls._bypass_proxy()
+        # 打包环境下关闭 SSL 验证
+        import sys
+        if getattr(sys, 'frozen', False):
+            import os
+            os.environ['CURL_CA_BUNDLE'] = ''
+            os.environ['REQUESTS_CA_BUNDLE'] = ''
         try:
             for attempt in range(cls.SNAPSHOT_FETCH_RETRIES):
                 try:
@@ -370,6 +380,14 @@ class ScreenerService:
 
         session = req.Session()
         session.trust_env = False  # 绕过 Windows 系统代理（PAC/注册表）
+        session.proxies = {'http': None, 'https': None}  # 显式禁用代理
+
+        # 打包环境下 SSL 证书可能缺失，关闭验证以保证连通性
+        import sys
+        if getattr(sys, 'frozen', False):
+            session.verify = False
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
         def _try_fetch(url: str, pz: int) -> tuple[list, int, Exception | None]:
             """尝试用指定 pz 分页拉取全部数据，返回 (rows, total, error)"""
@@ -458,6 +476,8 @@ class ScreenerService:
                         logger.warning("East Money partial fetch: total=%d, fetched=%d rows", total, len(df))
                         return df, None
 
+        if last_error:
+            logger.error("East Money direct fetch failed for all subdomains: %s", last_error)
         return pd.DataFrame(), last_error
 
     @staticmethod
