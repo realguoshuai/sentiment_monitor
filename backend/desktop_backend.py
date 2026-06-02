@@ -22,6 +22,13 @@ def main() -> None:
 
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'sentiment_monitor.settings')
     port = int(os.environ.get('SENTIMENT_MONITOR_BACKEND_PORT', '8000'))
+
+    # 启动前自动迁移数据库（打包环境下 seed 数据库可能缺列）
+    import django
+    django.setup()
+    from django.core.management import call_command
+    call_command('migrate', '--run-syncdb', verbosity=0)
+
     from sentiment_monitor.asgi import application
 
     uvicorn.run(
