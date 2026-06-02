@@ -880,11 +880,31 @@ class ScreenerService:
                 )
                 return retained
 
+        # 最终去重：用 dict 保证 symbol 唯一（覆盖前面 set 去重的遗漏）
+        dedup: dict[str, StockScreenerSnapshot] = {}
+        for r in rows:
+            dedup.setdefault(r.symbol, r)
+        rows = list(dedup.values())
+        logger.info("Snapshot rows after dedup: %d, snapshot_date=%s", len(rows), snapshot_date)
+
         # transaction.atomic 保证 delete + bulk_create 要么全成功要么全回滚
-        # SQLite WAL 模式下即使进程被 kill，未提交事务也会在下次访问时自动回滚
         with transaction.atomic():
-            StockScreenerSnapshot.objects.all().delete()
-            StockScreenerSnapshot.objects.bulk_create(rows, batch_size=500)
+            deleted, _ = StockScreenerSnapshot.objects.all().delete()
+            logger.info("Deleted %d old snapshot rows", deleted)
+            StockScreenerSnapshot.objects.bulk_create(rows, batch_size=500, ignore_conflicts=True)
+            logger.info("Inserted %d snapshot rows", len(rows))
+
+        # 补全监控股票的行业字段（仅填空，不覆盖用户已有值）
+        industry_map = {r.symbol: r.industry for r in rows if r.industry}
+        stocks_to_update = []
+        for stock in Stock.objects.filter(industry=''):
+            ind = industry_map.get(stock.symbol, '')
+            if ind:
+                stock.industry = ind
+                stocks_to_update.append(stock)
+        if stocks_to_update:
+            Stock.objects.bulk_update(stocks_to_update, ['industry'])
+            logger.info("Auto-filled industry for %d monitored stocks", len(stocks_to_update))
 
         message = f'已刷新 {len(rows)} 只 A 股的选股快照。'
         if source == 'cache':

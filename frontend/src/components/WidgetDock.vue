@@ -70,12 +70,12 @@ const tools = [
   { id: 'dividendCal', name: '分红日历', icon: '📅', desc: '月历视图展示持仓分红到账时间',
     bg: 'bg-violet-500/8', border: 'border border-violet-500/20', ring: 'ring-violet-500/40',
     iconBg: 'bg-violet-500/15', nameColor: 'text-violet-300', checkColor: 'text-violet-400' },
-  { id: 'heatmap', name: '集中度热力图', icon: '🔥', desc: 'Treemap 展示持仓分布和行业集中度',
-    bg: 'bg-orange-500/8', border: 'border border-orange-500/20', ring: 'ring-orange-500/40',
-    iconBg: 'bg-orange-500/15', nameColor: 'text-orange-300', checkColor: 'text-orange-400' },
   { id: 'swap', name: '换股计算器', icon: '🔄', desc: '设置换股比例，计算溢价/折价和目标价',
     bg: 'bg-pink-500/8', border: 'border border-pink-500/20', ring: 'ring-pink-500/40',
     iconBg: 'bg-pink-500/15', nameColor: 'text-pink-300', checkColor: 'text-pink-400' },
+  { id: 'kelly', name: '凯利仓位', icon: '🎲', desc: '输入胜率和盈亏比，计算最优仓位比例',
+    bg: 'bg-teal-500/8', border: 'border border-teal-500/20', ring: 'ring-teal-500/40',
+    iconBg: 'bg-teal-500/15', nameColor: 'text-teal-300', checkColor: 'text-teal-400' },
 ]
 
 function isWidgetOpen(id: string) {

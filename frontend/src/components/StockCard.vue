@@ -1,7 +1,6 @@
 <template>
-  <div 
-    class="group rounded-xl p-3.5 cursor-pointer overflow-hidden relative border border-slate-700/50 hover:border-indigo-500/50 transition-all hover:bg-slate-800/80 active:scale-[0.99] bg-[#1a2332]"
-    @click="$emit('click')"
+  <div
+    class="group rounded-xl p-3.5 overflow-hidden relative border border-slate-700/50 hover:border-indigo-500/50 transition-all hover:bg-slate-800/80 bg-[#1a2332]"
   >
     <!-- Background Gradient -->
     <div class="absolute inset-0 bg-gradient-to-b from-white/[0.02] to-transparent pointer-events-none"></div>

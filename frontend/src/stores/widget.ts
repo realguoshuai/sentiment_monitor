@@ -18,8 +18,8 @@ const DEFAULTS: Record<string, { w: number; h: number }> = {
   margin: { w: 360, h: 400 },
   position: { w: 400, h: 460 },
   dividendCal: { w: 520, h: 440 },
-  heatmap: { w: 480, h: 420 },
   swap: { w: 380, h: 600 },
+  kelly: { w: 380, h: 520 },
 }
 
 function loadState(): Record<string, WidgetState> {

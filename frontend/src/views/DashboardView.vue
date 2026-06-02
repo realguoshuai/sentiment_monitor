@@ -83,7 +83,6 @@
               v-for="data in store.dashboardStocks"
               :key="data.id"
               :data="data"
-              @click="goToDetail(data.stock_symbol)"
             />
           </div>
         </div>
@@ -140,18 +139,17 @@
     <WidgetContainer widgetId="dividendCal" title="分红日历" icon="📅">
       <DividendCalWidget />
     </WidgetContainer>
-    <WidgetContainer widgetId="heatmap" title="集中度热力图" icon="🔥">
-      <HeatmapWidget />
-    </WidgetContainer>
     <WidgetContainer widgetId="swap" title="换股计算器" icon="🔄">
       <SwapWidget />
+    </WidgetContainer>
+    <WidgetContainer widgetId="kelly" title="凯利仓位" icon="🎲">
+      <KellyWidget />
     </WidgetContainer>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { useRouter } from 'vue-router'
 import { useSentimentStore } from '@/stores/sentiment'
 import StockCard from '@/components/StockCard.vue'
 import DividendCalendar from '@/components/DividendCalendar.vue'
@@ -165,11 +163,10 @@ import CompoundWidget from '@/components/widgets/CompoundWidget.vue'
 import MarginWidget from '@/components/widgets/MarginWidget.vue'
 import PositionWidget from '@/components/widgets/PositionWidget.vue'
 import DividendCalWidget from '@/components/widgets/DividendCalWidget.vue'
-import HeatmapWidget from '@/components/widgets/HeatmapWidget.vue'
 import SwapWidget from '@/components/widgets/SwapWidget.vue'
+import KellyWidget from '@/components/widgets/KellyWidget.vue'
 
 const store = useSentimentStore()
-const router = useRouter()
 const showManageModal = ref(false)
 const showReleaseNotes = ref(false)
 const isRefreshing = ref(false)
@@ -184,10 +181,6 @@ const lastUpdate = computed(() => {
   const mins = now.getMinutes().toString().padStart(2, '0')
   return `${month}月${day}日 ${hours}:${mins}`
 })
-
-const goToDetail = (symbol: string) => {
-  router.push(`/stock/${symbol}`)
-}
 
 const refreshData = async () => {
   if (isRefreshing.value) return
