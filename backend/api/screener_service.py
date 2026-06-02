@@ -748,30 +748,24 @@ class ScreenerService:
 
     @classmethod
     def refresh_snapshot(cls) -> dict:
-        df, last_error = cls._fetch_upstream_snapshot()
-        source = 'upstream'
+        # 优先用腾讯实时行情（首页每 10 秒刷新，一定有数据）
+        df = cls._fetch_tencent_snapshot()
+        source = 'tencent'
 
         if df is None or df.empty:
-            if last_error is not None:
-                logger.warning("Screener upstream snapshot fetch failed, trying local cache fallback: %s", last_error)
+            logger.info("Tencent snapshot empty, trying upstream sources...")
+            df, last_error = cls._fetch_upstream_snapshot()
+            source = 'upstream'
+
+        if df is None or df.empty:
             df = cls._get_cached_snapshot_frame()
             source = 'cache'
 
-        # 兜底 1：腾讯实时行情（首页已在用，确认可连通）
         if df is None or df.empty:
-            logger.info("Cache fallback empty, trying Tencent realtime snapshot...")
-            df = cls._fetch_tencent_snapshot()
-            if df is not None and not df.empty:
-                source = 'tencent'
-                logger.info("Tencent snapshot fallback succeeded: %d rows", len(df))
-
-        # 兜底 2：Baostock（TCP 协议，不受 SSL/代理影响）
-        if df is None or df.empty:
-            logger.info("Tencent fallback empty, trying Baostock snapshot...")
+            logger.info("All sources empty, trying Baostock...")
             df = cls._fetch_baostock_snapshot()
             if df is not None and not df.empty:
                 source = 'baostock'
-                logger.info("Baostock fallback succeeded: %d rows", len(df))
 
         if df is None or df.empty:
             retained = cls._build_retained_snapshot_response()
