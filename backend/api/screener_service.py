@@ -645,6 +645,78 @@ class ScreenerService:
         return rows
 
     @classmethod
+    def _fetch_baostock_snapshot(cls) -> pd.DataFrame:
+        """Baostock 兜底：走 TCP 协议，不受 SSL/代理影响。
+        先查监控股票（秒级响应），再补全全市场。
+        """
+        try:
+            import baostock as bs
+            from api.utils import format_symbol
+            from datetime import datetime, timedelta
+
+            login_result = bs.login()
+            if login_result.error_code != '0':
+                logger.warning("Baostock login failed: %s", login_result.error_msg)
+                return pd.DataFrame()
+
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            start_date = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
+            rows = []
+
+            def _query(bs_code):
+                krs = bs.query_history_k_data_plus(
+                    bs_code,
+                    "date,code,close,peTTM,pbMRQ,turn",
+                    start_date=start_date, end_date=end_date,
+                    frequency="d", adjustflag="3",
+                )
+                last_row = None
+                while krs.next():
+                    last_row = krs.get_row_data()
+                if last_row and last_row[2]:
+                    code = bs_code.split('.')[1]
+                    return {
+                        '代码': code,
+                        '名称': code,
+                        '最新价': float(last_row[2]) if last_row[2] else 0,
+                        '市盈率-动态': float(last_row[3]) if last_row[3] else 0,
+                        '市净率': float(last_row[4]) if last_row[4] else 0,
+                    }
+                return None
+
+            # 1. 先查监控股票（保证秒级响应）
+            monitored = list(Stock.objects.values_list('symbol', flat=True))
+            monitored_bs = [f"{s[:2].lower()}.{s[2:]}" for s in monitored if len(s) >= 8]
+            for code in monitored_bs:
+                result = _query(code)
+                if result:
+                    rows.append(result)
+            logger.info("Baostock fetched %d monitored stocks", len(rows))
+
+            # 2. 补全全市场
+            rs = bs.query_stock_basic()
+            all_codes = []
+            while rs.next():
+                row = rs.get_row_data()
+                if row[4] == '1' and row[5] == '1':
+                    all_codes.append(row[0])
+
+            fetched_codes = {r['代码'] for r in rows}
+            remaining = [c for c in all_codes if c.split('.')[1] not in fetched_codes]
+
+            for bs_code in remaining[:3000]:
+                result = _query(bs_code)
+                if result:
+                    rows.append(result)
+
+            bs.logout()
+            logger.info("Baostock total: %d stocks", len(rows))
+            return pd.DataFrame(rows) if rows else pd.DataFrame()
+        except Exception as e:
+            logger.error("Baostock snapshot fallback failed: %s", e)
+            return pd.DataFrame()
+
+    @classmethod
     def refresh_snapshot(cls) -> dict:
         df, last_error = cls._fetch_upstream_snapshot()
         source = 'upstream'
@@ -654,6 +726,14 @@ class ScreenerService:
                 logger.warning("Screener upstream snapshot fetch failed, trying local cache fallback: %s", last_error)
             df = cls._get_cached_snapshot_frame()
             source = 'cache'
+
+        # 终极兜底：Baostock（TCP 协议，不受 SSL/代理影响）
+        if df is None or df.empty:
+            logger.info("Cache fallback empty, trying Baostock snapshot...")
+            df = cls._fetch_baostock_snapshot()
+            if df is not None and not df.empty:
+                source = 'baostock'
+                logger.info("Baostock fallback succeeded: %d rows", len(df))
 
         if df is None or df.empty:
             retained = cls._build_retained_snapshot_response()
@@ -695,6 +775,8 @@ class ScreenerService:
         message = f'已刷新 {len(rows)} 只 A 股的选股快照。'
         if source == 'cache':
             message = f'上游数据源暂不可用，已基于本地估值缓存重建 {len(rows)} 只 A 股快照。'
+        elif source == 'baostock':
+            message = f'东财接口不可用，已通过 Baostock 备用源获取 {len(rows)} 只 A 股快照。'
 
         return {
             'snapshot_date': snapshot_date.isoformat(),
