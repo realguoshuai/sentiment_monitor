@@ -646,33 +646,97 @@ class ScreenerService:
 
     @classmethod
     def _fetch_tencent_snapshot(cls) -> pd.DataFrame:
-        """腾讯实时行情兜底：首页已在用，确认可连通"""
+        """腾讯 API 全量快照：批量查询 5000+ 只股票约 1 秒"""
         try:
-            from .price_service import PriceService
-            symbols = list(Stock.objects.values_list('symbol', flat=True))
-            if not symbols:
+            import requests as req
+            import baostock as bs
+
+            # 1. 从 Baostock 获取全量 A 股代码列表（TCP 协议，不受网络限制）
+            lr = bs.login()
+            if lr.error_code != '0':
+                logger.warning("Baostock login failed for snapshot: %s", lr.error_msg)
                 return pd.DataFrame()
 
-            rt_map = PriceService.get_realtime_price(symbols, fetch_fundamentals=True)
-            if not rt_map:
+            rs = bs.query_stock_basic()
+            all_codes = []
+            while rs.next():
+                row = rs.get_row_data()
+                if row[4] == '1' and row[5] == '1':  # type=股票, status=上市
+                    all_codes.append(row[0])  # sh.600519
+            bs.logout()
+
+            if not all_codes:
                 return pd.DataFrame()
+
+            # 2. 转换为腾讯格式并批量查询
+            tencent_codes = [c.replace('.', '') for c in all_codes]  # sh600519
+            session = req.Session()
+            session.trust_env = False
+            session.proxies = {'http': None, 'https': None}
 
             rows = []
-            for symbol, data in rt_map.items():
-                code = symbol[2:] if len(symbol) >= 8 else symbol
-                rows.append({
-                    '代码': code,
-                    '名称': data.get('name', code),
-                    '最新价': data.get('price', 0),
-                    '总市值': data.get('market_cap', 0),
-                    '市盈率-动态': data.get('pe', 0),
-                    '市净率': data.get('pb', 0),
-                })
-            logger.info("Tencent snapshot fallback: %d stocks", len(rows))
+            batch_size = 500
+            for i in range(0, len(tencent_codes), batch_size):
+                batch = tencent_codes[i:i + batch_size]
+                url = f"http://qt.gtimg.cn/q={','.join(batch)}"
+                try:
+                    r = session.get(url, timeout=15)
+                    r.encoding = 'gbk'
+                    parsed = cls._parse_tencent_batch(r.text)
+                    rows.extend(parsed)
+                except Exception as e:
+                    logger.warning("Tencent batch fetch failed at offset %d: %s", i, e)
+                    continue
+
+            logger.info("Tencent full snapshot: %d stocks", len(rows))
             return pd.DataFrame(rows) if rows else pd.DataFrame()
         except Exception as e:
-            logger.error("Tencent snapshot fallback failed: %s", e)
+            logger.error("Tencent snapshot failed: %s", e)
             return pd.DataFrame()
+
+    @staticmethod
+    def _parse_tencent_batch(text: str) -> list:
+        """解析腾讯批量行情响应"""
+        import re
+        results = []
+        for line in text.split(';'):
+            line = line.strip()
+            if not line:
+                continue
+            match = re.search(r'v_([a-z0-9]+)="(.*)"', line)
+            if not match:
+                continue
+            fields = match.group(2).split('~')
+            if len(fields) < 46:
+                continue
+
+            def safe_float(v):
+                try:
+                    f = float(v)
+                    return f if f == f else 0.0
+                except (TypeError, ValueError):
+                    return 0.0
+
+            code = match.group(1)  # sh600519
+            code_6 = code[2:] if len(code) >= 8 else code
+
+            price = safe_float(fields[3])
+            pe = safe_float(fields[39])
+            pb = safe_float(fields[46])
+            market_cap = safe_float(fields[45]) * 1e8
+
+            if price <= 0:
+                continue
+
+            results.append({
+                '代码': code_6,
+                '名称': fields[1] if len(fields) > 1 else code_6,
+                '最新价': price,
+                '总市值': market_cap,
+                '市盈率-动态': pe,
+                '市净率': pb,
+            })
+        return results
 
     @classmethod
     def _fetch_baostock_snapshot(cls) -> pd.DataFrame:
@@ -748,19 +812,22 @@ class ScreenerService:
 
     @classmethod
     def refresh_snapshot(cls) -> dict:
-        # 优先用腾讯实时行情（首页每 10 秒刷新，一定有数据）
+        # 1. 腾讯 API 全量快照（Baostock 列表 + 腾讯批量查询，约 1-2 秒）
         df = cls._fetch_tencent_snapshot()
         source = 'tencent'
 
+        # 2. 东财直连 + AkShare + 新浪
         if df is None or df.empty:
             logger.info("Tencent snapshot empty, trying upstream sources...")
             df, last_error = cls._fetch_upstream_snapshot()
             source = 'upstream'
 
+        # 3. 本地缓存
         if df is None or df.empty:
             df = cls._get_cached_snapshot_frame()
             source = 'cache'
 
+        # 4. Baostock 单独查询（慢，最后兜底）
         if df is None or df.empty:
             logger.info("All sources empty, trying Baostock...")
             df = cls._fetch_baostock_snapshot()
@@ -808,7 +875,7 @@ class ScreenerService:
         if source == 'cache':
             message = f'上游数据源暂不可用，已基于本地估值缓存重建 {len(rows)} 只 A 股快照。'
         elif source == 'tencent':
-            message = f'东财接口不可用，已通过腾讯行情获取 {len(rows)} 只监控股票快照。'
+            message = f'已通过腾讯行情获取 {len(rows)} 只 A 股快照。'
         elif source == 'baostock':
             message = f'东财接口不可用，已通过 Baostock 备用源获取 {len(rows)} 只 A 股快照。'
 
