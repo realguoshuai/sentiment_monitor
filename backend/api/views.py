@@ -557,11 +557,23 @@ def get_screener_results(request):
 @api_view(['POST'])
 def refresh_screener_snapshot(request):
     """刷新 A 股选股快照"""
+    import sys
     try:
-        return Response(ScreenerService.refresh_snapshot())
+        result = ScreenerService.refresh_snapshot()
+        # 附带诊断信息，方便排查
+        result['_diag'] = {
+            'frozen': getattr(sys, 'frozen', False),
+            'source': result.get('source', 'unknown'),
+        }
+        return Response(result)
     except Exception as e:
         logger.error(f"Screener Refresh Error: {e}")
-        return Response({'error': str(e)}, status=500)
+        import traceback
+        return Response({
+            'error': str(e),
+            'traceback': traceback.format_exc()[-500:],
+            'frozen': getattr(sys, 'frozen', False),
+        }, status=500)
 
 
 @api_view(['GET'])
