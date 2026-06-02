@@ -699,6 +699,7 @@ class ScreenerService:
         """解析腾讯批量行情响应"""
         import re
         results = []
+        seen_codes = set()
         for line in text.split(';'):
             line = line.strip()
             if not line:
@@ -727,6 +728,11 @@ class ScreenerService:
 
             if price <= 0:
                 continue
+
+            # 去重：同一代码只保留第一条
+            if code_6 in seen_codes:
+                continue
+            seen_codes.add(code_6)
 
             results.append({
                 '代码': code_6,
@@ -842,6 +848,15 @@ class ScreenerService:
 
         snapshot_date = timezone.localdate()
         rows = cls._build_snapshot_rows(df, snapshot_date)
+
+        # 去重：同一 symbol 只保留第一条
+        seen = set()
+        unique_rows = []
+        for r in rows:
+            if r.symbol not in seen:
+                seen.add(r.symbol)
+                unique_rows.append(r)
+        rows = unique_rows
 
         if not rows:
             retained = cls._build_retained_snapshot_response()
