@@ -22,6 +22,40 @@ function run(command, args, cwd) {
   }
 }
 
+function checkDepsInSpec() {
+  const reqPath = path.join(repoRoot, 'backend', 'requirements.txt');
+  const specPath = path.join(repoRoot, 'backend', 'desktop_backend.spec');
+
+  if (!fs.existsSync(reqPath) || !fs.existsSync(specPath)) return;
+
+  const reqContent = fs.readFileSync(reqPath, 'utf-8');
+  const specContent = fs.readFileSync(specPath, 'utf-8');
+
+  // 提取 requirements.txt 中的包名（去版本号、去注释）
+  const reqPackages = reqContent
+    .split('\n')
+    .map(l => l.trim().split(/[>=<!\[]/)[0].trim().toLowerCase().replace(/-/g, '_'))
+    .filter(l => l && !l.startsWith('#'));
+
+  // 提取 spec 中的包名
+  const specPackages = specContent
+    .match(/'([a-z_]+)'/g)
+    ?.map(s => s.replace(/'/g, '').toLowerCase()) || [];
+
+  // 只检查不在 spec 中的包（会被 PyInstaller 主包自动依赖的跳过）
+  const autoDeps = new Set(['django', 'djangorestframework', 'django_cors_headers',
+    'requests', 'python_dateutil', 'pandas', 'numpy', 'beautifulsoup4']);
+  const missing = reqPackages.filter(pkg => !specPackages.includes(pkg) && !autoDeps.has(pkg));
+
+  if (missing.length > 0) {
+    console.error(`[desktop-package] ERROR: These packages are in requirements.txt but NOT in desktop_backend.spec:`);
+    missing.forEach(m => console.error(`  - ${m}`));
+    console.error(`[desktop-package] They will be missing from the packaged exe!`);
+    console.error(`[desktop-package] Add them to desktop_backend.spec hiddenimports.`);
+    process.exit(1);
+  }
+}
+
 function ensureFile(filePath, hint) {
   if (!fs.existsSync(filePath)) {
     console.error(`[desktop-package] Missing required file: ${filePath}`);
@@ -42,6 +76,7 @@ function copyDirectory(sourceDir, targetDir) {
   fs.cpSync(sourceDir, targetDir, { recursive: true });
 }
 
+checkDepsInSpec();
 run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:backend'], desktopDir);
 run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], frontendDir);
 ensureFile(frontendDistIndex, 'Frontend build failed or dist output is missing.');
