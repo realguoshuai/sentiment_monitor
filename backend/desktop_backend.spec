@@ -24,6 +24,9 @@ for package_name in [
     'bs4',
     'lxml',
     'playwright',
+    'baostock',
+    'tushare',
+    'dotenv',
 ]:
     datas += collect_data_files(package_name, include_py_files=True)
     hiddenimports += collect_submodules(package_name)
