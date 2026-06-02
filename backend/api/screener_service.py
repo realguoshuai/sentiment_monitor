@@ -645,6 +645,36 @@ class ScreenerService:
         return rows
 
     @classmethod
+    def _fetch_tencent_snapshot(cls) -> pd.DataFrame:
+        """腾讯实时行情兜底：首页已在用，确认可连通"""
+        try:
+            from .price_service import PriceService
+            symbols = list(Stock.objects.values_list('symbol', flat=True))
+            if not symbols:
+                return pd.DataFrame()
+
+            rt_map = PriceService.get_realtime_price(symbols, fetch_fundamentals=True)
+            if not rt_map:
+                return pd.DataFrame()
+
+            rows = []
+            for symbol, data in rt_map.items():
+                code = symbol[2:] if len(symbol) >= 8 else symbol
+                rows.append({
+                    '代码': code,
+                    '名称': data.get('name', code),
+                    '最新价': data.get('price', 0),
+                    '总市值': data.get('market_cap', 0),
+                    '市盈率-动态': data.get('pe', 0),
+                    '市净率': data.get('pb', 0),
+                })
+            logger.info("Tencent snapshot fallback: %d stocks", len(rows))
+            return pd.DataFrame(rows) if rows else pd.DataFrame()
+        except Exception as e:
+            logger.error("Tencent snapshot fallback failed: %s", e)
+            return pd.DataFrame()
+
+    @classmethod
     def _fetch_baostock_snapshot(cls) -> pd.DataFrame:
         """Baostock 兜底：走 TCP 协议，不受 SSL/代理影响。
         先查监控股票（秒级响应），再补全全市场。
@@ -727,9 +757,17 @@ class ScreenerService:
             df = cls._get_cached_snapshot_frame()
             source = 'cache'
 
-        # 终极兜底：Baostock（TCP 协议，不受 SSL/代理影响）
+        # 兜底 1：腾讯实时行情（首页已在用，确认可连通）
         if df is None or df.empty:
-            logger.info("Cache fallback empty, trying Baostock snapshot...")
+            logger.info("Cache fallback empty, trying Tencent realtime snapshot...")
+            df = cls._fetch_tencent_snapshot()
+            if df is not None and not df.empty:
+                source = 'tencent'
+                logger.info("Tencent snapshot fallback succeeded: %d rows", len(df))
+
+        # 兜底 2：Baostock（TCP 协议，不受 SSL/代理影响）
+        if df is None or df.empty:
+            logger.info("Tencent fallback empty, trying Baostock snapshot...")
             df = cls._fetch_baostock_snapshot()
             if df is not None and not df.empty:
                 source = 'baostock'
@@ -775,6 +813,8 @@ class ScreenerService:
         message = f'已刷新 {len(rows)} 只 A 股的选股快照。'
         if source == 'cache':
             message = f'上游数据源暂不可用，已基于本地估值缓存重建 {len(rows)} 只 A 股快照。'
+        elif source == 'tencent':
+            message = f'东财接口不可用，已通过腾讯行情获取 {len(rows)} 只监控股票快照。'
         elif source == 'baostock':
             message = f'东财接口不可用，已通过 Baostock 备用源获取 {len(rows)} 只 A 股快照。'
 
