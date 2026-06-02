@@ -673,7 +673,7 @@ class FundamentalService:
                 cls._cache_set_value(cache_key, result, 12 * 3600)
                 return result
 
-        # C. 历史估算（检测分红频率，用实际间隔而非硬编码 365 天）
+        # C. 历史估算（去年几月发的，今年就预估几月）
         past_ex_dates = sorted(
             [r['ex_date'] for _, r in df_p.iterrows()
              if pd.notna(r['ex_date']) and r['ex_date'] < today],
@@ -681,45 +681,37 @@ class FundamentalService:
         )
 
         if past_ex_dates:
-            last_ex = past_ex_dates[0]
-            last_row = df_p[df_p['ex_date'] == last_ex].iloc[0]
+            last_year = today.year - 1
+            last_year_ex = [d for d in past_ex_dates if d.year == last_year]
 
-            # 检测分红频率：是否有同一年出现 2 个以上除权日
-            year_counts = {}
-            for d in past_ex_dates:
-                y = d.year
-                year_counts[y] = year_counts.get(y, 0) + 1
-            recent_years = sorted(year_counts.keys(), reverse=True)[:3]
-            is_semi_annual = any(year_counts[y] >= 2 for y in recent_years)
-
-            if is_semi_annual:
-                # 一年多次分红：找同年间隔中的最短正间隔
-                short_intervals = []
-                for i in range(len(past_ex_dates) - 1):
-                    diff = (past_ex_dates[i] - past_ex_dates[i + 1]).days
-                    if 60 < diff < 180:  # 同年间隔通常 60~150 天
-                        short_intervals.append(diff)
-                interval = min(short_intervals) if short_intervals else 120
-                freq_label = '半年报分红'
+            candidates = []
+            if last_year_ex:
+                # 去年有分红 → 按同样的月份+日期推到今年
+                for d in last_year_ex:
+                    est = d.replace(year=today.year)
+                    if est >= today:
+                        candidates.append(est)
+                    else:
+                        # 已过期，推到明年
+                        candidates.append(d.replace(year=today.year + 1))
             else:
-                # 一年一次：用年同比间隔
-                year_intervals = []
-                for i in range(len(past_ex_dates) - 1):
-                    diff = (past_ex_dates[i] - past_ex_dates[i + 1]).days
-                    if 200 < diff < 500:
-                        year_intervals.append(diff)
-                interval = year_intervals[0] if year_intervals else 365
-                freq_label = '年度分红'
+                # 去年没有，取最近一次 + 365 天
+                candidates.append(past_ex_dates[0] + pd.Timedelta(days=365))
 
-            est = last_ex + pd.Timedelta(days=interval)
-            while est < today:
-                est += pd.Timedelta(days=interval)
+            # 取最近的未来日期
+            candidates.sort()
+            est = candidates[0]
 
+            # 取对应记录的方案
+            ref_date = last_year_ex[0] if last_year_ex else past_ex_dates[0]
+            ref_row = df_p[df_p['ex_date'] == ref_date].iloc[0]
+
+            freq_label = f'{len(last_year_ex)}次/年' if last_year_ex else '年度'
             result = {
                 'symbol': symbol,
                 'date': est.strftime('%Y-%m-%d'),
                 'days_left': max(0, int((est - today).days)),
-                'plan': last_row['plan_str'],
+                'plan': ref_row['plan_str'],
                 'status': 'estimated',
                 'status_desc': f'历史估算（{freq_label}）',
                 'progress': '历史估算'
