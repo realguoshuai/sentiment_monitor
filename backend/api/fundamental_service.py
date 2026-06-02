@@ -673,7 +673,7 @@ class FundamentalService:
                 cls._cache_set_value(cache_key, result, 12 * 3600)
                 return result
 
-        # C. 历史估算（去年几月发的，今年就预估几月）
+        # C. 历史估算（按去年分红次序预估，已发的跳过）
         past_ex_dates = sorted(
             [r['ex_date'] for _, r in df_p.iterrows()
              if pd.notna(r['ex_date']) and r['ex_date'] < today],
@@ -681,30 +681,36 @@ class FundamentalService:
         )
 
         if past_ex_dates:
-            last_year = today.year - 1
-            last_year_ex = [d for d in past_ex_dates if d.year == last_year]
+            this_year = today.year
+            last_year = this_year - 1
+            # 去年的分红按时间排序（第1次、第2次、...）
+            last_year_ex = sorted([d for d in past_ex_dates if d.year == last_year])
+            # 今年已发的分红数量
+            this_year_count = len([d for d in past_ex_dates if d.year == this_year])
 
             candidates = []
             if last_year_ex:
-                # 去年有分红 → 按同样的月份+日期推到今年
-                for d in last_year_ex:
-                    est = d.replace(year=today.year)
+                # 跳过今年已发过的次数，取下一个
+                remaining = last_year_ex[this_year_count:]
+                for d in remaining:
+                    est = d.replace(year=this_year)
                     if est >= today:
                         candidates.append(est)
                     else:
-                        # 已过期，推到明年
-                        candidates.append(d.replace(year=today.year + 1))
+                        # 已过期但还没发过（今年提前了），推到明年
+                        candidates.append(d.replace(year=this_year + 1))
             else:
-                # 去年没有，取最近一次 + 365 天
                 candidates.append(past_ex_dates[0] + pd.Timedelta(days=365))
 
-            # 取最近的未来日期
-            candidates.sort()
-            est = candidates[0]
-
-            # 取对应记录的方案
-            ref_date = last_year_ex[0] if last_year_ex else past_ex_dates[0]
-            ref_row = df_p[df_p['ex_date'] == ref_date].iloc[0]
+            if candidates:
+                candidates.sort()
+                est = candidates[0]
+                # 用去年同次序的分红方案作为参考
+                ref_idx = min(this_year_count, len(last_year_ex) - 1) if last_year_ex else 0
+                ref_row = df_p[df_p['ex_date'] == last_year_ex[ref_idx]].iloc[0] if last_year_ex else df_p[df_p['ex_date'] == past_ex_dates[0]].iloc[0]
+            else:
+                est = last_year_ex[0].replace(year=this_year + 1) if last_year_ex else past_ex_dates[0] + pd.Timedelta(days=365)
+                ref_row = df_p[df_p['ex_date'] == last_year_ex[0]].iloc[0] if last_year_ex else df_p[df_p['ex_date'] == past_ex_dates[0]].iloc[0]
 
             freq_label = f'{len(last_year_ex)}次/年' if last_year_ex else '年度'
             result = {
