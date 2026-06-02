@@ -8,6 +8,7 @@ from .views import (
     get_quality_shareholder_structure,
     get_screener_results,
     refresh_screener_snapshot,
+    diagnose_connectivity,
 )
 
 router = DefaultRouter()
@@ -25,5 +26,6 @@ urlpatterns = [
     path('sentiment/quality/refresh/', refresh_quality_data, name='refresh-quality-data'),
     path('sentiment/history-backtest/', views.get_history_backtest, name='history-backtest'),
     path('collect/', trigger_collection, name='trigger-collection'),
+    path('diagnose/', diagnose_connectivity, name='diagnose-connectivity'),
     path('', include(router.urls)),
 ]

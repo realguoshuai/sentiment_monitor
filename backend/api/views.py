@@ -838,3 +838,62 @@ def get_dividend_calendar(request):
     except Exception as e:
         logger.error(f"Error generating dividend calendar: {e}")
         return Response({'error': str(e)}, status=500)
+
+
+@api_view(['GET'])
+def diagnose_connectivity(request):
+    """诊断各数据源连通性"""
+    import sys
+    results = {
+        'frozen': getattr(sys, 'frozen', False),
+        'python': sys.version,
+        'tests': [],
+    }
+
+    # 1. 腾讯行情
+    try:
+        rt = PriceService.get_realtime_price(['SH600519'], fetch_fundamentals=False)
+        ok = bool(rt.get('SH600519', {}).get('price', 0) > 0)
+        results['tests'].append({'name': '腾讯行情', 'ok': ok, 'detail': str(rt.get('SH600519', {}))[:200]})
+    except Exception as e:
+        results['tests'].append({'name': '腾讯行情', 'ok': False, 'error': str(e)[:200]})
+
+    # 2. 东财直连
+    try:
+        import requests as req
+        s = req.Session()
+        s.trust_env = False
+        s.verify = False
+        r = s.get('https://82.push2.eastmoney.com/api/qt/clist/get', params={
+            'pn': '1', 'pz': '1', 'po': '1', 'np': '1',
+            'ut': 'bd1d9ddb04089700cf9c27f6f7426281',
+            'fltt': '2', 'invt': '2', 'fid': 'f3',
+            'fs': 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048',
+            'fields': 'f12,f14',
+        }, timeout=10)
+        ok = r.status_code == 200 and 'data' in r.text
+        results['tests'].append({'name': '东财直连', 'ok': ok, 'status': r.status_code, 'detail': r.text[:200]})
+    except Exception as e:
+        results['tests'].append({'name': '东财直连', 'ok': False, 'error': str(e)[:200]})
+
+    # 3. AkShare
+    try:
+        import akshare as ak
+        df = ak.stock_zh_a_spot_em()
+        ok = df is not None and len(df) > 0
+        results['tests'].append({'name': 'AkShare', 'ok': ok, 'detail': f'{len(df)} rows' if ok else 'empty'})
+    except Exception as e:
+        results['tests'].append({'name': 'AkShare', 'ok': False, 'error': str(e)[:200]})
+
+    # 4. Baostock
+    try:
+        import baostock as bs
+        lr = bs.login()
+        ok = lr.error_code == '0'
+        if ok:
+            bs.logout()
+        results['tests'].append({'name': 'Baostock', 'ok': ok, 'detail': lr.error_msg})
+    except Exception as e:
+        results['tests'].append({'name': 'Baostock', 'ok': False, 'error': str(e)[:200]})
+
+    return Response(results)
