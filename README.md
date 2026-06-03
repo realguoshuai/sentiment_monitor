@@ -4,9 +4,9 @@
 
 ## 页面功能展示
 
-| 首页看板 | 对比分析 | 深度分析 |
+| 首页看板 | 价差跟踪 | 深度分析 |
 | :---: | :---: | :---: |
-| ![首页看板](docs/screenshots/QQ图片20260327161155.png) | ![对比分析](docs/screenshots/QQ图片20260327161107.png) | ![深度分析](docs/screenshots/QQ图片20260327161212.png) |
+| ![首页看板](docs/screenshots/QQ图片20260327161155.png) | ![价差跟踪](docs/screenshots/QQ图片20260327161107.png) | ![深度分析](docs/screenshots/QQ图片20260327161212.png) |
 | **条件选股** | **工具箱** | |
 | ![条件选股](docs/screenshots/条件选股.png) | ![工具箱](docs/screenshots/工具箱.png) | |
 
