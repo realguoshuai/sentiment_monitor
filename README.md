@@ -8,7 +8,7 @@
 | :---: | :---: | :---: |
 | ![首页看板](docs/screenshots/QQ图片20260327161155.png) | ![价差跟踪](docs/screenshots/QQ图片20260327161107.png) | ![深度分析](docs/screenshots/QQ图片20260327161212.png) |
 | **条件选股** | **工具箱** | **盯盘日记** |
-| ![条件选股](docs/screenshots/条件选股.png) | ![工具箱](docs/screenshots/工具箱.png) | ![盯盘日记](docs/screenshots/盯盘日记.png) |
+| ![条件选股](docs/screenshots/条件选股.png?v=2) | ![工具箱](docs/screenshots/工具箱.png?v=2) | ![盯盘日记](docs/screenshots/盯盘日记.png) |
 
 ## 主要功能
 
