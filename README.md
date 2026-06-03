@@ -172,6 +172,7 @@ sentiment_monitor/
 
 ## 最近更新
 
+- 打包版启动自动迁移：桌面端启动时自动执行 `migrate`，解决 seed 数据库缺列导致快照刷新失败的问题。
 - 工具箱新增凯利仓位计算器：输入胜率和盈亏比，计算全凯利/半凯利/1/4 凯利三档仓位比例，含期望值、破产概率估算和实战建议。
 - 移除集中度热力图工具。
 - 快照刷新修复：`bulk_create` 加 `ignore_conflicts=True` + dict 去重，解决 UNIQUE constraint 报错。
