@@ -18,7 +18,7 @@ from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from api.models import Stock, SentimentData, News, Report, Announcement
-from collector.sources import eastmoney, cninfo, xueqiu, news_crawler
+from collector.sources import eastmoney, cninfo, xueqiu, news_crawler, sina
 from analyzer.engine import SentimentEngine
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,8 @@ def _normalize_text(val, max_length=50):
 
 
 def _dedupe_items(items, *, title_length=60):
-    seen = set()
+    """去重并合并链接"""
+    seen = {}
     unique_items = []
     for item in items:
         title = _normalize_title(item.get('title'))
@@ -56,13 +57,27 @@ def _dedupe_items(items, *, title_length=60):
             continue
 
         dedupe_key = (title[:title_length], str(item.get('pub_date') or '')[:10])
+        url = str(item.get('url') or '').strip()
+
         if dedupe_key in seen:
+            # 已存在，合并链接
+            existing_idx = seen[dedupe_key]
+            existing_item = unique_items[existing_idx]
+            existing_url = str(existing_item.get('url') or '').strip()
+
+            # 如果链接不同，追加到 urls 字段
+            if url and url != existing_url:
+                if 'urls' not in existing_item:
+                    existing_item['urls'] = [existing_url] if existing_url else []
+                if url not in existing_item['urls']:
+                    existing_item['urls'].append(url)
             continue
 
-        seen.add(dedupe_key)
+        seen[dedupe_key] = len(unique_items)
         unique_items.append({
             **item,
             'title': title,
+            'urls': [url] if url else [],
         })
     return unique_items
 
@@ -91,17 +106,35 @@ def _collect_announcements(symbol_code: str) -> list:
 
 
 def _build_news_records(sentiment, items, fallback_date: date):
+    import json
     records = []
     for item in items:
         title = _normalize_title(item.get('title'))
         if not title:
             continue
+
+        # 获取所有链接
+        urls = item.get('urls', [])
+        url = str(item.get('url') or '').strip()
+
+        # 如果 urls 为空，使用单个 url
+        if not urls and url:
+            urls = [url]
+
+        # 确保 urls 是列表
+        if not isinstance(urls, list):
+            urls = [url] if url else []
+
+        # 过滤空链接
+        urls = [u for u in urls if u]
+
         records.append(News(
             sentiment_data=sentiment,
             title=title[:300],
             pub_date=_safe_pub_date(item.get('pub_date'), fallback_date),
             source=_normalize_title(item.get('source'))[:50] or '未知来源',
-            url=str(item.get('url') or '').strip(),
+            url=urls[0] if urls else '',  # 主链接取第一个
+            urls=json.dumps(urls, ensure_ascii=False),  # 所有链接存 JSON
         ))
     return records
 
@@ -139,7 +172,7 @@ def _build_announcement_records(sentiment, items, fallback_date: date):
     return records
 
 
-def collect_stock_data(stock: Stock, days: int = 7):
+def collect_stock_data(stock: Stock, days: int = 30):
     """采集单只股票数据，并回溯过去几天的情感 (Backfill 模式)
 
     Args:
@@ -153,11 +186,12 @@ def collect_stock_data(stock: Stock, days: int = 7):
     logger.info("[%s] 开始采集 (过去 %d 天)...", stock.name, days)
 
     # 1. 并发采集新闻（跳过研报/公告以提速）
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=4) as executor:
         futures = {
             executor.submit(eastmoney.get_news, symbol_code): 'em_news',
             executor.submit(xueqiu.get_news, stock.symbol): 'xq_news',
             executor.submit(news_crawler.get_news, symbol_code): 'crawler_news',
+            executor.submit(sina.get_news, symbol_code): 'sina_news',
         }
         results = {}
         for f in as_completed(futures):
@@ -171,13 +205,14 @@ def collect_stock_data(stock: Stock, days: int = 7):
     em_news = results.get('em_news', [])
     xq_news = results.get('xq_news', [])
     crawler_news = results.get('crawler_news', [])
-    
+    sina_news = results.get('sina_news', [])
+
     # 2. 汇总新闻并按日期分组
     all_items = []
     today = timezone.localdate()
     start_date = today - timedelta(days=days-1)
 
-    combined_news = _dedupe_items(em_news + xq_news + crawler_news, title_length=60)
+    combined_news = _dedupe_items(em_news + xq_news + crawler_news + sina_news, title_length=60)
     for item in combined_news:
         d = _safe_pub_date(item.get('pub_date'), today)
         if d >= start_date: all_items.append({'type': 'news', 'data': item, 'date': d})
@@ -264,13 +299,26 @@ def run_collection(is_manual=False):
         logger.info("Starting collection...")
         logger.info("-" * 60)
         
+        # 并行采集，最多 4 个股票同时进行
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         success_count = 0
-        for stock in stocks:
-            try:
-                collect_stock_data(stock)
-                success_count += 1
-            except Exception as e:
-                logger.error("  [ERROR] Failed for %s: %s", stock.name, str(e)[:100])
+        stock_list = list(stocks)
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {
+                executor.submit(collect_stock_data, stock): stock
+                for stock in stock_list
+            }
+
+            for future in as_completed(futures):
+                stock = futures[future]
+                try:
+                    future.result()
+                    success_count += 1
+                    logger.info("  [OK] %s (%s)", stock.name, stock.symbol)
+                except Exception as e:
+                    logger.error("  [ERROR] Failed for %s: %s", stock.name, str(e)[:100])
         
         logger.info("=" * 60)
         logger.info("  Done! Success: %d/%d", success_count, stocks.count())

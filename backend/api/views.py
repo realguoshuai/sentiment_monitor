@@ -591,11 +591,12 @@ def get_quality_analysis(request):
         
         response_data = {
             'symbol': symbol,
-            'quality_history': quality_data.get('history', []),
+            'quality_history': quality_data.get('quality_history', []),
             'cashflow_summary': quality_data.get('cashflow_summary', {}),
             'capital_allocation_summary': quality_data.get('capital_allocation_summary', {}),
             'stability_summary': quality_data.get('stability_summary', {}),
             'balance_sheet_summary': quality_data.get('balance_sheet_summary', {}),
+            'management_quality_summary': quality_data.get('management_quality_summary', {}),
             'shareholder_history': quality_data.get('shareholder_history', []),
             'shareholder_summary': quality_data.get('shareholder_summary', {}),
         }
@@ -697,156 +698,199 @@ def trigger_collection(request):
 
 @api_view(['GET'])
 def get_market_diary(request):
-    """盯盘日记接口：包含估值、股息率、成交量走势以及下次分红倒计时"""
+    """盯盘日记接口：包含估值、股息率、成交量走势以及下次分红倒计时
+
+    缓存策略：
+      - 历史 K 线（不含今天）：长缓存 24h，不会变
+      - 当日数据 + 实时指标：短缓存（盘中 30s / 收盘后 1h）
+      - 分红倒计时：中缓存 6h
+    """
     symbol = request.GET.get('symbol', '').strip().upper()
     if not symbol:
         return Response({'error': 'No symbol provided'}, status=400)
-    
-    fixed_symbol = PriceService._fix_symbol(symbol)
-    
-    # 尝试读取缓存
-    cache_key = f"market_diary_v2_{fixed_symbol}"
-    try:
-        cached_data = cache.get(cache_key)
-    except Exception:
-        cache.delete(cache_key)
-        cached_data = None
-    if cached_data is not None:
-        return Response(cached_data)
-        
-    try:
-        # 1. 获取 1 年的历史 K 线数据 (250 天)
-        history_dict = PriceService.get_historical_data([fixed_symbol], limit=250, period='day')
-        history = history_dict.get(fixed_symbol, [])
-        
-        if not history:
-            return Response({'error': 'No historical data found'}, status=404)
-            
-        # 2. 计算成交量 20 日均线 (MA20) 以及缩量状态评估
-        latest_volume = history[-1].get('volume', 0.0)
-        # 提取过去 20 天的成交量数据计算 MA
-        volumes = [h.get('volume', 0.0) for h in history]
-        
-        # 构造带有 ma20_volume 的走势图数据
-        history_with_ma = []
-        for i in range(len(history)):
-            start_idx = max(0, i - 19)
-            sub_v = volumes[start_idx:i+1]
-            ma_val = sum(sub_v) / len(sub_v) if sub_v else 0.0
-            
-            item = dict(history[i])
-            item['ma20_volume'] = round(ma_val, 2)
-            history_with_ma.append(item)
-            
-        # 评估最新状态
-        latest_ma20_volume = history_with_ma[-1].get('ma20_volume', 0.0)
-        volume_ratio = latest_volume / latest_ma20_volume if latest_ma20_volume > 0 else 1.0
-        
-        if volume_ratio <= 0.5:
-            volume_status = '极度缩量'
-            volume_desc = '筹码沉淀极高，属于典型的无流动性杀跌阶段，恐慌杀伤力极小，已进入高安全边际配置区。'
-        elif volume_ratio <= 0.8:
-            volume_status = '明显缩量'
-            volume_desc = '成交清淡，市场观望情绪浓厚。'
-        elif volume_ratio >= 1.5:
-            volume_status = '显著放量'
-            volume_desc = '交投活跃，可能存在多空分歧或突破动作。'
-        else:
-            volume_status = '成交平稳'
-            volume_desc = '交投平稳，符合均值状态。'
-            
-        # 3. 计算分红倒计时
-        from .fundamental_service import FundamentalService
-        next_dividend = FundamentalService.get_next_dividend(fixed_symbol)
 
-        # 4. 组装并返回
-        result = {
-            'symbol': fixed_symbol,
-            'latest': {
-                'price': history[-1].get('price', 0.0),
-                'pe': 0.0,
-                'pb': 0.0,
-                'dividend_yield': 0.0,
-                'volume_ratio': round(volume_ratio, 4),
-                'volume_status': volume_status,
-                'volume_desc': volume_desc
-            },
-            'next_dividend': next_dividend,
-            'history': history_with_ma
-        }
-        
-        # 补全 PE/PB：腾讯实时行情（无需 token，可靠）
+    fixed_symbol = PriceService._fix_symbol(symbol)
+    from .fundamental_service import FundamentalService
+
+    # ---- 1. 历史 K 线（长缓存 24h，不含今天） ----
+    history_cache_key = f"market_diary_hist_v1_{fixed_symbol}"
+    try:
+        history = cache.get(history_cache_key)
+    except Exception:
+        cache.delete(history_cache_key)
+        history = None
+
+    if history is None:
+        try:
+            history_dict = PriceService.get_historical_data([fixed_symbol], limit=250, period='day')
+            history = history_dict.get(fixed_symbol, [])
+            if history:
+                # 去掉最后一条（今天），单独处理
+                history = history[:-1]
+                cache.set(history_cache_key, history, 24 * 3600)
+        except Exception as e:
+            logger.error(f"Failed to fetch historical data for {fixed_symbol}: {e}")
+            history = []
+
+    if not history:
+        return Response({'error': 'No historical data found'}, status=404)
+
+    # ---- 2. 当日实时数据（短缓存） ----
+    from datetime import datetime as _dt
+    now = _dt.now()
+    is_trading_hour = (now.weekday() < 5 and (
+        (_dt.strptime('09:30', '%H:%M').time() <= now.time() <= _dt.strptime('15:00', '%H:%M').time())
+    ))
+    today_cache_ttl = 30 if is_trading_hour else 3600
+
+    today_cache_key = f"market_diary_today_v1_{fixed_symbol}"
+    try:
+        today_data = cache.get(today_cache_key)
+    except Exception:
+        cache.delete(today_cache_key)
+        today_data = None
+
+    if today_data is None:
+        today_data = {}
+        try:
+            # 获取今天的价格和成交量
+            today_dict = PriceService.get_historical_data([fixed_symbol], limit=1, period='day')
+            today_list = today_dict.get(fixed_symbol, [])
+            if today_list:
+                today_data = dict(today_list[-1])
+        except Exception:
+            pass
+
+        # PE/PB：腾讯实时
         try:
             rt = PriceService.get_realtime_price([fixed_symbol], fetch_fundamentals=False)
             rt_data = rt.get(fixed_symbol, {})
-            if rt_data.get('pe', 0) > 0:
-                result['latest']['pe'] = rt_data['pe']
-            if rt_data.get('pb', 0) > 0:
-                result['latest']['pb'] = rt_data['pb']
-        except Exception as e:
-            logger.warning(f"Tencent realtime fallback failed for {fixed_symbol}: {e}")
+            today_data['pe'] = rt_data.get('pe', 0.0)
+            today_data['pb'] = rt_data.get('pb', 0.0)
+        except Exception:
+            today_data.setdefault('pe', 0.0)
+            today_data.setdefault('pb', 0.0)
 
-        # 补全股息率：必须用雪球（腾讯不准确）
+        # 股息率：雪球
         try:
             dy = FundamentalService.get_xueqiu_dividend_yield(fixed_symbol)
-            if dy > 0:
-                result['latest']['dividend_yield'] = dy
-        except Exception as e:
-            logger.warning(f"Xueqiu dividend yield failed for {fixed_symbol}: {e}")
-                
-        # 放入缓存 1 小时
-        cache.set(cache_key, result, 3600)
-        return Response(result)
-    except Exception as e:
-        logger.error(f"Error generating market diary: {e}")
-        return Response({'error': str(e)}, status=500)
+            today_data['dividend_yield'] = dy if dy > 0 else 0.0
+        except Exception:
+            today_data.setdefault('dividend_yield', 0.0)
+
+        cache.set(today_cache_key, today_data, today_cache_ttl)
+
+    # ---- 3. 分红倒计时（中缓存 6h） ----
+    div_cache_key = f"market_diary_div_v1_{fixed_symbol}"
+    try:
+        next_dividend = cache.get(div_cache_key)
+    except Exception:
+        cache.delete(div_cache_key)
+        next_dividend = None
+
+    if next_dividend is None:
+        try:
+            next_dividend = FundamentalService.get_next_dividend(fixed_symbol)
+            cache.set(div_cache_key, next_dividend, 6 * 3600)
+        except Exception:
+            next_dividend = {}
+
+    # ---- 4. 拼接历史 + 今天，计算 MA20 ----
+    full_history = history + [today_data] if today_data.get('volume') else history
+
+    volumes = [h.get('volume', 0.0) for h in full_history]
+    history_with_ma = []
+    for i, item in enumerate(full_history):
+        start_idx = max(0, i - 19)
+        sub_v = volumes[start_idx:i + 1]
+        ma_val = sum(sub_v) / len(sub_v) if sub_v else 0.0
+        entry = dict(item)
+        entry['ma20_volume'] = round(ma_val, 2)
+        history_with_ma.append(entry)
+
+    # 评估缩量状态
+    latest_volume = full_history[-1].get('volume', 0.0) if full_history else 0.0
+    latest_ma20 = history_with_ma[-1].get('ma20_volume', 0.0) if history_with_ma else 0.0
+    volume_ratio = latest_volume / latest_ma20 if latest_ma20 > 0 else 1.0
+
+    if volume_ratio <= 0.5:
+        volume_status, volume_desc = '极度缩量', '筹码沉淀极高，属于典型的无流动性杀跌阶段，恐慌杀伤力极小，已进入高安全边际配置区。'
+    elif volume_ratio <= 0.8:
+        volume_status, volume_desc = '明显缩量', '成交清淡，市场观望情绪浓厚。'
+    elif volume_ratio >= 1.5:
+        volume_status, volume_desc = '显著放量', '交投活跃，可能存在多空分歧或突破动作。'
+    else:
+        volume_status, volume_desc = '成交平稳', '交投平稳，符合均值状态。'
+
+    # ---- 5. 组装返回 ----
+    result = {
+        'symbol': fixed_symbol,
+        'latest': {
+            'price': today_data.get('price', full_history[-1].get('price', 0.0)),
+            'pe': today_data.get('pe', 0.0),
+            'pb': today_data.get('pb', 0.0),
+            'dividend_yield': today_data.get('dividend_yield', 0.0),
+            'volume_ratio': round(volume_ratio, 4),
+            'volume_status': volume_status,
+            'volume_desc': volume_desc,
+        },
+        'next_dividend': next_dividend,
+        'history': history_with_ma,
+    }
+    return Response(result)
 
 
-@api_view(['GET'])
-def get_dividend_calendar(request):
-    """分红日历接口：返回所有监控股票的下一次分红信息"""
+def _build_dividend_calendar():
+    """构建分红日历数据（可复用，供接口和缓存预热调用）"""
+    from .fundamental_service import FundamentalService
     calendar_cache_key = "dividend_calendar_v1"
+
     try:
         cached_data = cache.get(calendar_cache_key)
     except Exception:
         cache.delete(calendar_cache_key)
         cached_data = None
     if cached_data is not None:
-        return Response(cached_data)
+        return cached_data
 
+    stocks = list(Stock.objects.all().values('symbol', 'name'))
+    if not stocks:
+        return []
+
+    results = []
+    with ThreadPoolExecutor(max_workers=min(len(stocks), 8)) as executor:
+        future_map = {}
+        for s in stocks:
+            future = executor.submit(FundamentalService.get_next_dividend, s['symbol'])
+            future_map[future] = s
+
+        for future in as_completed(future_map):
+            stock_info = future_map[future]
+            try:
+                div_info = future.result()
+                if div_info.get('status') != 'none':
+                    results.append({
+                        'symbol': stock_info['symbol'],
+                        'name': stock_info['name'],
+                        'date': div_info.get('date'),
+                        'days_left': div_info.get('days_left'),
+                        'plan': div_info.get('plan'),
+                        'status': div_info.get('status'),
+                        'status_desc': div_info.get('status_desc'),
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to get dividend for {stock_info['symbol']}: {e}")
+
+    results.sort(key=lambda x: x.get('days_left') if x.get('days_left') is not None else 9999)
+    cache.set(calendar_cache_key, results, 3600)
+    return results
+
+
+@api_view(['GET'])
+def get_dividend_calendar(request):
+    """分红日历接口：返回所有监控股票的下一次分红信息"""
     try:
-        from .fundamental_service import FundamentalService
-        stocks = list(Stock.objects.all().values('symbol', 'name'))
-        if not stocks:
-            return Response([])
-
-        results = []
-        with ThreadPoolExecutor(max_workers=min(len(stocks), 8)) as executor:
-            future_map = {}
-            for s in stocks:
-                future = executor.submit(FundamentalService.get_next_dividend, s['symbol'])
-                future_map[future] = s
-
-            for future in as_completed(future_map):
-                stock_info = future_map[future]
-                try:
-                    div_info = future.result()
-                    if div_info.get('status') != 'none':
-                        results.append({
-                            'symbol': stock_info['symbol'],
-                            'name': stock_info['name'],
-                            'date': div_info.get('date'),
-                            'days_left': div_info.get('days_left'),
-                            'plan': div_info.get('plan'),
-                            'status': div_info.get('status'),
-                            'status_desc': div_info.get('status_desc'),
-                        })
-                except Exception as e:
-                    logger.warning(f"Failed to get dividend for {stock_info['symbol']}: {e}")
-
-        results.sort(key=lambda x: x.get('days_left') if x.get('days_left') is not None else 9999)
-        cache.set(calendar_cache_key, results, 3600)
-        return Response(results)
+        return Response(_build_dividend_calendar())
     except Exception as e:
         logger.error(f"Error generating dividend calendar: {e}")
         return Response({'error': str(e)}, status=500)
@@ -909,3 +953,219 @@ def diagnose_connectivity(request):
         results['tests'].append({'name': 'Baostock', 'ok': False, 'error': str(e)[:200]})
 
     return Response(results)
+
+
+# ==================== 组合持仓 ====================
+
+from .models import Portfolio, PortfolioHolding
+
+
+@api_view(['GET'])
+def get_portfolio(request):
+    """获取默认组合及持仓"""
+    try:
+        # 获取或创建默认组合
+        portfolio, created = Portfolio.objects.get_or_create(
+            is_default=True,
+            defaults={'name': '默认组合', 'total_capital': 0}
+        )
+
+        holdings = PortfolioHolding.objects.filter(portfolio=portfolio).select_related('stock')
+
+        holdings_data = []
+        for h in holdings:
+            holdings_data.append({
+                'symbol': h.stock.symbol,
+                'name': h.stock.name,
+                'industry': h.stock.industry,
+                'allocation_pct': h.allocation_pct,
+                'share_count': h.share_count,
+                'buy_price': h.buy_price,
+            })
+
+        return Response({
+            'id': portfolio.id,
+            'name': portfolio.name,
+            'total_capital': float(portfolio.total_capital),
+            'holdings': holdings_data,
+        })
+
+    except Exception as e:
+        logger.error(f"获取组合失败: {e}")
+        return Response({'error': str(e)}, status=500)
+
+
+@api_view(['POST'])
+def save_portfolio(request):
+    """保存组合及持仓"""
+    try:
+        data = request.data
+        total_capital = data.get('total_capital', 0)
+        holdings = data.get('holdings', [])
+
+        # 获取或创建默认组合
+        portfolio, created = Portfolio.objects.get_or_create(
+            is_default=True,
+            defaults={'name': '默认组合'}
+        )
+        portfolio.total_capital = total_capital
+        portfolio.save()
+
+        # 清除旧持仓
+        PortfolioHolding.objects.filter(portfolio=portfolio).delete()
+
+        # 批量创建新持仓
+        holdings_to_create = []
+        for h in holdings:
+            symbol = h.get('symbol', '')
+            try:
+                stock = Stock.objects.get(symbol=symbol)
+                holdings_to_create.append(PortfolioHolding(
+                    portfolio=portfolio,
+                    stock=stock,
+                    allocation_pct=h.get('allocation_pct', 0),
+                    share_count=h.get('share_count', 0),
+                    buy_price=h.get('buy_price'),
+                ))
+            except Stock.DoesNotExist:
+                logger.warning(f"股票 {symbol} 不存在，跳过")
+
+        PortfolioHolding.objects.bulk_create(holdings_to_create)
+
+        return Response({
+            'status': 'success',
+            'message': f'已保存 {len(holdings_to_create)} 条持仓',
+            'portfolio_id': portfolio.id,
+        })
+
+    except Exception as e:
+        logger.error(f"保存组合失败: {e}")
+        return Response({'error': str(e)}, status=500)
+
+
+# ==================== 告警系统 ====================
+
+from .models import AlertRule, AlertLog
+from .alert_service import check_alerts, get_unread_count, mark_as_read
+
+
+@api_view(['GET'])
+def get_alert_rules(request):
+    """获取所有告警规则"""
+    rules = AlertRule.objects.select_related('stock').all()
+    data = [{
+        'id': r.id,
+        'stock_symbol': r.stock.symbol,
+        'stock_name': r.stock.name,
+        'rule_type': r.rule_type,
+        'rule_type_display': r.get_rule_type_display(),
+        'threshold': r.threshold,
+        'is_active': r.is_active,
+        'created_at': r.created_at,
+    } for r in rules]
+    return Response(data)
+
+
+@api_view(['POST'])
+def create_alert_rule(request):
+    """创建告警规则"""
+    try:
+        data = request.data
+        stock = Stock.objects.get(symbol=data['stock_symbol'])
+
+        rule = AlertRule.objects.create(
+            stock=stock,
+            rule_type=data['rule_type'],
+            threshold=data['threshold'],
+            is_active=data.get('is_active', True),
+        )
+
+        return Response({
+            'id': rule.id,
+            'message': '告警规则创建成功',
+        })
+    except Stock.DoesNotExist:
+        return Response({'error': '股票不存在'}, status=404)
+    except Exception as e:
+        return Response({'error': str(e)}, status=500)
+
+
+@api_view(['DELETE'])
+def delete_alert_rule(request, rule_id):
+    """删除告警规则"""
+    try:
+        rule = AlertRule.objects.get(id=rule_id)
+        rule.delete()
+        return Response({'message': '告警规则已删除'})
+    except AlertRule.DoesNotExist:
+        return Response({'error': '规则不存在'}, status=404)
+
+
+@api_view(['PUT'])
+def toggle_alert_rule(request, rule_id):
+    """启用/禁用告警规则"""
+    try:
+        rule = AlertRule.objects.get(id=rule_id)
+        rule.is_active = not rule.is_active
+        rule.save()
+        return Response({
+            'id': rule.id,
+            'is_active': rule.is_active,
+            'message': f'规则已{"启用" if rule.is_active else "禁用"}',
+        })
+    except AlertRule.DoesNotExist:
+        return Response({'error': '规则不存在'}, status=404)
+
+
+@api_view(['GET'])
+def get_alert_logs(request):
+    """获取告警日志"""
+    limit = int(request.GET.get('limit', 50))
+    logs = AlertLog.objects.select_related('rule', 'rule__stock').all()[:limit]
+
+    data = [{
+        'id': l.id,
+        'stock_symbol': l.rule.stock.symbol,
+        'stock_name': l.rule.stock.name,
+        'rule_type': l.rule.rule_type,
+        'rule_type_display': l.rule.get_rule_type_display(),
+        'message': l.message,
+        'value': l.value,
+        'triggered_at': l.triggered_at,
+        'is_read': l.is_read,
+    } for l in logs]
+
+    return Response(data)
+
+
+@api_view(['GET'])
+def get_alert_unread_count(request):
+    """获取未读告警数量"""
+    count = get_unread_count()
+    return Response({'count': count})
+
+
+@api_view(['POST'])
+def mark_alert_read(request, alert_id=None):
+    """标记告警为已读"""
+    try:
+        if alert_id:
+            mark_as_read(alert_id)
+        else:
+            mark_as_read()
+        return Response({'message': '已标记为已读'})
+    except Exception as e:
+        return Response({'error': str(e)}, status=500)
+
+
+@api_view(['POST'])
+def trigger_alert_check(request):
+    """手动触发告警检查"""
+    try:
+        count = check_alerts()
+        return Response({
+            'message': f'告警检查完成，触发 {count} 条',
+            'triggered_count': count,
+        })
+    except Exception as e:
+        return Response({'error': str(e)}, status=500)

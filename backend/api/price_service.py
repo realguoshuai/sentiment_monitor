@@ -66,27 +66,41 @@ class PriceService:
             return normalized.to_dict(orient='records')
         return value
 
+    SNAPSHOT_CACHE_KEY = "a_share_spot_snapshot_for_valuation"
+    SNAPSHOT_STALE_KEY = "a_share_spot_snapshot_stale"
+    _snapshot_circuit_until = 0  # 熔断截止时间戳
+
     @classmethod
     def refresh_snapshot_cache(cls):
-        """后台异步抓取全量快照，不阻塞前台请求"""
+        """后台异步抓取全量快照，不阻塞前台请求（带熔断）"""
+        import time
+        now = time.time()
+        if now < cls._snapshot_circuit_until:
+            logger.debug("Snapshot circuit breaker active, skipping.")
+            return
+
         import akshare as ak
-        cache_key = "a_share_spot_snapshot_for_valuation"
         try:
             df = ak.stock_zh_a_spot_em()
             df = df[['代码', '最新价', '总市值', '市盈率-动态', '市净率']].copy()
             df['代码'] = df['代码'].astype(str).str.zfill(6)
             snapshot = df.set_index('代码').to_dict('index')
-            cls._cache_set(cache_key, snapshot, 3600)
+            cls._cache_set(cls.SNAPSHOT_CACHE_KEY, snapshot, 3600)
+            # 长期存档：即使刷新失败，stale 缓存仍可用（24h）
+            cls._cache_set(cls.SNAPSHOT_STALE_KEY, snapshot, 86400)
             logger.info("Spot snapshot cache warmed up.")
         except Exception as e:
-            logger.warning(f"Background warming failed: {e}")
+            # 熔断 5 分钟，避免反复重试挂掉的接口
+            cls._snapshot_circuit_until = now + 300
+            logger.warning(f"Background warming failed (circuit breaker 5min): {e}")
 
     @classmethod
     def _get_spot_snapshot_map(cls, symbols):
-        cache_key = "a_share_spot_snapshot_for_valuation"
-        snapshot = cls._cache_get(cache_key)
+        snapshot = cls._cache_get(cls.SNAPSHOT_CACHE_KEY)
         if not isinstance(snapshot, dict):
-            # 强化非阻塞逻辑：跳过同步爬取全量 A 股快照，由 scheduler 或 warm_valuation_cache 异步填充
+            # 1h 缓存过期，尝试 24h stale 缓存
+            snapshot = cls._cache_get(cls.SNAPSHOT_STALE_KEY)
+        if not isinstance(snapshot, dict):
             logger.debug("Spot snapshot cache miss, skipping synchronous fetch to maintain low latency.")
             return {}
 
@@ -206,89 +220,145 @@ class PriceService:
 
     @classmethod
     def get_realtime_price(cls, symbols, fetch_fundamentals=True):
-        """获取腾讯实时行情 (批量)"""
+        """获取实时行情 — 腾讯优先（最快最新），东财快照补字段"""
         if not symbols:
             return {}
 
         fixed_symbols = [cls._fix_symbol(s) for s in symbols]
-        
-        # 腾讯 API 要求小写前缀 (sz000423)
+        rt_data = {}
+
+        # ① 腾讯行情（最快，75ms，价格最新）
         tencent_symbols = [s.lower() for s in fixed_symbols]
-        url = f"http://qt.gtimg.cn/q={','.join(tencent_symbols)}"
-        
         try:
-            response = cls._session.get(url, timeout=5, proxies={"http": None, "https": None})
+            url = f"http://qt.gtimg.cn/q={','.join(tencent_symbols)}"
+            response = cls._session.get(url, timeout=(3, 8), proxies={"http": None, "https": None})
             response.encoding = 'gbk'
-            rt_data = cls._parse_tencent_rt(response.text)
-            spot_fallback = cls._get_spot_snapshot_map(fixed_symbols)
-            cached_fallback = cls._build_realtime_fallback(fixed_symbols, spot_fallback)
-
-            if not rt_data:
-                logger.warning("Tencent realtime returned no rows, using fallback data.")
-                return cached_fallback
-            
-            for sym, data in rt_data.items():
-                fallback = cached_fallback.get(sym) or spot_fallback.get(sym, {})
-                data.update(cls._merge_realtime_payload(sym, data, fallback, source='tencent'))
-                
-                # 注入高准确度股息率：直接从雪球获取最新股息率
-                try:
-                    xq_yield = FundamentalService.get_xueqiu_dividend_yield(sym)
-                    if xq_yield > 0:
-                        data['dividend_yield'] = xq_yield
-                except Exception as xq_err:
-                    logger.warning(f"Failed to fetch dividend yield from Xueqiu for {sym}: {xq_err}")
-
-            for fixed in fixed_symbols:
-                if fixed not in rt_data and fixed in cached_fallback:
-                    rt_data[fixed] = cached_fallback[fixed]
-
-            if fetch_fundamentals and rt_data:
-                from concurrent.futures import ThreadPoolExecutor
-                
-                def _update_fundamental_task(fixed, data):
-                    try:
-                        price = data.get('price', 0)
-                        if price <= 0: return fixed, {}
-                        
-                        updates = {}
-                        # 1. 获取实时股息率 (并发) - 已统一使用 ScreenerService 计算，此处跳过以保持一致性
-                        pass
-                        
-                        # 2. 获取 TTM 财务数据 (并发)
-                        df_fund = FundamentalService.get_ttm_fundamentals(fixed)
-                        total_shares = data.get('total_shares', 0)
-                        if not df_fund.empty and total_shares > 0:
-                            latest_f = df_fund.iloc[-1]
-                            if latest_f.get('TOTAL_PARENT_EQUITY', 0) > 0:
-                                updates['pb'] = round((price * total_shares) / latest_f['TOTAL_PARENT_EQUITY'], 2)
-                            if latest_f.get('ttm_profit', 0) > 0:
-                                updates['pe'] = round((price * total_shares) / latest_f['ttm_profit'], 2)
-                        return fixed, updates
-                    except Exception as e:
-                        logger.warning(f"Concurrent fundamental task failed for {fixed}: {e}")
-                        # 兜底：尝试从数据库快照读取
-                        try:
-                            from .models import FundamentalSnapshot
-                            snap = FundamentalSnapshot.objects.filter(symbol=fixed).order_by('-date').first()
-                            if snap:
-                                return fixed, {'pe': snap.pe, 'pb': snap.pb}
-                        except Exception: pass
-                        return fixed, {}
-
-                # 使用线程池并发执行 IO 密集型任务
-                with ThreadPoolExecutor(max_workers=min(len(rt_data), 5)) as executor:
-                    futures = [executor.submit(_update_fundamental_task, sym, data) for sym, data in rt_data.items()]
-                    for future in futures:
-                        sym, updates = future.result()
-                        if updates:
-                            rt_data[sym].update(updates)
-
-            cls._cache_realtime_success(rt_data)
-            return rt_data
+            tencent_data = cls._parse_tencent_rt(response.text)
+            for sym, data in tencent_data.items():
+                rt_data[sym] = cls._normalize_realtime_payload(sym, data, source='tencent')
         except Exception as e:
-            logger.error(f"PriceService Realtime Error: {e}")
-            return cls._build_realtime_fallback(fixed_symbols)
+            logger.warning(f"Tencent realtime failed: {e}")
+
+        # ② 东财快照补全缺失字段（PE/PB/market_cap，价格以腾讯为准）
+        spot = cls._get_spot_snapshot_map(fixed_symbols)
+        for sym in fixed_symbols:
+            if sym not in rt_data:
+                # 腾讯没有的标的，用东财快照
+                if sym in spot and spot[sym].get('price', 0) > 0:
+                    rt_data[sym] = spot[sym]
+            else:
+                # 腾讯有的标的，只补缺失字段（不覆盖价格）
+                spot_row = spot.get(sym, {})
+                for field in ['pe', 'pb', 'market_cap', 'total_shares']:
+                    if rt_data[sym].get(field, 0) <= 0 < spot_row.get(field, 0):
+                        rt_data[sym][field] = spot_row[field]
+
+        # ③ 上次成功缓存补缺失
+        last_cache = cls._get_last_realtime_map(fixed_symbols)
+        for sym in fixed_symbols:
+            if sym not in rt_data and sym in last_cache and last_cache[sym].get('price', 0) > 0:
+                rt_data[sym] = last_cache[sym]
+
+        # ④ 雪球F10兜底仍然缺失的标的（含PE/PB/股息率/ROE等）
+        still_missing = [s for s in fixed_symbols if s not in rt_data]
+        if still_missing:
+            xq_data = cls._fetch_realtime_from_xueqiu_f10(still_missing)
+            for sym, data in xq_data.items():
+                merge_src = last_cache.get(sym) or spot.get(sym, {})
+                data.update(cls._merge_realtime_payload(sym, data, merge_src, source='xueqiu'))
+                rt_data[sym] = data
+
+        # ⑤ 新浪兜底仍然缺失的标的（仅价格）
+        still_missing = [s for s in fixed_symbols if s not in rt_data]
+        if still_missing:
+            sina_data = cls._fetch_realtime_from_sina(still_missing)
+            for sym, data in sina_data.items():
+                merge_src = last_cache.get(sym) or {}
+                data.update(cls._merge_realtime_payload(sym, data, merge_src, source='sina'))
+                rt_data[sym] = data
+
+        # ⑥ 合并缓存补全缺失字段（PE/PB/market_cap 等）
+        for sym in fixed_symbols:
+            if sym not in rt_data:
+                continue
+            merge_src = last_cache.get(sym) or spot.get(sym, {})
+            if merge_src:
+                rt_data[sym].update(cls._merge_realtime_payload(sym, rt_data[sym], merge_src, source=rt_data[sym].get('source', 'merged')))
+
+        # ⑦ 雪球股息率：始终并发获取
+        if rt_data:
+            from concurrent.futures import ThreadPoolExecutor as _Pool
+            def _fetch_xq_yield(sym):
+                try:
+                    y = FundamentalService.get_xueqiu_dividend_yield(sym)
+                    return sym, y if y > 0 else 0
+                except Exception:
+                    return sym, 0
+            with _Pool(max_workers=min(len(rt_data), 8)) as pool:
+                for sym, y in pool.map(lambda s: _fetch_xq_yield(s), list(rt_data.keys())):
+                    if y > 0:
+                        rt_data[sym]['dividend_yield'] = y
+
+        if fetch_fundamentals and rt_data:
+            from concurrent.futures import ThreadPoolExecutor
+
+            def _update_fundamental_task(fixed, data):
+                try:
+                    price = data.get('price', 0)
+                    if price <= 0: return fixed, {}
+
+                    updates = {}
+
+                    # TTM 财务数据 → PE/PB
+                    df_fund = FundamentalService.get_ttm_fundamentals(fixed)
+                    total_shares = data.get('total_shares', 0)
+                    if not df_fund.empty and total_shares > 0:
+                        latest_f = df_fund.iloc[-1]
+                        if latest_f.get('TOTAL_PARENT_EQUITY', 0) > 0:
+                            updates['pb'] = round((price * total_shares) / latest_f['TOTAL_PARENT_EQUITY'], 2)
+                        if latest_f.get('ttm_profit', 0) > 0:
+                            updates['pe'] = round((price * total_shares) / latest_f['ttm_profit'], 2)
+                    return fixed, updates
+                except Exception as e:
+                    logger.warning(f"Concurrent fundamental task failed for {fixed}: {e}")
+                    try:
+                        from .models import FundamentalSnapshot
+                        snap = FundamentalSnapshot.objects.filter(symbol=fixed).order_by('-date').first()
+                        if snap:
+                            return fixed, {'pe': snap.pe, 'pb': snap.pb}
+                    except Exception: pass
+                    return fixed, {}
+
+            with ThreadPoolExecutor(max_workers=min(len(rt_data), 5)) as executor:
+                futures = [executor.submit(_update_fundamental_task, sym, data) for sym, data in rt_data.items()]
+                for future in futures:
+                    sym, updates = future.result()
+                    if updates:
+                        rt_data[sym].update(updates)
+
+        # ⑧ 最终兜底：StockScreenerSnapshot DB 补全仍然缺失的估值字段
+        for sym, data in rt_data.items():
+            if data.get('pe', 0) > 0 and data.get('pb', 0) > 0 and data.get('dividend_yield', 0) > 0:
+                continue
+            try:
+                from .models import StockScreenerSnapshot
+                snap = StockScreenerSnapshot.objects.filter(symbol=sym).order_by('-snapshot_date').first()
+                if snap:
+                    if data.get('pe', 0) <= 0 and snap.pe > 0:
+                        data['pe'] = snap.pe
+                    if data.get('pb', 0) <= 0 and snap.pb > 0:
+                        data['pb'] = snap.pb
+                    if data.get('dividend_yield', 0) <= 0 and snap.dividend_yield > 0:
+                        data['dividend_yield'] = snap.dividend_yield
+                    if data.get('market_cap', 0) <= 0 and snap.market_cap > 0:
+                        data['market_cap'] = snap.market_cap
+                        if data.get('price', 0) > 0:
+                            data['total_shares'] = snap.market_cap / data['price']
+            except Exception:
+                pass
+
+        cls._cache_realtime_success(rt_data)
+        return rt_data
 
     @classmethod
     def _parse_tencent_rt(cls, text):
@@ -354,10 +424,118 @@ class PriceService:
         return []
 
     @classmethod
+    def _fetch_realtime_from_sina(cls, symbols):
+        """新浪分钟数据兜底实时行情（用最后一条分钟线作为最新价）"""
+        result = {}
+        for symbol in symbols:
+            fixed = cls._fix_symbol(symbol)
+            try:
+                import akshare as ak
+                sina_symbol = fixed.lower()
+                df = ak.stock_zh_a_minute(symbol=sina_symbol, period='1')
+                if df is None or df.empty:
+                    continue
+                last = df.iloc[-1]
+                price = cls._safe_float(last.get('close'))
+                if price > 0:
+                    result[fixed] = {
+                        'symbol': fixed,
+                        'price': price,
+                        'name': fixed,
+                        'source': 'sina_minute',
+                    }
+            except Exception as e:
+                logger.debug(f"Sina realtime fallback failed for {symbol}: {e}")
+        return result
+
+    @classmethod
+    def _fetch_realtime_from_xueqiu_f10(cls, symbols):
+        """雪球F10兜底实时行情（含PE/PB/股息率等指标）
+
+        使用 get_xueqiu_f10 返回的 normalized_quote（字段名已统一）
+        """
+        result = {}
+        for symbol in symbols:
+            fixed = cls._fix_symbol(symbol)
+            try:
+                f10 = FundamentalService.get_xueqiu_f10(fixed)
+                nq = f10.get('normalized_quote', {})
+                price = cls._safe_float(nq.get('price'))
+                if price <= 0:
+                    continue
+                result[fixed] = {
+                    'name': fixed,
+                    'price': price,
+                    'change_amount': 0.0,
+                    'change_percent': cls._safe_float(nq.get('change_percent')),
+                    'pe': cls._safe_float(nq.get('pe')),
+                    'pb': cls._safe_float(nq.get('pb')),
+                    'dividend_yield': cls._safe_float(nq.get('dividend_yield')),
+                    'market_cap': cls._safe_float(nq.get('market_cap')),
+                    'total_shares': cls._safe_float(nq.get('total_shares')),
+                    'source': 'xueqiu',
+                }
+            except Exception as e:
+                logger.debug(f"Xueqiu F10 realtime fallback failed for {symbol}: {e}")
+        return result
+
+    @classmethod
+    def _fetch_intraday_from_sina(cls, symbol):
+        """新浪盘中数据兜底 (仅当日数据)"""
+        try:
+            import akshare as ak
+            from datetime import datetime
+            sina_symbol = symbol.lower()
+            df = ak.stock_zh_a_minute(symbol=sina_symbol, period='1')
+            if df is None or df.empty:
+                return []
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            points = []
+            for _, row in df.iterrows():
+                raw = str(row.get('day', ''))
+                p = cls._safe_float(row.get('close'))
+                if p <= 0 or not raw:
+                    continue
+                # 只保留当日数据
+                date_part = raw.split(' ')[0] if ' ' in raw else ''
+                if date_part and date_part != today_str:
+                    continue
+                t = cls._normalize_intraday_time(raw)
+                if not t:
+                    continue
+                points.append({'time': t, 'price': round(p, 2)})
+            return points
+        except Exception as e:
+            logger.debug(f"Sina intraday fallback failed for {symbol}: {e}")
+            return []
+
+    @classmethod
     def _get_intraday_stale(cls, symbol):
         return cls._normalize_intraday_cache_value(
             cls._cache_get(cls._intraday_single_stale_cache_key(symbol))
         )
+
+    @classmethod
+    def _normalize_intraday_time(cls, raw_time):
+        """将各种时间格式统一为 HHMM 四位数字。
+
+        兼容格式:
+          - '0930'        (腾讯)
+          - '09:30'       (新浪/通用)
+          - '09:30:00'    (带秒)
+          - '2026-06-04 09:30:00' (完整 datetime)
+        """
+        t = str(raw_time).strip()
+        if not t:
+            return ''
+        # 完整 datetime → 取时间部分
+        if ' ' in t:
+            t = t.split(' ')[1]
+        # 去掉冒号，取前4位
+        t = t.replace(':', '')
+        if len(t) >= 4 and t[:4].isdigit():
+            return t[:4]
+        return t
 
     @classmethod
     def _parse_intraday_minutes(cls, minutes):
@@ -369,8 +547,11 @@ class PriceService:
             price = cls._safe_float(fields[1])
             if price <= 0:
                 continue
+            t = cls._normalize_intraday_time(fields[0])
+            if not t:
+                continue
             history.append({
-                'time': fields[0],
+                'time': t,
                 'price': round(price, 2),
             })
         return history
@@ -426,7 +607,7 @@ class PriceService:
                  # 增量抓取：只需抓取极少量数据进行补齐 (腾讯接口 limit 设置小一点)
                  incremental_url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={lower_symbol},{fetch_period},,,5,none"
                  try:
-                     resp = cls._session.get(incremental_url, timeout=5)
+                     resp = cls._session.get(incremental_url, timeout=(8, 15), proxies={"http": None, "https": None})
                      inc_data = resp.json().get('data', {}).get(lower_symbol, {}).get(fetch_period) or []
                      if inc_data:
                          new_points = []
@@ -449,7 +630,7 @@ class PriceService:
         # 如果缓存缺失，执行全量抓取
         if not price_list:
             try:
-                resp = cls._session.get(url_none, timeout=8)
+                resp = cls._session.get(url_none, timeout=8, proxies={"http": None, "https": None})
                 data_json = resp.json()
                 data_res = data_json.get('data', {}).get(lower_symbol, {})
                 days = data_res.get(fetch_period) or []
@@ -802,16 +983,16 @@ class PriceService:
         for symbol in missing_symbols:
             s = symbol.lower()
             url = f"http://ifzq.gtimg.cn/appstock/app/minute/query?code={s}"
-            
+
             try:
-                resp = cls._session.get(url, timeout=5)
+                resp = cls._session.get(url, timeout=(8, 15), proxies={"http": None, "https": None})
                 data = resp.json()
                 if data.get('code') != 0:
                     stale = cls._get_intraday_stale(symbol)
                     if stale:
                         results[symbol] = stale
                     continue
-                
+
                 stock_data = data.get('data', {}).get(s, {})
                 minutes = stock_data.get('data', {}).get('data', [])
                 history = cls._parse_intraday_minutes(minutes)
@@ -825,10 +1006,17 @@ class PriceService:
                     if stale:
                         results[symbol] = stale
             except Exception as e:
-                logger.error(f"PriceService Intraday Error for {symbol}: {e}")
-                stale = cls._get_intraday_stale(symbol)
-                if stale:
-                    results[symbol] = stale
+                logger.warning(f"PriceService Tencent Intraday Error for {symbol}: {e}, trying Sina fallback")
+                history = cls._fetch_intraday_from_sina(symbol)
+                if history:
+                    results[symbol] = history
+                    payload = {'points': history}
+                    cls._cache_set(cls._intraday_single_cache_key(symbol), payload, cls.INTRADAY_CACHE_TTL)
+                    cls._cache_set(cls._intraday_single_stale_cache_key(symbol), payload, cls.INTRADAY_STALE_CACHE_TTL)
+                else:
+                    stale = cls._get_intraday_stale(symbol)
+                    if stale:
+                        results[symbol] = stale
         
         return cls._align_intraday(results)
 

@@ -89,10 +89,10 @@
       </ul>
 
       <h4>护城河强度</h4>
-      <p>基于毛利率水平和稳定性判断：</p>
+      <p>综合毛利率水平、波动率、ROIC-WACC 价差判断：</p>
       <div class="thresholds">
-        <span class="threshold threshold-green">宽护城河：毛利率≥45% 且 波动≤4%</span>
-        <span class="threshold threshold-yellow">中等护城河：毛利率≥30% 且 波动≤7%</span>
+        <span class="threshold threshold-green">宽护城河：高毛利率+低波动+ROIC持续高于资本成本</span>
+        <span class="threshold threshold-yellow">中等护城河：中等毛利率+可控波动</span>
         <span class="threshold threshold-gray">待验证：低于上述标准</span>
       </div>
 
@@ -223,6 +223,24 @@
             </div>
             <div class="signal-item">
               <span>户均持股</span><strong>{{ formatCount(shareholderSummary.latest_avg_shares_per_holder) }}</strong>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="managementQualitySummary" class="signal-group">
+          <div class="signal-group-head">
+            <span>管理层质量</span>
+            <strong>{{ managementQualitySummary.capital_efficiency_label }}</strong>
+          </div>
+          <div class="signal-items">
+            <div class="signal-item">
+              <span>股本稀释</span><strong>{{ managementQualitySummary.share_dilution_trend }}</strong>
+            </div>
+            <div class="signal-item">
+              <span>资本效率</span><strong>{{ managementQualitySummary.capital_efficiency_label }}</strong>
+            </div>
+            <div class="signal-item">
+              <span>留存质量</span><strong>{{ managementQualitySummary.earnings_retention_quality }}</strong>
             </div>
           </div>
         </div>
@@ -427,6 +445,7 @@ const stabilitySummary = ref<any | null>(null)
 const balanceSheetSummary = ref<any | null>(null)
 const shareholderHistory = ref<any[]>([])
 const shareholderSummary = ref<any | null>(null)
+const managementQualitySummary = ref<any | null>(null)
 const shareholderError = ref('')
 const quoteLoadingActive = computed(() => loading.value || shareholderLoading.value)
 const { loadingQuote } = useInvestorLoadingQuotes(quoteLoadingActive)
@@ -517,6 +536,7 @@ const applyQualityPayload = (data: any) => {
   capitalAllocationSummary.value = data.capital_allocation_summary || null
   stabilitySummary.value = data.stability_summary || null
   balanceSheetSummary.value = data.balance_sheet_summary || null
+  managementQualitySummary.value = data.management_quality_summary || null
 }
 
 const fetchShareholderStructure = async () => {

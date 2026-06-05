@@ -24,6 +24,9 @@ class ApiConfig(AppConfig):
             from . import scheduler
             scheduler.start()
 
+        # 启动时清理可能因 numpy 版本不兼容而损坏的缓存
+        self._purge_incompatible_cache()
+
         # 后台预热缓存，不阻塞服务启动（_warm_started 防重复）
         if not ApiConfig._warm_started:
             ApiConfig._warm_started = True
@@ -40,6 +43,28 @@ class ApiConfig(AppConfig):
         cursor.execute('PRAGMA busy_timeout=5000;')
         cursor.execute('PRAGMA temp_store=MEMORY;')
 
+    @staticmethod
+    def _purge_incompatible_cache():
+        """清理可能因 numpy/pandas 版本不兼容而损坏的缓存条目"""
+        from django.core.cache import cache
+        # 仅检查已知会存储 DataFrame 的 key 前缀
+        problematic_prefixes = ('fundamentals_v7_', 'cashflow_yearly_', 'cashflow_v7_')
+        try:
+            # Django 的 file-based cache 支持 keys()，但 memory cache 不支持
+            all_keys = list(cache.keys('*')) if hasattr(cache, 'keys') else []
+            purged = 0
+            for key in all_keys:
+                if any(key.startswith(p) for p in problematic_prefixes):
+                    try:
+                        cache.get(key)
+                    except Exception:
+                        cache.delete(key)
+                        purged += 1
+            if purged:
+                print(f"  Purged {purged} incompatible cache entries")
+        except Exception:
+            pass  # 如果 cache 不支持 keys()，跳过
+
     def warm_valuation_cache(self):
         """后台预热常用估值、深度分析与回测缓存，不阻塞服务启动
 
@@ -55,19 +80,77 @@ class ApiConfig(AppConfig):
         from .analysis_service import AnalysisService
         from .history_backtest_service import HistoryBacktestService
 
-        # 延迟 5 秒等 Django 服务完全就位
-        time.sleep(5)
+        # 短暂延迟等 Django 服务就位（从 5s 降到 1s）
+        time.sleep(1)
 
         monitored_symbols = list(Stock.objects.order_by('symbol').values_list('symbol', flat=True))
         core_symbols = monitored_symbols or ['SZ000423', 'SZ002304']
 
-        # Stage 1: 轻量级预热（原逻辑）
+        # Stage 1: 轻量级预热（首页关键接口 + 基础数据）
+        # 策略：实时价格优先，重型预热后置
         try:
             print(f"[Cache Warming] Stage 1: Lightweight pre-warming for {len(core_symbols)} symbols...")
-            PriceService.refresh_snapshot_cache()
-            for symbol in core_symbols[:20]:
-                FundamentalService.get_ttm_fundamentals(symbol)
-                PriceService.get_historical_data([symbol], limit=120, period='month')
+
+            # 1a. 最高优先级：实时行情（首页首屏数据，必须最快可用）
+            try:
+                PriceService.get_realtime_price(core_symbols[:20], fetch_fundamentals=False)
+                print("  realtime prices warmed (fast path)")
+            except Exception as e:
+                print(f"  realtime prices warming failed: {e}")
+
+            # 1b. 预热 HTTP 连接池（避免首次请求冷启动延迟）
+            try:
+                PriceService._session.get("http://qt.gtimg.cn/q=sh600519", timeout=3)
+                print("  connection pool warmed")
+            except Exception:
+                pass
+
+            # 1c. 东方财富快照（批量，一次请求，带熔断）
+            try:
+                PriceService.refresh_snapshot_cache()
+                print("  spot snapshot OK")
+            except Exception as e:
+                print(f"  spot snapshot failed (will use stale cache): {e}")
+
+            # 1d. 探测 TTM 财务数据可用性（轻量探测，不阻塞）
+            ttm_available = False
+            try:
+                from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+                with ThreadPoolExecutor(max_workers=1) as probe_pool:
+                    probe_future = probe_pool.submit(FundamentalService.get_ttm_fundamentals, core_symbols[0])
+                    test_df = probe_future.result(timeout=5)
+                    ttm_available = not test_df.empty
+            except Exception:
+                print("  TTM probe failed, skipping fundamentals warming")
+
+            # 1e. TTM + 历史价格预热（仅在数据源可达时执行）
+            if ttm_available:
+                for symbol in core_symbols[:20]:
+                    try:
+                        FundamentalService.get_ttm_fundamentals(symbol)
+                    except Exception:
+                        pass
+                    try:
+                        PriceService.get_historical_data([symbol], limit=120, period='month')
+                    except Exception:
+                        pass
+                print("  TTM + historical warmed")
+            else:
+                for symbol in core_symbols[:20]:
+                    try:
+                        PriceService.get_historical_data([symbol], limit=120, period='month')
+                    except Exception:
+                        pass
+                print("  historical warmed (TTM skipped)")
+
+            # 1f. 分红日历（异步，不阻塞首屏）
+            try:
+                from .views import _build_dividend_calendar
+                _build_dividend_calendar()
+                print("  dividend calendar warmed")
+            except Exception as e:
+                print(f"  dividend calendar warming failed: {e}")
+
             print("[Cache Warming] Stage 1 completed.")
         except Exception as e:
             print(f"[Cache Warming] Stage 1 warning: {e}")
@@ -75,23 +158,35 @@ class ApiConfig(AppConfig):
         if not core_symbols:
             return
 
-        # Stage 2: 估值分析 + 回测复盘（重，逐个标的串行，避免压垮数据源）
+        # Stage 2: 估值分析 + 回测复盘（逐个串行，连续失败 2 次则跳过剩余）
         print(f"[Cache Warming] Stage 2: Warming analysis & backtest for {len(core_symbols)} stocks...")
+        consecutive_fail = 0
         for i, symbol in enumerate(core_symbols, 1):
             try:
                 AnalysisService.get_analysis(symbol)
                 HistoryBacktestService.get_history_backtest(symbol)
                 print(f"  [{i}/{len(core_symbols)}] {symbol} analysis+backtest OK")
+                consecutive_fail = 0
             except Exception as e:
                 print(f"  [{i}/{len(core_symbols)}] {symbol} warning: {e}")
+                consecutive_fail += 1
+                if consecutive_fail >= 2:
+                    print(f"  consecutive failures, skipping remaining Stage 2")
+                    break
 
-        # Stage 3: 财务质量（独立预热，包含股东结构等更多数据）
+        # Stage 3: 财务质量（连续失败 2 次则跳过剩余）
         print(f"[Cache Warming] Stage 3: Warming quality cache for {len(core_symbols)} stocks...")
+        consecutive_fail = 0
         for i, symbol in enumerate(core_symbols, 1):
             try:
                 FundamentalService.get_quality_data(symbol, include_shareholder=True)
                 print(f"  [{i}/{len(core_symbols)}] {symbol} quality OK")
+                consecutive_fail = 0
             except Exception as e:
                 print(f"  [{i}/{len(core_symbols)}] {symbol} quality warning: {e}")
+                consecutive_fail += 1
+                if consecutive_fail >= 2:
+                    print(f"  consecutive failures, skipping remaining Stage 3")
+                    break
 
         print("[Cache Warming] Full pre-warming completed.")

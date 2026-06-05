@@ -88,15 +88,24 @@ class News(models.Model):
     title = models.CharField(max_length=300, verbose_name='标题')
     pub_date = models.DateField(verbose_name='发布日期')
     source = models.CharField(max_length=50, verbose_name='来源')
-    url = models.URLField(verbose_name='链接')
-    
+    url = models.URLField(verbose_name='链接', blank=True, default='')
+    urls = models.TextField(verbose_name='所有链接', blank=True, default='[]')  # JSON array of all source URLs
+
     class Meta:
         verbose_name = '新闻'
         verbose_name_plural = '新闻'
         ordering = ['-pub_date']
-    
+
     def __str__(self):
         return self.title[:50]
+
+    def get_urls(self):
+        """获取所有链接列表"""
+        import json
+        try:
+            return json.loads(self.urls)
+        except (json.JSONDecodeError, TypeError):
+            return [self.url] if self.url else []
 
 
 class Report(models.Model):
@@ -188,3 +197,88 @@ class StockScreenerSnapshot(models.Model):
 
     def __str__(self):
         return f"{self.snapshot_date} {self.symbol}"
+
+
+class Portfolio(models.Model):
+    """投资组合"""
+    name = models.CharField(max_length=100, default='默认组合', verbose_name='组合名称')
+    total_capital = models.DecimalField(max_digits=15, decimal_places=2, default=0, verbose_name='总资金')
+    is_default = models.BooleanField(default=False, verbose_name='是否默认组合')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = '投资组合'
+        verbose_name_plural = '投资组合'
+        ordering = ['-is_default', '-updated_at']
+
+    def __str__(self):
+        return self.name
+
+
+class PortfolioHolding(models.Model):
+    """组合持仓"""
+    portfolio = models.ForeignKey(Portfolio, on_delete=models.CASCADE, related_name='holdings', verbose_name='组合')
+    stock = models.ForeignKey(Stock, on_delete=models.CASCADE, verbose_name='股票')
+    allocation_pct = models.FloatField(default=0, verbose_name='配置比例(%)')
+    share_count = models.IntegerField(default=0, verbose_name='持股数量')
+    buy_price = models.FloatField(null=True, blank=True, verbose_name='买入价格')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = '组合持仓'
+        verbose_name_plural = '组合持仓'
+        unique_together = ['portfolio', 'stock']
+        ordering = ['-allocation_pct']
+
+    def __str__(self):
+        return f"{self.portfolio.name} - {self.stock.name}"
+
+
+class AlertRule(models.Model):
+    """告警规则"""
+    RULE_TYPES = [
+        ('sentiment_low', '情感分数低于阈值'),
+        ('sentiment_high', '情感分数高于阈值'),
+        ('pe_low', 'PE 低于阈值'),
+        ('pe_high', 'PE 高于阈值'),
+        ('pb_low', 'PB 低于阈值'),
+        ('pb_high', 'PB 高于阈值'),
+        ('dividend_yield_high', '股息率高于阈值'),
+        ('hot_spike', '热度飙升'),
+        ('margin_decline', '毛利率连续下滑'),
+        ('receivable_surge', '应收账款增速超营收'),
+        ('cfo_negative', '经营现金流转负'),
+    ]
+
+    stock = models.ForeignKey(Stock, on_delete=models.CASCADE, related_name='alert_rules', verbose_name='股票')
+    rule_type = models.CharField(max_length=30, choices=RULE_TYPES, verbose_name='规则类型')
+    threshold = models.FloatField(verbose_name='阈值')
+    is_active = models.BooleanField(default=True, verbose_name='是否启用')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = '告警规则'
+        verbose_name_plural = '告警规则'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.stock.name} - {self.get_rule_type_display()}"
+
+
+class AlertLog(models.Model):
+    """告警日志"""
+    rule = models.ForeignKey(AlertRule, on_delete=models.CASCADE, related_name='logs', verbose_name='规则')
+    triggered_at = models.DateTimeField(auto_now_add=True, verbose_name='触发时间')
+    message = models.TextField(verbose_name='告警消息')
+    value = models.FloatField(default=0, verbose_name='触发值')
+    is_read = models.BooleanField(default=False, verbose_name='是否已读')
+
+    class Meta:
+        verbose_name = '告警日志'
+        verbose_name_plural = '告警日志'
+        ordering = ['-triggered_at']
+
+    def __str__(self):
+        return f"{self.rule.stock.name} - {self.triggered_at}"

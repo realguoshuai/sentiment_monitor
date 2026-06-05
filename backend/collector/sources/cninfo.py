@@ -18,9 +18,9 @@ def get_announcements(symbol_code: str) -> list:
     try:
         time.sleep(random.uniform(2, 4))
         
-        # 计算日期范围（最近60天）
+        # 计算日期范围（最近180天）
         end_date = datetime.now().strftime('%Y%m%d')
-        start_date = (datetime.now() - timedelta(days=60)).strftime('%Y%m%d')
+        start_date = (datetime.now() - timedelta(days=180)).strftime('%Y%m%d')
         
         # 获取公告数据
         ann_df = ak.stock_zh_a_disclosure_report_cninfo(

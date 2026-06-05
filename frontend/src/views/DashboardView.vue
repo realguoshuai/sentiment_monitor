@@ -145,6 +145,9 @@
     <WidgetContainer widgetId="kelly" title="凯利仓位" icon="🎲">
       <KellyWidget />
     </WidgetContainer>
+
+    <!-- 告警面板 -->
+    <AlertPanel />
   </div>
 </template>
 
@@ -157,6 +160,7 @@ import HotScoreChart from '@/components/HotScoreChart.vue'
 import StockManagementModal from '@/components/StockManagementModal.vue'
 import ReleaseNotesModal from '@/components/ReleaseNotesModal.vue'
 import WidgetDock from '@/components/WidgetDock.vue'
+import AlertPanel from '@/components/AlertPanel.vue'
 import WidgetContainer from '@/components/WidgetContainer.vue'
 import PortfolioWidget from '@/components/widgets/PortfolioWidget.vue'
 import CompoundWidget from '@/components/widgets/CompoundWidget.vue'
@@ -207,15 +211,15 @@ onMounted(async () => {
     showReleaseNotes.value = true
   }
 
-  // 第二阶段：并行获取所有核心业务数据 (列表、舆情、趋势、价格)
-  // 这能显著减少串行等待时间，提升首屏响应速度
+  // 第二阶段：核心数据并行获取，分红日历异步不阻塞首屏
   await Promise.all([
     store.fetchStocks(),
     store.sentimentData.length ? Promise.resolve() : store.fetchLatestSentiment(),
-    store.fetchDividendCalendar(),
     store.fetchRealtimePrices()
   ])
-  
+  // 分红日历耗时较长（需逐只调外部 API），异步加载不阻塞渲染
+  store.fetchDividendCalendar().catch(() => {})
+
   priceTimer = setInterval(() => {
     store.fetchRealtimePrices()
   }, 10000)

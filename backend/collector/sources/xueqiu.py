@@ -44,7 +44,7 @@ def get_news(symbol_code: str) -> list:
         # 获取雪球资讯
         news_data = fetch_xueqiu_news(stock_code_full)
 
-        for item in news_data[:30]:
+        for item in news_data[:50]:
             news_list.append({
                 'title': item.get('title', '')[:120],
                 'pub_date': item.get('pub_date', ''),

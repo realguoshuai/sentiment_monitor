@@ -197,6 +197,128 @@ class FundamentalService:
             return {'pe': 0.0, 'pb': 0.0, 'dividend_yield': 0.0}
 
     @classmethod
+    def get_xueqiu_f10(cls, symbol: str) -> dict:
+        """从雪球获取完整 F10 数据（报价 + 财务指标），作为 AkShare 的备份链路
+
+        返回字段:
+            quote: pe_ttm, pe_lyr, pb, dividend_yield, eps, navps, market_capital,
+                   float_market_capital, total_shares, float_shares, turnover_rate,
+                   current_year_percent, high52w, low52w, pledge_ratio, dividend
+            latest_indicator: roe, gross_margin, net_margin, revenue_yoy, profit_yoy,
+                              eps, current_ratio, quick_ratio, asset_liab_ratio, roa,
+                              cash_flow_ps, undistri_profit_ps
+            historical_indicators: 最近 N 期的指标列表
+        """
+        symbol = cls._fix_symbol(symbol)
+        cache_key = f"xq_f10_v1_{symbol}"
+        cached = cls._cache_get_value(cache_key)
+        if cached is not None:
+            return cached
+
+        token = cls.get_xueqiu_token()
+        if not token:
+            return {}
+
+        try:
+            raw = Fetcher.fetch_xueqiu_f10(symbol, token)
+            quote = raw.get('quote', {})
+            indicators = raw.get('indicators', [])
+
+            # 解析报价
+            q = {
+                'pe_ttm': float(quote.get('pe_ttm') or 0),
+                'pe_lyr': float(quote.get('pe_lyr') or 0),
+                'pe_forecast': float(quote.get('pe_forecast') or 0),
+                'pb': float(quote.get('pb') or 0),
+                'dividend_yield': float(quote.get('dividend_yield') or 0),
+                'eps': float(quote.get('eps') or 0),
+                'navps': float(quote.get('navps') or 0),
+                'market_cap': float(quote.get('market_capital') or 0),
+                'float_market_cap': float(quote.get('float_market_capital') or 0),
+                'total_shares': float(quote.get('total_shares') or 0),
+                'float_shares': float(quote.get('float_shares') or 0),
+                'turnover_rate': float(quote.get('turnover_rate') or 0),
+                'ytd_return': float(quote.get('current_year_percent') or 0),
+                'high_52w': float(quote.get('high52w') or 0),
+                'low_52w': float(quote.get('low52w') or 0),
+                'pledge_ratio': float(quote.get('pledge_ratio') or 0),
+                'dividend_per_share': float(quote.get('dividend') or 0),
+                'current_price': float(quote.get('current') or 0),
+            }
+
+            def _val(pair):
+                """雪球指标格式 [value, yoy_change]，取第一个"""
+                if isinstance(pair, (list, tuple)) and pair:
+                    try:
+                        return float(pair[0] or 0)
+                    except (TypeError, ValueError):
+                        return 0.0
+                return 0.0
+
+            # 解析最新一期财务指标
+            latest = indicators[0] if indicators else {}
+            li = {
+                'report_name': latest.get('report_name', ''),
+                'roe': _val(latest.get('avg_roe')),
+                'gross_margin': _val(latest.get('gross_selling_rate')),
+                'net_margin': _val(latest.get('net_selling_rate')),
+                'revenue_yoy': _val(latest.get('operating_income_yoy')),
+                'net_profit_yoy': _val(latest.get('net_profit_atsopc_yoy')),
+                'eps': _val(latest.get('basic_eps')),
+                'cash_flow_ps': _val(latest.get('operate_cash_flow_ps')),
+                'undistri_profit_ps': _val(latest.get('undistri_profit_ps')),
+                'current_ratio': _val(latest.get('current_ratio')),
+                'quick_ratio': _val(latest.get('quick_ratio')),
+                'asset_liab_ratio': _val(latest.get('asset_liab_ratio')),
+                'roa': _val(latest.get('net_interest_of_total_assets')),
+                'total_revenue': _val(latest.get('total_revenue')),
+                'net_profit': _val(latest.get('net_profit_atsopc')),
+            }
+
+            # 解析历史指标（最近 N 期）
+            history = []
+            for item in indicators:
+                history.append({
+                    'report_name': item.get('report_name', ''),
+                    'roe': _val(item.get('avg_roe')),
+                    'gross_margin': _val(item.get('gross_selling_rate')),
+                    'net_margin': _val(item.get('net_selling_rate')),
+                    'revenue_yoy': _val(item.get('operating_income_yoy')),
+                    'net_profit_yoy': _val(item.get('net_profit_atsopc_yoy')),
+                    'eps': _val(item.get('basic_eps')),
+                    'cash_flow_ps': _val(item.get('operate_cash_flow_ps')),
+                    'current_ratio': _val(item.get('current_ratio')),
+                    'quick_ratio': _val(item.get('quick_ratio')),
+                    'asset_liab_ratio': _val(item.get('asset_liab_ratio')),
+                    'roa': _val(item.get('net_interest_of_total_assets')),
+                })
+
+            # 统一字段名，与 PriceService / 前端 RealtimePrice 接口对齐
+            normalized_quote = {
+                'price': q['current_price'],
+                'pe': q['pe_ttm'],
+                'pb': q['pb'],
+                'dividend_yield': q['dividend_yield'],
+                'market_cap': q['market_cap'],
+                'total_shares': q['total_shares'],
+                'change_percent': q['ytd_return'],
+                'eps': q['eps'],
+                'navps': q['navps'],
+            }
+
+            result = {
+                'quote': q,
+                'normalized_quote': normalized_quote,
+                'latest_indicator': li,
+                'historical_indicators': history,
+            }
+            cls._cache_set_value(cache_key, result, cls.CACHE_TTL)
+            return result
+        except Exception as e:
+            logger.warning("Xueqiu F10 fetch failed for %s: %s", symbol, e)
+            return {}
+
+    @classmethod
     def get_historical_dividends(cls, symbol):
         symbol = cls._fix_symbol(symbol)
         cache_key = f"dividends_v4_{symbol}"
@@ -316,28 +438,29 @@ class FundamentalService:
         try:
             logger.info(f"[Quality] Start fetching full quality data for {symbol}")
 
-            # 并行获取 5 个数据源，减少等待时间
+            # 3 个并发请求，平衡速度和稳定性
             import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-                future_p = executor.submit(cls._fetch_profit_sheet_by_report, symbol)
-                future_b = executor.submit(cls._fetch_balance_sheet_by_report, symbol)
-                future_c = executor.submit(cls.get_yearly_cashflow, symbol)
-                future_d = executor.submit(cls.get_historical_dividends, symbol)
-                future_cap = executor.submit(cls._fetch_market_cap, symbol)
 
-                # 逐个收集结果，单个数据源失败不拖垮整体
-                def _safe_result(future, name, fallback=None):
-                    try:
-                        return future.result()
-                    except Exception as e:
-                        logger.warning(f"[Quality] {name} fetch failed for {symbol}: {e}")
-                        return fallback
+            def _safe_fetch(fetcher, name, *args, **kwargs):
+                try:
+                    return fetcher(*args, **kwargs)
+                except Exception as e:
+                    logger.warning(f"[Quality] {name} fetch failed for {symbol}: {e}")
+                    return pd.DataFrame() if 'sheet' in name or 'cashflow' in name or 'dividend' in name else 0
 
-                df_p = _safe_result(future_p, 'profit_sheet', pd.DataFrame())
-                df_b = _safe_result(future_b, 'balance_sheet', pd.DataFrame())
-                df_c = _safe_result(future_c, 'cashflow', pd.DataFrame())
-                df_d = _safe_result(future_d, 'dividends', pd.DataFrame())
-                m_cap = _safe_result(future_cap, 'market_cap', 0)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                future_p = executor.submit(_safe_fetch, cls._fetch_profit_sheet_by_report, 'profit_sheet', symbol)
+                future_b = executor.submit(_safe_fetch, cls._fetch_balance_sheet_by_report, 'balance_sheet', symbol)
+                future_c = executor.submit(_safe_fetch, cls.get_yearly_cashflow, 'cashflow', symbol)
+                future_d = executor.submit(_safe_fetch, cls.get_historical_dividends, 'dividends', symbol)
+                future_cap = executor.submit(_safe_fetch, cls._fetch_market_cap, 'market_cap', symbol)
+
+                # 等待所有结果
+                df_p = future_p.result()
+                df_b = future_b.result()
+                df_c = future_c.result()
+                df_d = future_d.result()
+                m_cap = future_cap.result()
 
             logger.info(f"[Quality] Data fetched for {symbol}, calculating metrics...")
 
@@ -402,13 +525,20 @@ class FundamentalService:
 
     @classmethod
     def get_f_score(cls, symbol):
-        cache_key = f"f_score_v7_{symbol}"
+        cache_key = f"f_score_v8_{symbol}"
         cached = cls._cache_get_value(cache_key)
         if cached: return cached
         try:
             df_f = cls.get_ttm_fundamentals(symbol)
             df_c = cls.get_ttm_cashflow(symbol)
-            res = Calc.calculate_f_score(df_f, df_c)
+            # 获取原始利润表/资产负债表用于 F-Score 补充项
+            df_p_raw = Fetcher.fetch_profit_sheet(symbol)
+            df_b_raw = Fetcher.fetch_balance_sheet(symbol)
+            # 统一日期格式
+            for df in [df_p_raw, df_b_raw]:
+                if df is not None and not df.empty and 'REPORT_DATE' in df.columns:
+                    df['REPORT_DATE'] = pd.to_datetime(df['REPORT_DATE'])
+            res = Calc.calculate_f_score(df_f, df_c, df_p_raw, df_b_raw)
             cls._cache_set_value(cache_key, res, 3 * 24 * 3600)
             return res
         except Exception: return {"score": 0, "details": []}

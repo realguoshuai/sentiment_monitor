@@ -129,6 +129,8 @@ class FundamentalCalculator:
             'TOTAL_OPERATE_INCOME': ['TOTAL_OPERATE_INCOME', '营业总收入', '营业收入', 'TOTAL_OPERATE_INCOME'],
             'PARENT_NETPROFIT': ['PARENT_NETPROFIT', '归属于母公司所有者的净利润', '净利润', 'PARENT_NETPROFIT'],
             'OPERATE_COST': ['OPERATE_COST', '营业成本', 'OPERATE_COST'],
+            'OPERATE_PROFIT': ['OPERATE_PROFIT', '营业利润', 'OPERATE_PROFIT'],
+            'PROFIT_TOTAL': ['PROFIT_TOTAL', '利润总额', 'PROFIT_TOTAL'],
             'BASIC_EPS': ['BASIC_EPS', '基本每股收益', '每股收益', 'BASIC_EPS'],
             'NOTICE_DATE': ['NOTICE_DATE', '公告日期', '公告日', 'NOTICE_DATE'],
         }
@@ -195,7 +197,6 @@ class FundamentalCalculator:
             df['payout_ratio'] = df.apply(lambda r: cls.safe_ratio(r['dps'], r.get('BASIC_EPS', 0)) * 100 if r.get('BASIC_EPS', 0) > 0 else 0, axis=1)
             
             # 5. 更多指标 (省略部分，保持核心)
-            df['roic_pct'] = df['roe'] # 简化版 roic
             df['revenue_growth_pct'] = df['TOTAL_OPERATE_INCOME'].pct_change().fillna(0) * 100
             
             # 计算股本总数和每股净资产 BVPS (用于资本分配计算)
@@ -231,7 +232,7 @@ class FundamentalCalculator:
             df['reinvestment_rate_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('capex', 0), r.get('cfo', 0)) * 100, axis=1)
             df['retention_ratio_pct'] = 100 - df.get('payout_ratio', 0)
             
-            # Invested Capital & ROIC 兼容计算
+            # Invested Capital & ROIC 计算
             # 当 invested_capital 全为 0（数据源缺少现金/负债字段）时，用归母净资产兜底
             df['invested_capital'] = df.get('invested_capital', 0)
             if (df['invested_capital'] == 0).all():
@@ -241,7 +242,22 @@ class FundamentalCalculator:
                 lambda r: (r['invested_capital'] + (previous_invested_capital.loc[r.name] if pd.notnull(previous_invested_capital.loc[r.name]) else r['invested_capital'])) / 2,
                 axis=1
             )
-            df['roic_proxy_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('PARENT_NETPROFIT', 0), r.get('avg_invested_capital', 1)) * 100, axis=1)
+            # 真正的 ROIC = NOPAT / avg_invested_capital
+            # NOPAT = 营业利润 × (1 - 有效税率)
+            # 有效税率 = 1 - (净利润 / 利润总额)，亏损年份取 25% 默认值
+            df['effective_tax_rate'] = df.apply(
+                lambda r: max(0, min(1, 1 - cls.safe_ratio(r.get('PARENT_NETPROFIT', 0), r.get('PROFIT_TOTAL', 0))))
+                if pd.notnull(r.get('PROFIT_TOTAL')) and r.get('PROFIT_TOTAL', 0) > 0 else 0.25,
+                axis=1
+            )
+            # 优先用营业利润计算 NOPAT，回退到 (营收-成本)
+            df['nopat'] = df.apply(
+                lambda r: r.get('OPERATE_PROFIT', 0) * (1 - r['effective_tax_rate'])
+                if pd.notnull(r.get('OPERATE_PROFIT')) and r.get('OPERATE_PROFIT', 0) != 0
+                else (r.get('TOTAL_OPERATE_INCOME', 0) - r.get('OPERATE_COST', 0)) * (1 - r['effective_tax_rate']),
+                axis=1
+            )
+            df['roic_proxy_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('nopat', 0), r.get('avg_invested_capital', 1)) * 100, axis=1)
             df['roic_pct'] = df['roic_proxy_pct']
             
             df['implied_share_count'] = df.get('shares', 0)
@@ -314,7 +330,7 @@ class FundamentalCalculator:
                     'operating_stability_label': cls.classify_margin_stability(g_vol, n_vol),
                     'return_stability_label': cls.classify_return_stability(roe_vol, roic_proxy_vol),
                     'negative_growth_years': int((stability_window['revenue_growth_pct'] < 0).sum()),
-                    'moat_label': cls.classify_moat_strength(stability_window['gross_margin'].mean(), g_vol, n_vol),
+                    'moat_label': cls.classify_moat_strength(stability_window['gross_margin'].mean(), g_vol, n_vol, stability_window['roic_proxy_pct'].mean() - 10.0),
                     'cyclical_label': cls.classify_cyclicality(rev_vol, (stability_window['revenue_growth_pct'] < 0).sum(), roe_vol, 10),
                 },
                 'balance_sheet_summary': {
@@ -352,11 +368,22 @@ class FundamentalCalculator:
                         float(latest.get('interest_bearing_debt', 0)),
                     ),
                 },
+                'management_quality_summary': {
+                    'share_dilution_trend': cls.classify_share_dilution(stability_window['share_change_pct'].tolist()),
+                    'capital_efficiency_label': cls.classify_capital_efficiency(
+                        float(stability_window['roic_proxy_pct'].mean()),
+                        float(stability_window['bvps_growth_pct'].mean()),
+                    ),
+                    'earnings_retention_quality': cls.classify_retention_quality(
+                        float(stability_window['payout_ratio'].mean()),
+                        float(stability_window['roe'].mean()),
+                        float(stability_window['bvps_growth_pct'].mean()),
+                    ),
+                },
             }
-            # 同时写入 'quality_history' 和 'history' 以兼容新旧前端
             history_df = df.tail(10).copy()
             history_df['year'] = history_df['REPORT_DATE'].dt.year
-            summary['quality_history'] = summary['history'] = history_df.select_dtypes(include=[np.number]).round(4).combine_first(history_df).to_dict(orient='records')
+            summary['quality_history'] = history_df.select_dtypes(include=[np.number]).round(4).combine_first(history_df).to_dict(orient='records')
             return cls.clean_json_data(summary)
         except Exception as e:
             logger.error(f"Calculator Quality Error: {e}")
@@ -517,14 +544,53 @@ class FundamentalCalculator:
         if change_pct >= 10: return '筹码分散'
         return '基本稳定'
 
+    @staticmethod
+    def classify_share_dilution(share_changes):
+        """股本稀释趋势：连续增发/稀释/稳定"""
+        if share_changes is None or len(share_changes) < 2:
+            return '数据不足'
+        positive_count = sum(1 for v in share_changes if v > 2)
+        if positive_count >= len(share_changes) * 0.6:
+            return '持续稀释'
+        if positive_count >= 1:
+            return '有稀释'
+        return '股本稳定'
+
+    @staticmethod
+    def classify_capital_efficiency(roic_mean, bvps_growth_mean):
+        """资本效率：ROIC 与 BVPS 增长的关系"""
+        if roic_mean >= 15 and bvps_growth_mean >= 8:
+            return '高效复利'
+        if roic_mean >= 10 and bvps_growth_mean >= 5:
+            return '效率良好'
+        if roic_mean < 5:
+            return '效率偏低'
+        return '中性'
+
+    @staticmethod
+    def classify_retention_quality(payout_mean, roe_mean, bvps_growth_mean):
+        """留存利润再投资质量：留存收益是否转化为每股价值增长"""
+        if payout_mean >= 60:
+            return '高分红导向'
+        retention = 100 - payout_mean
+        if retention <= 0:
+            return '全额分红'
+        # 留存利润应带来 BVPS 增长，如果 BVPS 增长远低于 ROE×留存率，说明再投资效率低
+        expected_growth = roe_mean * retention / 100
+        if expected_growth > 0 and bvps_growth_mean >= expected_growth * 0.7:
+            return '留存高效'
+        if expected_growth > 0 and bvps_growth_mean < expected_growth * 0.3:
+            return '留存低效'
+        return '中性'
+
     @classmethod
-    def calculate_f_score(cls, df_fund, df_cash):
-        """计算 F-Score 核心指标"""
+    def calculate_f_score(cls, df_fund, df_cash, df_profit_raw=None, df_balance_raw=None):
+        """计算 F-Score 核心指标（9 项完整版）"""
         if df_fund.empty: return {"score": 0, "details": []}
-        
+
         latest = df_fund.iloc[-1]
         prev_year = df_fund[df_fund['REPORT_DATE'] <= (latest['REPORT_DATE'] - pd.Timedelta(days=330))].tail(1)
-        
+
         cfo_val = 0
         cfo_available = False
         if not df_cash.empty:
@@ -532,20 +598,20 @@ class FundamentalCalculator:
             if not latest_cash.empty:
                 cfo_val = latest_cash.iloc[0]['ttm_cfo']
                 cfo_available = True
-        
+
         score = 0
         total_possible = 0
         details = []
-        
+
         # 1. 盈利能力
         assets = latest.get('TOTAL_ASSETS', latest.get('TOTAL_PARENT_EQUITY', 0))
         roa = (latest['ttm_profit'] / assets) if pd.notnull(assets) and assets > 0 else 0
-        
+
         p = roa > 0
         total_possible += 1
         if p: score += 1
         details.append({"name": "ROA > 0", "passed": p, "val": f"{round(roa*100, 2)}%"})
-        
+
         p = latest['ttm_profit'] > 0
         total_possible += 1
         if p: score += 1
@@ -573,8 +639,113 @@ class FundamentalCalculator:
         else:
             details.append({"name": "ROA 同比提升", "passed": False, "val": "无历史数据"})
 
+        # 3. 杠杆与流动性（需要原始利润表/资产负债表）
+        if df_profit_raw is not None and not df_profit_raw.empty and df_balance_raw is not None and not df_balance_raw.empty:
+            extra = cls._calculate_f_score_extra(df_fund, df_profit_raw, df_balance_raw)
+            for item in extra:
+                total_possible += 1
+                if item['passed']: score += 1
+                details.append(item)
+
         final_score = round((score / total_possible) * 10, 1) if total_possible else 0
         return {"score": min(final_score, 10.0), "details": details}
+
+    @classmethod
+    def _calculate_f_score_extra(cls, df_fund, df_profit_raw, df_balance_raw):
+        """F-Score 补充项：杠杆改善、流动性改善、毛利率提升、资产周转率提升"""
+        results = []
+        latest = df_fund.iloc[-1]
+        prev_year = df_fund[df_fund['REPORT_DATE'] <= (latest['REPORT_DATE'] - pd.Timedelta(days=330))].tail(1)
+
+        if prev_year.empty:
+            for name in ['杠杆改善', '流动性改善', '毛利率提升', '资产周转率提升']:
+                results.append({"name": name, "passed": False, "val": "无历史数据"})
+            return results
+
+        latest_date = latest['REPORT_DATE']
+        prev_date = prev_year.iloc[0]['REPORT_DATE']
+
+        # 资产负债率
+        def get_debt_ratio(df, date):
+            row = df[df['REPORT_DATE'] == date]
+            if row.empty: return None
+            r = row.iloc[0]
+            total_assets = pd.to_numeric(r.get('TOTAL_ASSETS', 0), errors='coerce')
+            total_liab = pd.to_numeric(r.get('TOTAL_LIABILITIES', r.get('TOTAL_LIAB', 0)), errors='coerce')
+            if pd.notnull(total_assets) and total_assets > 0:
+                return float(total_liab / total_assets)
+            return None
+
+        cur_debt_ratio = get_debt_ratio(df_balance_raw, latest_date)
+        prev_debt_ratio = get_debt_ratio(df_balance_raw, prev_date)
+        if cur_debt_ratio is not None and prev_debt_ratio is not None:
+            p = cur_debt_ratio < prev_debt_ratio
+            results.append({"name": "杠杆改善", "passed": p,
+                            "val": f"{round(cur_debt_ratio*100, 1)}% vs {round(prev_debt_ratio*100, 1)}%"})
+        else:
+            results.append({"name": "杠杆改善", "passed": False, "val": "数据不足"})
+
+        # 流动比率
+        def get_current_ratio(df, date):
+            row = df[df['REPORT_DATE'] == date]
+            if row.empty: return None
+            r = row.iloc[0]
+            cur_assets = pd.to_numeric(r.get('TOTAL_CURRENT_ASSETS', r.get('TOTAL_CURRENT_ASSET', 0)), errors='coerce')
+            cur_liab = pd.to_numeric(r.get('TOTAL_CURRENT_LIAB', r.get('TOTAL_CURRENT_LIABILITIES', 0)), errors='coerce')
+            if pd.notnull(cur_liab) and cur_liab > 0:
+                return float(cur_assets / cur_liab)
+            return None
+
+        cur_ratio = get_current_ratio(df_balance_raw, latest_date)
+        prev_ratio = get_current_ratio(df_balance_raw, prev_date)
+        if cur_ratio is not None and prev_ratio is not None:
+            p = cur_ratio > prev_ratio
+            results.append({"name": "流动性改善", "passed": p,
+                            "val": f"{round(cur_ratio, 2)} vs {round(prev_ratio, 2)}"})
+        else:
+            results.append({"name": "流动性改善", "passed": False, "val": "数据不足"})
+
+        # 毛利率
+        def get_gross_margin(df, date):
+            row = df[df['REPORT_DATE'] == date]
+            if row.empty: return None
+            r = row.iloc[0]
+            rev = pd.to_numeric(r.get('TOTAL_OPERATE_INCOME', 0), errors='coerce')
+            cost = pd.to_numeric(r.get('OPERATE_COST', 0), errors='coerce')
+            if pd.notnull(rev) and rev > 0:
+                return float((rev - cost) / rev) * 100
+            return None
+
+        cur_gm = get_gross_margin(df_profit_raw, latest_date)
+        prev_gm = get_gross_margin(df_profit_raw, prev_date)
+        if cur_gm is not None and prev_gm is not None:
+            p = cur_gm > prev_gm
+            results.append({"name": "毛利率提升", "passed": p,
+                            "val": f"{round(cur_gm, 1)}% vs {round(prev_gm, 1)}%"})
+        else:
+            results.append({"name": "毛利率提升", "passed": False, "val": "数据不足"})
+
+        # 资产周转率
+        def get_asset_turnover(df_p, df_b, date):
+            rev_row = df_p[df_p['REPORT_DATE'] == date]
+            bal_row = df_b[df_b['REPORT_DATE'] == date]
+            if rev_row.empty or bal_row.empty: return None
+            rev = pd.to_numeric(rev_row.iloc[0].get('TOTAL_OPERATE_INCOME', 0), errors='coerce')
+            assets = pd.to_numeric(bal_row.iloc[0].get('TOTAL_ASSETS', 0), errors='coerce')
+            if pd.notnull(assets) and assets > 0:
+                return float(rev / assets)
+            return None
+
+        cur_at = get_asset_turnover(df_profit_raw, df_balance_raw, latest_date)
+        prev_at = get_asset_turnover(df_profit_raw, df_balance_raw, prev_date)
+        if cur_at is not None and prev_at is not None:
+            p = cur_at > prev_at
+            results.append({"name": "资产周转率提升", "passed": p,
+                            "val": f"{round(cur_at, 3)} vs {round(prev_at, 3)}"})
+        else:
+            results.append({"name": "资产周转率提升", "passed": False, "val": "数据不足"})
+
+        return results
 
     @staticmethod
     def series_volatility(series):
@@ -721,9 +892,21 @@ class FundamentalCalculator:
         return '高波动'
 
     @staticmethod
-    def classify_moat_strength(avg_g, g_vol, n_vol):
-        if avg_g >= 45 and g_vol <= 4 and n_vol <= 3: return '宽护城河'
-        if avg_g >= 30 and g_vol <= 7 and n_vol <= 5: return '中等护城河'
+    def classify_moat_strength(avg_g, g_vol, n_vol, roic_spread_pct=None):
+        """护城河分类：综合毛利率水平、波动率、ROIC-WACC 价差"""
+        score = 0
+        if avg_g >= 45 and g_vol <= 4: score += 2
+        elif avg_g >= 30 and g_vol <= 7: score += 1
+        if n_vol <= 3: score += 1
+        elif n_vol <= 5: score += 0
+        else: score -= 1
+        # ROIC-WACC 价差：经济利润信号
+        if roic_spread_pct is not None:
+            if roic_spread_pct > 8: score += 1
+            elif roic_spread_pct > 0: score += 0
+            else: score -= 1
+        if score >= 3: return '宽护城河'
+        if score >= 1: return '中等护城河'
         return '待验证'
 
     @staticmethod

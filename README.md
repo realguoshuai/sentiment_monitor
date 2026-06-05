@@ -174,6 +174,12 @@ sentiment_monitor/
 
 ## 最近更新
 
+- 数据源优先级重构：实时行情从东财快照优先改为腾讯优先（75ms，价格最新），东财快照降级为补字段角色。
+- 雪球 F10 数据源接入：单次请求 240ms 返回 22 项指标（PE/PB/ROE/毛利率/净利率/增速/流动比率/资产负债率等）+ 最近 8 年历史趋势，作为 AkShare 财务报表的备份链路。
+- 数据格式统一：`normalized_quote` 统一字段名（price/pe/pb/dividend_yield/market_cap），前端 TypeScript 类型补全。
+- 启动速度优化：预热 sleep 5s→1s，实时行情最先预热，东财快照熔断机制（失败跳过 5min），HTTP 连接池预热，numpy 缓存清理。
+- 盯盘日记缓存分层：历史 K 线 24h 长缓存 + 当日数据盘中 30s 短缓存，不再每次全量重取 250 天数据。
+- quality 接口修复：`quality_history` 双 key 耦合消除，补全 `management_quality_summary` 字段。
 - 打包版启动自动迁移：桌面端启动时自动执行 `migrate`，解决 seed 数据库缺列导致快照刷新失败的问题。
 - 工具箱新增凯利仓位计算器：输入胜率和盈亏比，计算全凯利/半凯利/1/4 凯利三档仓位比例，含期望值、破产概率估算和实战建议。
 - 移除集中度热力图工具。
@@ -220,8 +226,89 @@ python manage.py run_collector
 - `--skip-quality`：跳过财务质量缓存预热。
 - `--with-shareholder`：财务预热时拉取股东结构数据。
 
+## 数据链路与容灾
+
+系统对每个数据字段都设计了多级回退链路，确保单一数据源故障时仍能正常展示。
+
+### 实时行情 (`get_realtime_price`)
+
+腾讯行情优先（75ms，价格最新），东财快照补字段，雪球 F10 兜底：
+
+```
+① 腾讯 qt.gtimg.cn                    → price, pe, pb, dividend_yield, market_cap (最快最新)
+② 东方财富快照 (spot_snapshot 缓存)     → 补缺失字段 (pe, pb, market_cap，不覆盖价格)
+③ last_success 缓存                   → 全字段 (上次成功的完整数据)
+④ 雪球 F10 (quote + indicator)         → 全字段 (含 ROE/毛利率/增速等深度指标)
+⑤ 新浪 akshare                        → 仅补仍缺失的标的 (仅 price)
+⑥ 缓存合并                            → 用历史缓存补全缺失字段
+⑦ 雪球 API (8 并发)                   → dividend_yield (始终执行)
+⑧ StockScreenerSnapshot DB            → pe, pb, dy, market_cap (最终兜底)
+⑨ TTM 基本面重算 (fetch_fundamentals=True 时) → pe, pb (详情页用)
+```
+
+各字段数据源优先级：
+
+| 字段 | ① | ② | ③ | ④ | ⑤ |
+|------|---|---|---|---|---|
+| price | 腾讯实时 | 东方财富快照 | last_success 缓存 | 雪球 F10 | 新浪 akshare |
+| pe | 腾讯实时 | 东方财富快照 | 雪球 F10 | ScreenerSnapshot DB | TTM 重算 |
+| pb | 腾讯实时 | 东方财富快照 | 雪球 F10 | ScreenerSnapshot DB | TTM 重算 |
+| dividend_yield | 雪球 API | 腾讯实时 | last_success 缓存 | ScreenerSnapshot DB | — |
+| market_cap | 腾讯实时 | 东方财富快照 | 雪球 F10 | ScreenerSnapshot DB | — |
+
+快照缓存策略：1 小时新鲜缓存 + 24 小时 stale 存档，东方财富维护期间仍可用旧数据。东财快照加熔断机制，连续失败后跳过 5 分钟。
+
+### 分时数据 (`get_intraday_data`)
+
+```
+① 本日缓存 (key 含当日日期，不会读到昨天数据)
+② 腾讯 ifzq.gtimg.cn (分钟线)
+③ 新浪 akshare stock_zh_a_minute (仅当日，经 _normalize_intraday_time 归一化为 HHMM)
+④ stale 缓存 (7 天有效)
+```
+
+### 历史 K 线 (`get_historical_data`)
+
+```
+① 组合缓存
+② 单标的缓存
+③ 腾讯 web.ifzq.gtimg.cn (不复权 K 线，支持增量更新)
+④ Baostock (本地 provider，离线可用)
+⑤ stale 缓存 (7 天有效)
+```
+
+历史数据的估值注入（pe/pb/dy 序列）依赖 `FundamentalService` (东方财富)，兜底为等比例缩放当前估值。
+
+### 外部依赖一览
+
+| 数据源 | 用途 | 类型 |
+|--------|------|------|
+| 腾讯 qt.gtimg.cn | 实时行情（价格/PE/PB/市值） | HTTP |
+| 腾讯 ifzq.gtimg.cn | 分时 + 历史 K 线 | HTTP |
+| 腾讯 web.ifzq.gtimg.cn | 历史 K 线 | HTTP |
+| 东方财富 emweb (akshare) | 财务报表 → TTM PE/PB | HTTPS |
+| 东方财富 spot_em (akshare) | 全A股快照（带熔断） | HTTPS |
+| 雪球 API | 股息率 + F10 深度指标（ROE/毛利率/增速等） | HTTPS |
+| 新浪 (akshare) | 实时/分时价格兜底 | HTTP |
+| Baostock | 历史 K 线兜底 | 本地 |
+| StockScreenerSnapshot | 估值字段最终兜底 | SQLite |
+
+### 时间格式归一化
+
+分时数据统一为 `HHMM` 四位数字格式（如 `0930`、`1355`），通过 `_normalize_intraday_time` 兼容各数据源：
+
+| 数据源 | 原始格式 | 归一化结果 |
+|--------|---------|-----------|
+| 腾讯 | `0930` | `0930` |
+| 新浪/akshare | `09:30` 或 `2026-06-04 09:30:00` | `0930` |
+
 ## 缓存与性能
 
+- 首页加载优化：实时行情走腾讯优先（75ms），不走重试等待；分红日历异步加载不阻塞首屏；雪球股息率 8 并发获取。
+- 启动速度优化：预热 sleep 从 5s 降到 1s；实时行情最先预热；东财快照加熔断（失败跳过 5 分钟）；HTTP 连接池启动时预热；numpy 不兼容缓存启动时清理。
+- 缓存预热覆盖首页关键接口：启动时自动预热实时价格和分红日历缓存。
+- 快照缓存双层 TTL：1h 新鲜 + 24h stale 存档，外部数据源维护期间不丢数据。
+- 盯盘日记分层缓存：历史 K 线 24h（不会变）；当日数据盘中 30s / 收盘后 1h；分红倒计时 6h。
 - 深度分析缓存会优先返回已有结果，后台再刷新最新结果。
 - 条件选股使用本地 SQLite 快照，避免每次筛选都拉取全市场数据。
 - 财务质量和股东结构分开缓存，减少整页阻塞。

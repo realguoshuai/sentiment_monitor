@@ -92,7 +92,7 @@ class NewsCrawler:
                 # 尝试其他选择器
                 news_items = soup.select('.news_list li, .news-item, .info-content li')
             
-            for item in news_items[:10]:  # 只取前10条
+            for item in news_items[:50]:  # 取前50条
                 try:
                     # 提取标题
                     title_tag = item.find('a') or item.find('span')
@@ -189,7 +189,7 @@ class NewsCrawler:
                         # 解析新闻（根据实际页面结构调整）
                         news_items = soup.select('.news-item, .news_list li')
                         
-                        for item in news_items[:5]:
+                        for item in news_items[:30]:
                             try:
                                 title_tag = item.find('a')
                                 if title_tag:
@@ -241,7 +241,7 @@ class NewsCrawler:
                 seen_titles.add(news['title'])
                 unique_news.append(news)
         
-        return unique_news[:10]  # 最多返回10条
+        return unique_news[:100]  # 最多返回100条
 
 
 # 便捷函数

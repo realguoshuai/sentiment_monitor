@@ -8,7 +8,7 @@
           <InfoTooltip>
             <template #content>
               <strong>财务安全性评分（0~10 分）</strong><br/>
-              检查 5 项财务健康指标，按通过比例折算：<br/>
+              检查 9 项财务健康指标，按通过比例折算：<br/>
               <div class="formula">得分 = (通过数 ÷ 总数) × 10</div>
               <span class="threshold threshold-green">≥7 分：健康</span>
               <span class="threshold threshold-yellow">4~6 分：关注</span>
@@ -16,7 +16,7 @@
             </template>
           </InfoTooltip>
         </h2>
-        <p class="subtitle">把五项财务信号压缩到一屏，快速剔除价值陷阱。</p>
+        <p class="subtitle">把九项财务信号压缩到一屏，快速剔除价值陷阱。</p>
       </div>
       <div class="score-pill" :class="scoreClass">
         {{ score }}/10
@@ -36,7 +36,7 @@
         </span>
       </div>
     </div>
-    <p class="section-footer">7 分以上通常代表财务结构扎实，3 分以下需要高度警惕"便宜但不安全"。</p>
+    <p class="section-footer">7 分以上通常代表财务结构扎实，3 分以下需要高度警惕"便宜但不安全"。后四项（杠杆/流动性/毛利率/周转率）需要原始财报数据，缺失时自动跳过。</p>
   </section>
 </template>
 
@@ -54,7 +54,11 @@ const itemExplanations: Record<string, string> = {
   '净利润 > 0': '<strong>归母净利润为正</strong><br/>最基本的盈利能力检查',
   '经营性现金流 > 0': '<strong>经营活动现金流为正</strong><br/>确认利润有真金白银支撑，不是纸面富贵',
   '现金流 > 净利润': '<strong>现金流覆盖净利润</strong><br/>CFO ÷ 净利润 ≥ 100%<br/>利润含金量高，没有大量应收挂账',
-  'ROA同比提升': '<strong>ROA 同比改善</strong><br/>对比去年同期，盈利能力在好转'
+  'ROA同比提升': '<strong>ROA 同比改善</strong><br/>对比去年同期，盈利能力在好转',
+  '杠杆改善': '<strong>资产负债率同比下降</strong><br/>有息负债占总资产比例在降低<br/>财务风险正在收敛',
+  '流动性改善': '<strong>流动比率同比提升</strong><br/>流动资产 ÷ 流动负债<br/>短期偿债能力在增强',
+  '毛利率提升': '<strong>毛利率同比提升</strong><br/>(营收-成本) ÷ 营收<br/>定价权或成本控制在改善',
+  '资产周转率提升': '<strong>资产周转率同比提升</strong><br/>营收 ÷ 总资产<br/>运营效率在提高'
 }
 
 function getItemExplanation(name: string): string {
@@ -108,7 +112,7 @@ const scoreClass = computed(() => {
 }
 .f-score-matrix {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 10px;
 }
 .matrix-item {

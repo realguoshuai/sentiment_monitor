@@ -10,10 +10,10 @@ from contextlib import contextmanager
 logger = logging.getLogger(__name__)
 
 class FundamentalFetcher:
-    AKSHARE_TIMEOUT = (5, 12)
-    AKSHARE_EASTMONEY_TIMEOUT = (10, 20)
+    AKSHARE_TIMEOUT = (10, 25)
+    AKSHARE_EASTMONEY_TIMEOUT = (15, 35)
     AKSHARE_RETRY_ATTEMPTS = 2
-    AKSHARE_RETRY_DELAY = 0.8
+    AKSHARE_RETRY_DELAY = 1.5
     
     _request_patch_lock = threading.RLock()
     _request_patch_refcount = 0
@@ -45,10 +45,11 @@ class FundamentalFetcher:
 
                 def _request_with_timeout(session, method, url, **kwargs):
                     timeout = kwargs.get('timeout')
-                    if timeout in (None, 0):
-                        kwargs['timeout'] = cls.AKSHARE_TIMEOUT
-                    elif cls._is_eastmoney_finance_url(url) and cls._is_short_timeout(timeout):
+                    # 东方财富财务接口优先使用更长超时（不管原 timeout 是多少）
+                    if cls._is_eastmoney_finance_url(url):
                         kwargs['timeout'] = cls.AKSHARE_EASTMONEY_TIMEOUT
+                    elif timeout in (None, 0):
+                        kwargs['timeout'] = cls.AKSHARE_TIMEOUT
                     return cls._original_session_request(session, method, url, **kwargs)
 
                 requests.sessions.Session.request = _request_with_timeout
@@ -68,6 +69,9 @@ class FundamentalFetcher:
     def call_akshare(cls, fetcher, *args, use_no_proxy=True, **kwargs):
         last_error = None
         fetcher_name = getattr(fetcher, '__name__', 'akshare_fetcher')
+
+        # 预热连接（发送一个轻量请求）
+        cls._warmup_connection()
 
         for attempt in range(1, cls.AKSHARE_RETRY_ATTEMPTS + 1):
             try:
@@ -111,6 +115,26 @@ class FundamentalFetcher:
             except (TypeError, ValueError):
                 return False
         return False
+
+    _connection_warmed = False
+
+    @classmethod
+    def _warmup_connection(cls):
+        """预热连接，避免第一个请求超时"""
+        if cls._connection_warmed:
+            return
+
+        try:
+            import requests
+            # 发送一个轻量请求预热连接
+            requests.get(
+                'https://emweb.securities.eastmoney.com/',
+                timeout=5,
+                headers={'User-Agent': 'Mozilla/5.0'}
+            )
+            cls._connection_warmed = True
+        except Exception:
+            pass  # 预热失败不影响主流程
 
     @classmethod
     def get_xueqiu_token(cls, cache_getter, cache_setter):
@@ -189,19 +213,57 @@ class FundamentalFetcher:
     def fetch_northbound_history(cls, symbol: str):
         return cls.call_akshare(ak.stock_hsgt_individual_em, symbol=symbol[2:] if len(symbol) > 6 else symbol, use_no_proxy=True)
 
+    @staticmethod
+    def _to_xueqiu_symbol(symbol: str) -> str:
+        """将 SH600519 / 600519 统一为雪球格式 SH600519"""
+        s = symbol.upper()
+        if s.startswith(('SH', 'SZ')):
+            return s
+        if s.startswith('6') or s.startswith('5'):
+            return 'SH' + s
+        return 'SZ' + s
+
     @classmethod
     def fetch_xueqiu_dividend_yield(cls, symbol: str, token: str):
-        xq_symbol = symbol.upper()
-        if xq_symbol.startswith('6') or xq_symbol.startswith('5'):
-            xq_symbol = 'SH' + (xq_symbol[2:] if len(xq_symbol) > 6 else xq_symbol)
-        elif xq_symbol.startswith('0') or xq_symbol.startswith('3'):
-            xq_symbol = 'SZ' + (xq_symbol[2:] if len(xq_symbol) > 6 else xq_symbol)
-            
+        xq_symbol = cls._to_xueqiu_symbol(symbol)
+
         url = f"https://stock.xueqiu.com/v5/stock/quote.json?symbol={xq_symbol}&extend=detail"
         cookies = {'xq_a_token': token}
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         response = requests.get(url, cookies=cookies, headers=headers, timeout=5, proxies={"http": None, "https": None})
         return response.json()
+
+    @classmethod
+    def fetch_xueqiu_f10(cls, symbol: str, token: str) -> dict:
+        """从雪球获取 F10 综合指标（报价 + 财务指标一次性拉取）
+
+        Returns:
+            dict: 包含 quote 和 indicator 两个子字典
+        """
+        xq_symbol = cls._to_xueqiu_symbol(symbol)
+        cookies = {'xq_a_token': token}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+
+        result = {'quote': {}, 'indicators': []}
+
+        # 1. 报价（PE/PB/股息率/市值等）
+        try:
+            url = f"https://stock.xueqiu.com/v5/stock/quote.json?symbol={xq_symbol}&extend=detail"
+            resp = requests.get(url, cookies=cookies, headers=headers, timeout=8, proxies={"http": None, "https": None})
+            result['quote'] = resp.json().get('data', {}).get('quote', {})
+        except Exception as e:
+            logger.warning("Xueqiu quote fetch failed for %s: %s", xq_symbol, e)
+
+        # 2. 财务指标（ROE/毛利率/净利率/增长率等）
+        try:
+            url = "https://stock.xueqiu.com/v5/stock/finance/cn/indicator.json"
+            params = {'symbol': xq_symbol, 'type': 'Q4', 'is_detail': 'true', 'count': '8'}
+            resp = requests.get(url, params=params, cookies=cookies, headers=headers, timeout=8, proxies={"http": None, "https": None})
+            result['indicators'] = resp.json().get('data', {}).get('list', [])
+        except Exception as e:
+            logger.warning("Xueqiu indicator fetch failed for %s: %s", xq_symbol, e)
+
+        return result
 
     @classmethod
     def fetch_profit_sheet_by_report(cls, symbol: str):

@@ -719,13 +719,13 @@ class SentimentApiTests(APITestCase):
 
         latest = payload['history'][-1]
         self.assertAlmostEqual(latest['reinvestment_rate_pct'], 29.4118, places=3)
-        self.assertAlmostEqual(latest['roic_proxy_pct'], 16.3043, places=3)
+        self.assertAlmostEqual(latest['roic_proxy_pct'], 40.7609, places=3)
         self.assertAlmostEqual(latest['book_value_per_share'], 9.0, places=3)
         self.assertAlmostEqual(latest['book_value_per_share_growth_pct'], 12.5, places=3)
         self.assertAlmostEqual(latest['share_change_pct'], 0.0, places=3)
         self.assertIn('capital_allocation_label', payload['capital_allocation_summary'])
         self.assertIn('financing_signal', payload['capital_allocation_summary'])
-        self.assertAlmostEqual(payload['capital_allocation_summary']['latest_roic_proxy_pct'], 16.3, places=1)
+        self.assertAlmostEqual(payload['capital_allocation_summary']['latest_roic_proxy_pct'], 40.8, places=1)
         self.assertAlmostEqual(payload['capital_allocation_summary']['latest_book_value_per_share_growth_pct'], 12.5, places=2)
 
     @patch('api.fundamental_service.FundamentalService.get_northbound_holding_history')
@@ -1748,8 +1748,9 @@ class SentimentApiTests(APITestCase):
         self.assertEqual(result['SZ000001'][0]['date'], '2026-04-10')
         self.assertEqual(result['SZ000001'][0]['price'], 11.0)
 
+    @patch('api.price_service.PriceService._fetch_intraday_from_sina', return_value=[])
     @patch('api.price_service.PriceService._session.get', side_effect=requests.exceptions.ConnectTimeout('minute timeout'))
-    def test_intraday_data_uses_stale_cache_when_minute_fetch_fails(self, mock_get):
+    def test_intraday_data_uses_stale_cache_when_minute_fetch_fails(self, mock_get, mock_sina):
         stale_key = PriceService._intraday_single_stale_cache_key('SZ000001')
         PriceService._cache_set(
             stale_key,

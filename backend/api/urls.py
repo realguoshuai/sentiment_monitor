@@ -9,6 +9,16 @@ from .views import (
     get_screener_results,
     refresh_screener_snapshot,
     diagnose_connectivity,
+    get_portfolio,
+    save_portfolio,
+    get_alert_rules,
+    create_alert_rule,
+    delete_alert_rule,
+    toggle_alert_rule,
+    get_alert_logs,
+    get_alert_unread_count,
+    mark_alert_read,
+    trigger_alert_check,
 )
 
 router = DefaultRouter()
@@ -27,5 +37,18 @@ urlpatterns = [
     path('sentiment/history-backtest/', views.get_history_backtest, name='history-backtest'),
     path('collect/', trigger_collection, name='trigger-collection'),
     path('diagnose/', diagnose_connectivity, name='diagnose-connectivity'),
+    # 组合持仓
+    path('portfolio/', get_portfolio, name='get-portfolio'),
+    path('portfolio/save/', save_portfolio, name='save-portfolio'),
+    # 告警系统
+    path('alerts/rules/', get_alert_rules, name='get-alert-rules'),
+    path('alerts/rules/create/', create_alert_rule, name='create-alert-rule'),
+    path('alerts/rules/<int:rule_id>/delete/', delete_alert_rule, name='delete-alert-rule'),
+    path('alerts/rules/<int:rule_id>/toggle/', toggle_alert_rule, name='toggle-alert-rule'),
+    path('alerts/logs/', get_alert_logs, name='get-alert-logs'),
+    path('alerts/unread-count/', get_alert_unread_count, name='get-alert-unread-count'),
+    path('alerts/read/<int:alert_id>/', mark_alert_read, name='mark-alert-read'),
+    path('alerts/read-all/', mark_alert_read, name='mark-all-alerts-read'),
+    path('alerts/check/', trigger_alert_check, name='trigger-alert-check'),
     path('', include(router.urls)),
 ]

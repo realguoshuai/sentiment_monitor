@@ -1,21 +1,33 @@
 <template>
   <div class="space-y-3">
-    <!-- Mode Toggle -->
-    <div class="flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+    <!-- Mode Toggle & Save -->
+    <div class="flex items-center gap-2">
+      <div class="flex-1 flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+        <button
+          class="flex-1 rounded-md px-3 py-1 text-[10px] font-bold transition-all"
+          :class="mode === 'pct' ? 'bg-white text-cyan-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'"
+          @click="mode = 'pct'"
+        >
+          📊 百分比分配
+        </button>
+        <button
+          class="flex-1 rounded-md px-3 py-1 text-[10px] font-bold transition-all"
+          :class="mode === 'shares' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'"
+          @click="mode = 'shares'"
+        >
+          🔢 指定股数
+        </button>
+      </div>
       <button
-        class="flex-1 rounded-md px-3 py-1 text-[10px] font-bold transition-all"
-        :class="mode === 'pct' ? 'bg-white text-cyan-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'"
-        @click="mode = 'pct'"
+        @click="savePortfolio"
+        :disabled="isSaving"
+        class="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-400 text-white rounded text-[10px] font-bold transition-colors"
       >
-        📊 百分比分配
+        {{ isSaving ? '保存中...' : '💾 保存' }}
       </button>
-      <button
-        class="flex-1 rounded-md px-3 py-1 text-[10px] font-bold transition-all"
-        :class="mode === 'shares' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'"
-        @click="mode = 'shares'"
-      >
-        🔢 指定股数
-      </button>
+    </div>
+    <div v-if="saveMessage" class="text-[10px]" :class="saveSuccess ? 'text-emerald-600' : 'text-rose-500'">
+      {{ saveMessage }}
     </div>
 
     <!-- Mode A: Percentage -->
@@ -128,8 +140,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useSentimentStore } from '@/stores/sentiment'
+import { portfolioApi } from '@/api'
 
 const store = useSentimentStore()
 
@@ -137,6 +150,58 @@ const mode = ref<'pct' | 'shares'>('pct')
 const totalCapital = ref(1000000)
 const pctAlloc = reactive<Record<string, number>>({})
 const shareCounts = reactive<Record<string, number>>({})
+const isSaving = ref(false)
+const saveMessage = ref('')
+const saveSuccess = ref(false)
+
+// 从后端加载组合
+onMounted(async () => {
+  try {
+    const { data } = await portfolioApi.getPortfolio()
+    if (data) {
+      totalCapital.value = data.total_capital || 1000000
+      // 恢复持仓数据
+      for (const h of data.holdings || []) {
+        pctAlloc[h.symbol] = h.allocation_pct || 0
+        shareCounts[h.symbol] = h.share_count || 0
+      }
+    }
+  } catch (e) {
+    console.warn('加载组合失败，使用默认值', e)
+  }
+})
+
+// 保存组合到后端
+async function savePortfolio() {
+  isSaving.value = true
+  saveMessage.value = ''
+
+  try {
+    const holdings = store.dashboardStocks
+      .filter(s => (pctAlloc[s.stock_symbol] || 0) > 0 || (shareCounts[s.stock_symbol] || 0) > 0)
+      .map(s => ({
+        symbol: s.stock_symbol,
+        allocation_pct: pctAlloc[s.stock_symbol] || 0,
+        share_count: shareCounts[s.stock_symbol] || 0,
+      }))
+
+    await portfolioApi.savePortfolio({
+      total_capital: totalCapital.value,
+      holdings,
+    })
+
+    saveSuccess.value = true
+    saveMessage.value = '保存成功'
+  } catch (e) {
+    saveSuccess.value = false
+    saveMessage.value = '保存失败'
+    console.error('保存组合失败', e)
+  } finally {
+    isSaving.value = false
+    // 3秒后清除消息
+    setTimeout(() => { saveMessage.value = '' }, 3000)
+  }
+}
 
 const stocks = computed(() => store.dashboardStocks)
 

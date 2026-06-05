@@ -5,9 +5,15 @@ from .models import Stock, SentimentData, News, Report, Announcement
 
 
 class NewsSerializer(serializers.ModelSerializer):
+    urls = serializers.SerializerMethodField()
+
     class Meta:
         model = News
-        fields = ['title', 'pub_date', 'source', 'url']
+        fields = ['title', 'pub_date', 'source', 'url', 'urls']
+
+    def get_urls(self, obj):
+        """返回所有链接列表"""
+        return obj.get_urls()
 
 
 class ReportSerializer(serializers.ModelSerializer):

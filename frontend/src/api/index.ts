@@ -127,6 +127,7 @@ export interface News {
   pub_date: string
   source: string
   url: string
+  urls: string[]
 }
 
 export interface Report {
@@ -205,6 +206,30 @@ export interface ScreenerQueryResponse {
   }
 }
 
+export interface QualityHistoryItem {
+  year: number
+  roe: number
+  net_margin: number
+  gross_margin: number
+  payout_ratio: number
+  cfo: number
+  fcf: number
+  revenue_growth_pct: number
+  [key: string]: number
+}
+
+export interface QualityAnalysis {
+  symbol: string
+  quality_history: QualityHistoryItem[]
+  cashflow_summary: Record<string, any>
+  capital_allocation_summary: Record<string, any>
+  stability_summary: Record<string, any>
+  balance_sheet_summary: Record<string, any>
+  management_quality_summary: Record<string, any>
+  shareholder_history: any[]
+  shareholder_summary: Record<string, any>
+}
+
 // API functions
 export const stockApi = {
   getStocks: () => api.get<Stock[]>('/stocks/'),
@@ -218,7 +243,7 @@ export const stockApi = {
   triggerCollection: () => api.post<{ status: string, message: string }>('/collect/'),
   getRealtimePrices: () => api.get<Record<string, RealtimePrice>>('/sentiment/realtime_prices/'),
   getComparisonRealtime: (symbols: string[], type: 'last' | 'minute' = 'last') =>
-    api.get<Record<string, any>>(
+    api.get<Record<string, RealtimePrice>>(
       `/sentiment/comparison_realtime/?symbols=${symbols.join(',')}&type=${type}`,
       { timeout: type === 'minute' ? 30000 : 15000 },
     ),
@@ -231,7 +256,7 @@ export const stockApi = {
   getAnalysis: (symbol: string) => api.get<any>('/sentiment/analysis/', { params: { symbol }, timeout: 60000 }),
   getHistoryBacktest: (symbol: string) => api.get<any>(`/sentiment/history-backtest/?symbol=${symbol}`),
   getQualityAnalysis: (symbol: string, includeShareholder: boolean = true) =>
-    api.get<any>(
+    api.get<QualityAnalysis>(
       `/sentiment/quality/?symbol=${symbol}&include_shareholder=${includeShareholder ? 1 : 0}`,
       { timeout: 45000 },
     ),
@@ -249,6 +274,47 @@ export const stockApi = {
     api.get<any>(`/sentiment/market-diary/?symbol=${symbol}`, { timeout: 30000 }),
   getDividendCalendar: () =>
     api.get<any[]>('/sentiment/dividend-calendar/', { timeout: 30000 }),
+}
+
+// 告警系统 API
+export const alertApi = {
+  /** 获取所有告警规则 */
+  getRules: () => api.get<any[]>('/alerts/rules/'),
+
+  /** 创建告警规则 */
+  createRule: (data: { stock_symbol: string; rule_type: string; threshold: number; is_active?: boolean }) =>
+    api.post<any>('/alerts/rules/create/', data),
+
+  /** 删除告警规则 */
+  deleteRule: (ruleId: number) => api.delete(`/alerts/rules/${ruleId}/delete/`),
+
+  /** 启用/禁用告警规则 */
+  toggleRule: (ruleId: number) => api.put(`/alerts/rules/${ruleId}/toggle/`),
+
+  /** 获取告警日志 */
+  getLogs: (limit: number = 50) => api.get<any[]>('/alerts/logs/', { params: { limit } }),
+
+  /** 获取未读告警数量 */
+  getUnreadCount: () => api.get<{ count: number }>('/alerts/unread-count/'),
+
+  /** 标记单条告警为已读 */
+  markRead: (alertId: number) => api.post(`/alerts/read/${alertId}/`),
+
+  /** 标记所有告警为已读 */
+  markAllRead: () => api.post('/alerts/read-all/'),
+
+  /** 手动触发告警检查 */
+  checkAlerts: () => api.post<any>('/alerts/check/'),
+}
+
+// 组合持仓 API
+export const portfolioApi = {
+  /** 获取默认组合 */
+  getPortfolio: () => api.get<any>('/portfolio/'),
+
+  /** 保存组合 */
+  savePortfolio: (data: { total_capital: number; holdings: any[] }) =>
+    api.post<any>('/portfolio/save/', data),
 }
 
 export default api

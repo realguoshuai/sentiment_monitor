@@ -618,24 +618,36 @@ const drawdownStats = computed(() => {
   return { maxDrawdown, currentDrawdown, series }
 })
 
+// 防重复请求标记
+let _fetchSeq = 0
+
 async function fetchComparisonData() {
   if (selectedSymbols.value.length !== 2) return
+  const seq = ++_fetchSeq
   loadingPrice.value = true
   try {
     dataNotice.value = ''
     const symbols = selectedSymbols.value.map(normalizeSymbol)
-    if (symbols.some((symbol, index) => symbol !== selectedSymbols.value[index])) {
+    // 先修正 selectedSymbols，避免 watcher 重复触发
+    const needsFix = symbols.some((symbol, index) => symbol !== selectedSymbols.value[index])
+    if (needsFix) {
       selectedSymbols.value = symbols
+      // 修正后由 watcher 重新触发，此处直接返回避免重复请求
+      return
     }
     const rtLastPromise = stockApi.getComparisonRealtime(symbols, 'last')
-    
+
     if (currentTimeScale.value === 'minute') {
       const [rtLastResp, rtMinResp] = await Promise.allSettled([
         rtLastPromise,
         stockApi.getComparisonRealtime(symbols, 'minute'),
       ])
+      // 检查是否已被更新的请求取代
+      if (seq !== _fetchSeq) return
       if (rtLastResp.status === 'fulfilled') {
         rtPrices.value = rtLastResp.value.data as any
+      } else {
+        console.warn('[ComparisonView] realtime last failed:', rtLastResp.reason)
       }
       if (rtMinResp.status === 'fulfilled') {
         historicalCache.value[`${[...symbols].sort().join(',')}_minute`] = rtMinResp.value.data
@@ -657,17 +669,43 @@ async function fetchComparisonData() {
         rtLastPromise,
         histPromise ?? Promise.resolve(null),
       ])
+      // 检查是否已被更新的请求取代
+      if (seq !== _fetchSeq) return
       if (rtLastResp.status === 'fulfilled') {
         rtPrices.value = rtLastResp.value.data as any
+      } else {
+        console.warn('[ComparisonView] realtime last failed:', rtLastResp.reason)
       }
       if (histResp.status === 'fulfilled' && histResp.value) {
         historicalCache.value[cacheKey] = histResp.value.data
       }
     }
+    // 兜底：如果 rtPrices 为空，尝试从 store 全局实时价格获取
+    if (!Object.keys(rtPrices.value).length) {
+      const fallback: Record<string, any> = {}
+      for (const sym of symbols) {
+        const storePrice = store.realtimePrices[sym]
+        if (storePrice?.price) {
+          fallback[sym] = storePrice
+        }
+      }
+      if (Object.keys(fallback).length) {
+        console.info('[ComparisonView] using store realtimePrices fallback')
+        rtPrices.value = fallback
+      }
+    }
     await nextTick()
     remapComparisonData()
   } catch (e) {
-    console.error('Fetch Comparison Error', e)
+    console.error('[ComparisonView] Fetch Comparison Error', e)
+    // catch 兜底：也尝试 store 数据
+    const symbols = selectedSymbols.value
+    const fallback: Record<string, any> = {}
+    for (const sym of symbols) {
+      const storePrice = store.realtimePrices[sym]
+      if (storePrice?.price) fallback[sym] = storePrice
+    }
+    if (Object.keys(fallback).length) rtPrices.value = fallback
     restoreLastGoodData('本次刷新暂未拿到完整数据，已保留上一轮有效走势。')
   } finally {
     loadingPrice.value = false
@@ -727,8 +765,11 @@ function remapComparisonData() {
        const val1 = (metrics1 as any)[m] || 0
        const val2 = (metrics2 as any)[m] || 0
 
-       return { 
-         time: `${item.time.slice(0, 2)}:${item.time.slice(2, 4)}`,
+       // 兼容 HHMM 和 HH:MM 两种时间格式
+       const rawTime = item.time || ''
+       const formattedTime = rawTime.includes(':') ? rawTime.slice(0, 5) : `${rawTime.slice(0, 2)}:${rawTime.slice(2, 4)}`
+       return {
+         time: formattedTime,
          p1: val1,
          p2: val2,
          diff: currentCalcMode.value === 'ratio' ? (val2 > 0 ? val1 / val2 : 0) : val1 - val2,
@@ -965,9 +1006,12 @@ function updatePriceChart() {
           if (currentTimeScale.value === 'minute') return d.time;
           if (currentTimeScale.value === '5y' || currentTimeScale.value === '10y') return d.time.slice(0, 7);
           return d.time.length > 5 ? d.time.slice(5) : d.time;
-        }), 
+        }),
         axisLine: { lineStyle: { color: 'rgba(0,0,0,0.1)' } },
-        axisLabel: { color: '#475569', fontSize: 10, fontWeight: '800', fontFamily: 'Monaco, Inter' },
+        axisLabel: {
+          color: '#475569', fontSize: 10, fontWeight: '800', fontFamily: 'Monaco, Inter',
+          interval: currentTimeScale.value === 'minute' ? 29 : 'auto',
+        },
         axisPointer: { show: true }
       }
     ],
@@ -1170,9 +1214,13 @@ const handleResize = () => {
 onMounted(async () => {
   if (!store.stocks.length) await store.fetchStocks()
   if (!store.sentimentData.length) await store.fetchLatestSentiment()
+  // 确保 store 有实时价格数据（兜底用）
+  if (!Object.keys(store.realtimePrices).length) {
+    store.fetchRealtimePrices().catch(() => {})
+  }
 
   selectedSymbols.value = buildDefaultComparisonSelection(getAvailableComparisonSymbols())
-  
+
   window.addEventListener('resize', handleResize)
 })
 
