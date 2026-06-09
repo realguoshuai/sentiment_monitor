@@ -88,7 +88,21 @@
         </div>
 
         <!-- Section: Charts Row -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-1 min-h-0 pb-2">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 flex-1 min-h-0 pb-2">
+          <!-- Valuation Thermometer -->
+          <div class="bg-[#1a2332] rounded-xl p-3.5 border border-slate-700/50 flex flex-col min-h-0">
+            <div class="flex justify-between items-center mb-2 shrink-0">
+               <div class="flex items-center gap-2">
+                 <span class="w-1 h-3.5 bg-amber-400 rounded-full"></span>
+                 <h3 class="text-xs font-bold text-white tracking-wide">估值温度计</h3>
+               </div>
+               <svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+            </div>
+            <div class="flex-1 min-h-0">
+               <ValuationThermometer />
+            </div>
+          </div>
+
           <!-- Dividend Calendar -->
           <div class="bg-[#1a2332] rounded-xl p-3.5 border border-slate-700/50 flex flex-col min-h-0">
             <div class="flex justify-between items-center mb-2 shrink-0">
@@ -161,6 +175,7 @@ import StockManagementModal from '@/components/StockManagementModal.vue'
 import ReleaseNotesModal from '@/components/ReleaseNotesModal.vue'
 import WidgetDock from '@/components/WidgetDock.vue'
 import AlertPanel from '@/components/AlertPanel.vue'
+import ValuationThermometer from '@/components/ValuationThermometer.vue'
 import WidgetContainer from '@/components/WidgetContainer.vue'
 import PortfolioWidget from '@/components/widgets/PortfolioWidget.vue'
 import CompoundWidget from '@/components/widgets/CompoundWidget.vue'

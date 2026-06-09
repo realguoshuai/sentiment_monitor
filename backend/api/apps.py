@@ -112,6 +112,15 @@ class ApiConfig(AppConfig):
             except Exception as e:
                 print(f"  spot snapshot failed (will use stale cache): {e}")
 
+            # 1c2. 估值温度计预热（自选股 PB 十年水位）
+            try:
+                from .fundamental_service import FundamentalService
+                for sym in core_symbols[:5]:
+                    FundamentalService.get_pb_water_level(sym)
+                print("  valuation thermometer warmed")
+            except Exception as e:
+                print(f"  valuation thermometer warming failed: {e}")
+
             # 1d. 探测 TTM 财务数据可用性（轻量探测，不阻塞）
             ttm_available = False
             try:

@@ -274,6 +274,8 @@ export const stockApi = {
     api.get<any>(`/sentiment/market-diary/?symbol=${symbol}`, { timeout: 30000 }),
   getDividendCalendar: () =>
     api.get<any[]>('/sentiment/dividend-calendar/', { timeout: 30000 }),
+  getValuationThermometer: () =>
+    api.get<any>('/sentiment/valuation-thermometer/', { timeout: 60000 }),
 }
 
 // 告警系统 API
@@ -305,6 +307,9 @@ export const alertApi = {
 
   /** 手动触发告警检查 */
   checkAlerts: () => api.post<any>('/alerts/check/'),
+
+  /** 获取未读告警通知（供 Electron 轮询） */
+  getNotifications: () => api.get<any[]>('/alerts/notifications/'),
 }
 
 // 组合持仓 API

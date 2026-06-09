@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog } = require('electron');
+const { app, BrowserWindow, dialog, Notification } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
@@ -482,6 +482,61 @@ async function loadAppWindow() {
   await window.loadFile(frontendDist.file);
 }
 
+let lastNotifiedAlertId = 0;
+
+function startAlertNotificationPolling() {
+  const POLL_INTERVAL = 5 * 60 * 1000; // 5 分钟
+
+  async function pollAlerts() {
+    try {
+      const url = `${backendUrl}/api/alerts/notifications/`;
+      http.get(url, { timeout: 10000 }, (res) => {
+        let data = '';
+        res.on('data', (chunk) => { data += chunk; });
+        res.on('end', () => {
+          try {
+            const alerts = JSON.parse(data);
+            if (!Array.isArray(alerts) || alerts.length === 0) return;
+
+            // 找出未通知过的新告警
+            const newAlerts = alerts.filter((a) => a.id > lastNotifiedAlertId);
+            if (newAlerts.length === 0) return;
+
+            lastNotifiedAlertId = Math.max(...newAlerts.map((a) => a.id));
+
+            // 弹系统通知
+            if (Notification.isSupported()) {
+              const title = newAlerts.length === 1
+                ? `${newAlerts[0].stock_name} 告警`
+                : `${newAlerts.length} 条新告警`;
+              const body = newAlerts.length === 1
+                ? newAlerts[0].message
+                : newAlerts.map((a) => `${a.stock_name}: ${a.message}`).join('\n');
+
+              const notification = new Notification({
+                title,
+                body,
+                icon: windowIconFile,
+              });
+              notification.show();
+            }
+          } catch (parseError) {
+            // JSON 解析失败，忽略
+          }
+        });
+      }).on('error', () => {
+        // 网络错误，忽略（后端可能还在启动）
+      });
+    } catch (error) {
+      // 忽略轮询错误
+    }
+  }
+
+  // 首次延迟 30 秒执行（等后端就绪），之后每 5 分钟轮询
+  setTimeout(pollAlerts, 30000);
+  setInterval(pollAlerts, POLL_INTERVAL);
+}
+
 async function bootstrap() {
   runtimePaths = ensureRuntimePaths();
   backendUrl = await findAvailableBackendUrl();
@@ -517,6 +572,9 @@ async function bootstrap() {
 
   await loadAppWindow();
   logDesktop('Desktop window loaded');
+
+  // 启动告警通知轮询（每 5 分钟检查未读告警，有新告警时弹系统通知）
+  startAlertNotificationPolling();
 }
 
 app.isQuitting = false;

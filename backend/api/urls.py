@@ -29,6 +29,7 @@ urlpatterns = [
     path('sentiment/search/', search_stocks, name='search-stocks'),
     path('sentiment/market-diary/', views.get_market_diary, name='market-diary'),
     path('sentiment/dividend-calendar/', views.get_dividend_calendar, name='dividend-calendar'),
+    path('sentiment/valuation-thermometer/', views.get_valuation_thermometer, name='valuation-thermometer'),
     path('sentiment/screener/', get_screener_results, name='screener-results'),
     path('sentiment/screener/refresh/', refresh_screener_snapshot, name='screener-refresh'),
     path('sentiment/quality/', views.get_quality_analysis, name='quality-analysis'),
@@ -50,5 +51,6 @@ urlpatterns = [
     path('alerts/read/<int:alert_id>/', mark_alert_read, name='mark-alert-read'),
     path('alerts/read-all/', mark_alert_read, name='mark-all-alerts-read'),
     path('alerts/check/', trigger_alert_check, name='trigger-alert-check'),
+    path('alerts/notifications/', views.get_alert_notifications, name='alert-notifications'),
     path('', include(router.urls)),
 ]

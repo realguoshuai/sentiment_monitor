@@ -552,6 +552,28 @@ class FundamentalService:
         return Calc.calculate_percentiles(history, column, period_years)
 
     @classmethod
+    def get_pb_water_level(cls, symbol: str) -> dict | None:
+        """计算单只股票当前 PB 在近十年历史中的百分位（水位）"""
+        from .price_service import PriceService
+
+        symbol = cls._fix_symbol(symbol)
+        try:
+            hist_data = PriceService.get_historical_data([symbol], limit=120, period='month')
+            stock_hist = hist_data.get(symbol, [])
+            if not stock_hist or len(stock_hist) < 10:
+                return None
+
+            result = Calc.calculate_pb_water_level(stock_hist, period_years=10)
+            if result is None:
+                return None
+
+            result['symbol'] = symbol
+            return result
+        except Exception as e:
+            logger.warning(f"PB water level calc failed for {symbol}: {e}")
+            return None
+
+    @classmethod
     def _save_snapshot(cls, symbol, df_fund):
         try:
             from .models import FundamentalSnapshot

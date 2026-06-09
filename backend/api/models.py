@@ -199,6 +199,29 @@ class StockScreenerSnapshot(models.Model):
         return f"{self.snapshot_date} {self.symbol}"
 
 
+class MarketValuationSnapshot(models.Model):
+    """市场估值统计快照（按板块/指数 + 日期存储，用于估值温度计）"""
+    snapshot_date = models.DateField(verbose_name='日期')
+    board = models.CharField(max_length=50, default='all', verbose_name='板块/指数',
+                             help_text='行业名(如银行/医药生物)、指数名(如上证/沪深300)、或 all')
+    pe_median = models.FloatField(default=0, verbose_name='PE 中位数')
+    pb_median = models.FloatField(default=0, verbose_name='PB 中位数')
+    pe_mean = models.FloatField(default=0, verbose_name='PE 均值')
+    pb_mean = models.FloatField(default=0, verbose_name='PB 均值')
+    stock_count = models.IntegerField(default=0, verbose_name='有效股票数')
+    pe_gt_zero_count = models.IntegerField(default=0, verbose_name='PE>0 股票数')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = '市场估值快照'
+        verbose_name_plural = '市场估值快照'
+        unique_together = ['snapshot_date', 'board']
+        ordering = ['-snapshot_date']
+
+    def __str__(self):
+        return f"{self.snapshot_date} {self.board} PE中位={self.pe_median} PB中位={self.pb_median}"
+
+
 class Portfolio(models.Model):
     """投资组合"""
     name = models.CharField(max_length=100, default='默认组合', verbose_name='组合名称')
@@ -250,6 +273,9 @@ class AlertRule(models.Model):
         ('margin_decline', '毛利率连续下滑'),
         ('receivable_surge', '应收账款增速超营收'),
         ('cfo_negative', '经营现金流转负'),
+        ('price_target', '价格到达目标价'),
+        ('pe_percentile', 'PE 进入低分位'),
+        ('volume_anomaly', '成交量异常放大'),
     ]
 
     stock = models.ForeignKey(Stock, on_delete=models.CASCADE, related_name='alert_rules', verbose_name='股票')

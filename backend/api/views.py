@@ -897,6 +897,45 @@ def get_dividend_calendar(request):
 
 
 @api_view(['GET'])
+def get_valuation_thermometer(request):
+    """估值温度计：自选股 PB 十年水位
+
+    返回每只监控股票当前 PB 在近十年历史中的百分位排名。
+    """
+    try:
+        from .fundamental_service import FundamentalService
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        stocks = list(Stock.objects.order_by('symbol').values('symbol', 'name'))
+        if not stocks:
+            return Response({'stocks': []})
+
+        results = []
+        with ThreadPoolExecutor(max_workers=min(len(stocks), 6)) as executor:
+            future_map = {}
+            for s in stocks:
+                future = executor.submit(FundamentalService.get_pb_water_level, s['symbol'])
+                future_map[future] = s
+
+            for future in as_completed(future_map):
+                stock_info = future_map[future]
+                try:
+                    result = future.result()
+                    if result:
+                        result['name'] = stock_info['name']
+                        results.append(result)
+                except Exception:
+                    pass
+
+        # 按百分位排序（低水位在前 = 低估机会）
+        results.sort(key=lambda x: x.get('percentile', 50))
+        return Response({'stocks': results})
+    except Exception as e:
+        logger.error(f"Error generating valuation thermometer: {e}")
+        return Response({'error': str(e)}, status=500)
+
+
+@api_view(['GET'])
 def diagnose_connectivity(request):
     """诊断各数据源连通性"""
     import sys
@@ -1169,3 +1208,17 @@ def trigger_alert_check(request):
         })
     except Exception as e:
         return Response({'error': str(e)}, status=500)
+
+
+@api_view(['GET'])
+def get_alert_notifications(request):
+    """获取未读告警通知（供 Electron 原生通知轮询）"""
+    logs = AlertLog.objects.filter(is_read=False).select_related('rule', 'rule__stock').order_by('-triggered_at')[:10]
+    data = [{
+        'id': l.id,
+        'stock_name': l.rule.stock.name,
+        'rule_type': l.rule.rule_type,
+        'message': l.message,
+        'triggered_at': l.triggered_at,
+    } for l in logs]
+    return Response(data)

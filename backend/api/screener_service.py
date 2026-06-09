@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 import logging
 from math import ceil
 import os
@@ -887,12 +887,14 @@ class ScreenerService:
         rows = list(dedup.values())
         logger.info("Snapshot rows after dedup: %d, snapshot_date=%s", len(rows), snapshot_date)
 
-        # transaction.atomic 保证 delete + bulk_create 要么全成功要么全回滚
+        # 保留最近 30 天历史快照，删除更早的数据；当天数据用 ignore_conflicts 去重
         with transaction.atomic():
-            deleted, _ = StockScreenerSnapshot.objects.all().delete()
-            logger.info("Deleted %d old snapshot rows", deleted)
+            cutoff = snapshot_date - timedelta(days=30)
+            deleted, _ = StockScreenerSnapshot.objects.filter(snapshot_date__lt=cutoff).delete()
+            if deleted:
+                logger.info("Deleted %d snapshot rows older than %s", deleted, cutoff)
             StockScreenerSnapshot.objects.bulk_create(rows, batch_size=500, ignore_conflicts=True)
-            logger.info("Inserted %d snapshot rows", len(rows))
+            logger.info("Inserted %d snapshot rows for %s", len(rows), snapshot_date)
 
         # 补全监控股票的行业字段（仅填空，不覆盖用户已有值）
         industry_map = {r.symbol: r.industry for r in rows if r.industry}
@@ -947,6 +949,299 @@ class ScreenerService:
             'count': latest_qs.count(),
             'industry_count': industry_count,
             'roe_basis_label': '年报 ROE / 现价股息率 / ROI',
+        }
+
+    # ===== 估值温度计 =====
+
+    # 价值投资者最关注的行业板块
+    INDUSTRY_BOARDS = [
+        '银行', '食品饮料', '医药生物', '电子', '电力设备',
+        '房地产', '非银金融', '汽车', '机械设备', '化工',
+        '有色金属', '煤炭', '钢铁', '建筑材料', '交通运输',
+        '公用事业', '商贸零售', '家用电器', '农林牧渔', '传媒',
+    ]
+
+    # 宽基指数（AkShare 接口代码 → 显示名）
+    INDEX_BOARDS = {
+        '000001': '上证指数',
+        '399001': '深证成指',
+        '000300': '沪深300',
+        '399006': '创业板指',
+        '000905': '中证500',
+    }
+
+    @classmethod
+    def get_available_boards(cls) -> list:
+        """返回可选的板块列表（从快照中提取实际存在的行业）"""
+        latest_date = (
+            StockScreenerSnapshot.objects.order_by('-snapshot_date')
+            .values_list('snapshot_date', flat=True)
+            .first()
+        )
+        if not latest_date:
+            return [{'key': 'all', 'name': '全市场', 'type': 'market'}]
+
+        # 从快照中提取实际存在的行业
+        industries = list(
+            StockScreenerSnapshot.objects.filter(
+                snapshot_date=latest_date,
+                industry__isnull=False,
+            ).exclude(industry='').values_list('industry', flat=True).distinct()
+        )
+
+        boards = [{'key': 'all', 'name': '全市场', 'type': 'market'}]
+
+        # 行业板块（只展示有足够股票的行业）
+        industry_counts = {}
+        for ind in industries:
+            cnt = StockScreenerSnapshot.objects.filter(
+                snapshot_date=latest_date, industry=ind, pe__gt=0
+            ).count()
+            if cnt >= 20:
+                industry_counts[ind] = cnt
+
+        for ind, cnt in sorted(industry_counts.items(), key=lambda x: -x[1]):
+            boards.append({'key': f'industry:{ind}', 'name': ind, 'type': 'industry', 'count': cnt})
+
+        # 宽基指数
+        for code, name in cls.INDEX_BOARDS.items():
+            boards.append({'key': f'index:{code}', 'name': name, 'type': 'index'})
+
+        return boards
+
+    @classmethod
+    def get_valuation_thermometer(cls, board: str = 'all') -> dict:
+        """估值温度计：按板块/指数返回 PE/PB 中位数及历史分位
+
+        board 格式：
+          - 'all' → 全市场
+          - 'industry:银行' → 行业板块
+          - 'index:000300' → 宽基指数
+        """
+        from .models import MarketValuationSnapshot
+        import statistics
+        from datetime import date as date_cls
+
+        today = date_cls.today()
+
+        # --- 1. 读历史 ---
+        history_qs = MarketValuationSnapshot.objects.filter(
+            board=board
+        ).order_by('-snapshot_date')[:90]
+        history = [
+            {
+                'date': s.snapshot_date.isoformat(),
+                'pe_median': s.pe_median,
+                'pb_median': s.pb_median,
+                'count': s.stock_count,
+            }
+            for s in reversed(history_qs)
+        ]
+
+        # --- 2. 计算今日数据 ---
+        today_entry = cls._compute_board_valuation(board)
+
+        if today_entry:
+            MarketValuationSnapshot.objects.update_or_create(
+                snapshot_date=today,
+                board=board,
+                defaults={
+                    'pe_median': today_entry['pe_median'],
+                    'pb_median': today_entry['pb_median'],
+                    'pe_mean': today_entry.get('pe_mean', 0),
+                    'pb_mean': today_entry.get('pb_mean', 0),
+                    'stock_count': today_entry['count'],
+                    'pe_gt_zero_count': today_entry.get('pe_gt_zero_count', 0),
+                },
+            )
+            if history and history[-1]['date'] == today.isoformat():
+                history[-1] = today_entry
+            else:
+                history.append(today_entry)
+
+        # --- 3. 确定当前值 ---
+        if today_entry:
+            current_data = today_entry
+        elif history:
+            current_data = history[-1]
+        else:
+            return {'current': {}, 'history': [], 'board': board}
+
+        # --- 4. 计算百分位 ---
+        pe_series = [h['pe_median'] for h in history if h['pe_median'] > 0]
+        pb_series = [h['pb_median'] for h in history if h['pb_median'] > 0]
+
+        def _percentile_rank(series, value):
+            if not series or value <= 0:
+                return None
+            below = sum(1 for v in series if v < value)
+            return round(below / len(series) * 100, 1)
+
+        def _label(pct):
+            if pct is None:
+                return '数据积累中'
+            if pct <= 10:
+                return '极寒'
+            elif pct <= 25:
+                return '偏冷'
+            elif pct <= 75:
+                return '适中'
+            elif pct <= 90:
+                return '偏热'
+            else:
+                return '极热'
+
+        pe_pct = _percentile_rank(pe_series, current_data['pe_median']) if len(pe_series) >= 3 else None
+        pb_pct = _percentile_rank(pb_series, current_data['pb_median']) if len(pb_series) >= 3 else None
+
+        return {
+            'current': {
+                'pe_median': current_data['pe_median'],
+                'pb_median': current_data['pb_median'],
+                'pe_percentile': pe_pct,
+                'pb_percentile': pb_pct,
+                'pe_label': _label(pe_pct),
+                'pb_label': _label(pb_pct),
+                'snapshot_date': current_data.get('date', ''),
+                'stock_count': current_data.get('count', 0),
+            },
+            'history': history,
+            'board': board,
+        }
+
+    @classmethod
+    def _compute_board_valuation(cls, board: str) -> dict | None:
+        """按板块/指数计算 PE/PB 统计"""
+        import statistics
+        from datetime import date as date_cls
+
+        today = date_cls.today()
+
+        if board.startswith('index:'):
+            # 宽基指数：从 AkShare 获取指数估值
+            code = board.split(':', 1)[1]
+            return cls._fetch_index_valuation(code, today)
+
+        # 行业或全市场：从 StockScreenerSnapshot 计算
+        latest_date = (
+            StockScreenerSnapshot.objects.order_by('-snapshot_date')
+            .values_list('snapshot_date', flat=True)
+            .first()
+        )
+        if not latest_date:
+            return cls._fetch_live_market_stats()
+
+        qs = StockScreenerSnapshot.objects.filter(
+            snapshot_date=latest_date, pe__gt=0, pe__lt=500
+        )
+        if board.startswith('industry:'):
+            industry = board.split(':', 1)[1]
+            qs = qs.filter(industry=industry)
+
+        pe_values = list(qs.values_list('pe', flat=True))
+        pb_values = list(
+            StockScreenerSnapshot.objects.filter(
+                snapshot_date=latest_date, pb__gt=0, pb__lt=50,
+                **({} if board == 'all' else {'industry': board.split(':', 1)[1]} if board.startswith('industry:') else {})
+            ).values_list('pb', flat=True)
+        )
+
+        if not pe_values or len(pe_values) < 5:
+            return None
+
+        return {
+            'date': today.isoformat(),
+            'pe_median': round(statistics.median(pe_values), 2),
+            'pb_median': round(statistics.median(pb_values), 2) if pb_values else 0,
+            'pe_mean': round(statistics.mean(pe_values), 2),
+            'pb_mean': round(statistics.mean(pb_values), 2) if pb_values else 0,
+            'count': len(pe_values),
+            'pe_gt_zero_count': len(pe_values),
+        }
+
+    @classmethod
+    def _fetch_index_valuation(cls, index_code: str, today) -> dict | None:
+        """从 AkShare 获取宽基指数 PE/PB"""
+        import akshare as ak
+
+        try:
+            # 尝试用 stock_zh_index_daily_em 获取指数数据
+            # 或用 stock_a_pe_and_pb 获取指数 PE/PB
+            df = ak.stock_a_pe_and_pb(symbol=index_code)
+            if df is None or df.empty:
+                return None
+
+            # 取最后一行
+            latest = df.iloc[-1]
+            pe_val = pd.to_numeric(latest.get('pe', 0), errors='coerce')
+            pb_val = pd.to_numeric(latest.get('pb', 0), errors='coerce')
+
+            if pd.isna(pe_val) or pe_val <= 0:
+                return None
+
+            return {
+                'date': today.isoformat(),
+                'pe_median': round(float(pe_val), 2),
+                'pb_median': round(float(pb_val), 2) if not pd.isna(pb_val) else 0,
+                'pe_mean': round(float(pe_val), 2),
+                'pb_mean': round(float(pb_val), 2) if not pd.isna(pb_val) else 0,
+                'count': 1,
+                'pe_gt_zero_count': 1,
+            }
+        except Exception as e:
+            logger.debug("Index PE/PB fetch failed for %s: %s", index_code, e)
+            # 兜底：从 AkShare 指数行情获取
+            try:
+                return cls._fetch_index_valuation_fallback(index_code, today)
+            except Exception:
+                return None
+
+    @classmethod
+    def _fetch_index_valuation_fallback(cls, index_code: str, today) -> dict | None:
+        """兜底方案：从指数成分股估算 PE/PB"""
+        # 暂不实现，返回 None
+        return None
+
+    @classmethod
+    def _fetch_live_market_stats(cls) -> dict | None:
+        """直接从东方财富获取全市场 PE/PB 统计（不依赖 StockScreenerSnapshot）"""
+        import statistics
+        from datetime import date as date_cls
+        import akshare as ak
+
+        today = date_cls.today()
+
+        try:
+            df = ak.stock_zh_a_spot_em()
+        except Exception as e:
+            logger.warning("AkShare spot fetch failed: %s", e)
+            return None
+
+        if df is None or df.empty:
+            return None
+
+        pe_col = next((c for c in ['市盈率-动态', '市盈率(动态)', 'pe'] if c in df.columns), None)
+        pb_col = next((c for c in ['市净率', 'pb'] if c in df.columns), None)
+
+        if not pe_col or not pb_col:
+            return None
+
+        pe_valid = pd.to_numeric(df[pe_col], errors='coerce').dropna()
+        pe_valid = pe_valid[(pe_valid > 0) & (pe_valid < 500)]
+        pb_valid = pd.to_numeric(df[pb_col], errors='coerce').dropna()
+        pb_valid = pb_valid[(pb_valid > 0) & (pb_valid < 50)]
+
+        if len(pe_valid) < 100:
+            return None
+
+        return {
+            'date': today.isoformat(),
+            'pe_median': round(float(pe_valid.median()), 2),
+            'pb_median': round(float(pb_valid.median()), 2),
+            'pe_mean': round(float(pe_valid.mean()), 2),
+            'pb_mean': round(float(pb_valid.mean()), 2),
+            'count': len(pe_valid),
+            'pe_gt_zero_count': len(pe_valid),
         }
 
     @classmethod

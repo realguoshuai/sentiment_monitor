@@ -228,6 +228,9 @@ const RULE_TYPE_CONFIG: Record<string, { label: string; desc: string; default: n
   margin_decline:   { label: '毛利率连续下滑', desc: '连续下滑的季度数', default: 3, unit: '期' },
   receivable_surge: { label: '应收增速超营收', desc: '应收+预付占收入比例阈值', default: 30, unit: '%' },
   cfo_negative:     { label: '经营现金流转负', desc: '触发阈值（填0即可）', default: 0, unit: '' },
+  price_target:     { label: '价格到达目标价', desc: '低于目标价时提醒买入机会', default: 0, unit: '元' },
+  pe_percentile:    { label: 'PE 进入低分位', desc: 'PE 分位低于此值时提醒（历史低位）', default: 10, unit: '%' },
+  volume_anomaly:   { label: '成交量异常放大', desc: '当日成交量超过 MA20 均量的倍数', default: 3, unit: '倍' },
 }
 
 const ruleTypeOptions = computed(() =>

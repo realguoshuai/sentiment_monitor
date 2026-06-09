@@ -13,6 +13,8 @@
 ## 主要功能
 
 - 首页看板：监控股票池、实时价格、PE/PB、股息率、情绪分数、分红日历倒计时。
+- 估值温度计：自选股 PB 十年水位图，圆环仪表盘展示当前 PB 在近十年历史中的百分位排名，区间条标注低估/中位/高估刻度，一眼识别低估机会。
+- 智能盯盘提醒：14 种告警规则（情感、估值、热度、基本面恶化、价格目标、PE 分位、成交量异常），支持 APScheduler 定时自动检查，桌面端原生系统通知。
 - 工具箱：可拖拽浮动面板 — 组合仓位+分红、复利计算器、安全边际、仓位管理、分红日历、换股计算器、凯利仓位。
 - 盯盘日记：250 日成交量与 20 日均量对照图，识别缩量买点；分红除权倒计时；PE/PB/股息率安全边际卡片。
 - 分红日历：首页展示所有监控股票的下一次分红时间线，三级回退（已确立/预案/历史估算）。
@@ -171,9 +173,27 @@ sentiment_monitor/
 - `POST /api/sentiment/screener/refresh/`
 - `GET /api/sentiment/market-diary/?symbol=SZ000001`
 - `GET /api/sentiment/dividend-calendar/`
+- `GET /api/sentiment/valuation-thermometer/`
+
+### 告警系统
+
+- `GET /api/alerts/rules/`
+- `POST /api/alerts/rules/create/`
+- `DELETE /api/alerts/rules/{id}/delete/`
+- `PUT /api/alerts/rules/{id}/toggle/`
+- `GET /api/alerts/logs/`
+- `GET /api/alerts/unread-count/`
+- `POST /api/alerts/read/{id}/`
+- `POST /api/alerts/read-all/`
+- `POST /api/alerts/check/`
+- `GET /api/alerts/notifications/`
 
 ## 最近更新
 
+- 新增估值温度计：自选股 PB 十年水位图，每只监控股票的当前 PB 在近十年历史中的百分位排名，圆环仪表盘 + 区间条可视化，按低估程度排序。启动时自动预热，数据逐日积累。
+- 新增智能盯盘提醒：扩展至 14 种告警规则（新增价格目标、PE 历史分位、成交量异常），APScheduler 每 30 分钟自动检查（工作日 9:00-16:00），Electron 桌面端原生系统通知轮询（每 5 分钟）。
+- 估值温度计 API：`GET /api/sentiment/valuation-thermometer/`，返回每只监控股票的 PB 百分位、十年区间（P10/P25/P50/P75/P90）、当前值。
+- 告警通知 API：`GET /api/alerts/notifications/`，供 Electron 端轮询未读告警。
 - 数据源优先级重构：实时行情从东财快照优先改为腾讯优先（75ms，价格最新），东财快照降级为补字段角色。
 - 雪球 F10 数据源接入：单次请求 240ms 返回 22 项指标（PE/PB/ROE/毛利率/净利率/增速/流动比率/资产负债率等）+ 最近 8 年历史趋势，作为 AkShare 财务报表的备份链路。
 - 数据格式统一：`normalized_quote` 统一字段名（price/pe/pb/dividend_yield/market_cap），前端 TypeScript 类型补全。

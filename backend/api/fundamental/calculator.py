@@ -804,6 +804,48 @@ class FundamentalCalculator:
         }
 
     @classmethod
+    def calculate_pb_water_level(cls, history, period_years=10):
+        """计算当前 PB 在近 N 年历史中的百分位排名（水位）
+
+        返回:
+            percentile: 0-100，当前 PB 超过了历史百分之多少的值
+            current_pb: 当前 PB
+            pb_min / pb_max / pb_median: 历史 PB 范围
+            data_points: 历史数据点数
+        """
+        if not history:
+            return None
+
+        df = pd.DataFrame(history)
+        if 'pb' not in df.columns or 'date' not in df.columns:
+            return None
+
+        df['date_dt'] = pd.to_datetime(df['date'])
+        start_date = datetime.now() - pd.Timedelta(days=period_years * 365)
+        df = df[df['date_dt'] >= start_date]
+        vals = df[df['pb'] > 0]['pb']
+
+        if vals.empty or len(vals) < 10:
+            return None
+
+        current_pb = float(vals.iloc[-1])
+        # 当前 PB 超过了历史百分之多少的值
+        percentile = round(float((vals < current_pb).sum() / len(vals) * 100), 1)
+
+        return {
+            'percentile': percentile,
+            'current_pb': round(current_pb, 2),
+            'pb_min': round(float(vals.min()), 2),
+            'pb_max': round(float(vals.max()), 2),
+            'pb_median': round(float(vals.median()), 2),
+            'p10': round(float(vals.quantile(0.1)), 2),
+            'p25': round(float(vals.quantile(0.25)), 2),
+            'p75': round(float(vals.quantile(0.75)), 2),
+            'p90': round(float(vals.quantile(0.9)), 2),
+            'data_points': len(vals),
+        }
+
+    @classmethod
     def extract_cashflow_metrics(cls, df_cash):
         if df_cash is None or df_cash.empty:
             return pd.DataFrame(columns=['REPORT_DATE', 'cfo', 'capex']), 'unavailable'

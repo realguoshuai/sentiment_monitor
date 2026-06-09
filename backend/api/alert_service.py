@@ -56,6 +56,12 @@ def _check_single_rule(rule: AlertRule) -> bool:
         return _check_hot_rule(rule, stock, today)
     elif rule.rule_type in ('margin_decline', 'receivable_surge', 'cfo_negative'):
         return _check_fundamental_rule(rule, stock)
+    elif rule.rule_type == 'price_target':
+        return _check_price_target(rule, stock)
+    elif rule.rule_type == 'pe_percentile':
+        return _check_pe_percentile(rule, stock)
+    elif rule.rule_type == 'volume_anomaly':
+        return _check_volume_anomaly(rule, stock)
 
     return False
 
@@ -207,6 +213,97 @@ def _check_fundamental_rule(rule: AlertRule, stock: Stock) -> bool:
         _create_alert_log(rule, message, value)
 
     return triggered
+
+
+def _check_price_target(rule: AlertRule, stock: Stock) -> bool:
+    """检查价格到达目标价"""
+    try:
+        realtime = PriceService.get_realtime_price([stock.symbol], fetch_fundamentals=False)
+    except Exception:
+        return False
+    if not realtime:
+        return False
+
+    price_info = realtime.get(stock.symbol)
+    if not price_info:
+        return False
+
+    price = price_info.get('price', 0)
+    if price <= 0:
+        return False
+
+    # threshold 含义：低于此价触发买入信号，高于此价触发卖出信号
+    # 约定：threshold > 0 表示"低于目标价提醒买入"
+    if price <= rule.threshold:
+        message = f"当前价 {price:.2f} 已触及目标价 {rule.threshold:.2f}，可关注买入机会"
+        _create_alert_log(rule, message, price)
+        return True
+
+    return False
+
+
+def _check_pe_percentile(rule: AlertRule, stock: Stock) -> bool:
+    """检查 PE 是否进入历史低分位"""
+    from .analysis_service import AnalysisService
+
+    try:
+        analysis = AnalysisService.get_analysis(stock.symbol)
+    except Exception:
+        return False
+
+    if not analysis:
+        return False
+
+    # 从分析结果中获取 PE 分位
+    pe_pct = analysis.get('current_pe_percentile') or analysis.get('pe_percentile')
+    if pe_pct is None:
+        return False
+
+    # threshold 表示分位阈值，如 10 表示 PE 低于历史 10% 分位
+    if pe_pct < rule.threshold:
+        message = f"PE 分位 {pe_pct:.1f}% 已低于阈值 {rule.threshold}%，处于历史低位"
+        _create_alert_log(rule, message, pe_pct)
+        return True
+
+    return False
+
+
+def _check_volume_anomaly(rule: AlertRule, stock: Stock) -> bool:
+    """检查成交量异常放大（今日量 / MA20 量 > threshold）"""
+    from .price_service import PriceService
+
+    try:
+        history = PriceService.get_historical_data([stock.symbol], limit=21, period='day')
+    except Exception:
+        return False
+
+    data = history.get(stock.symbol, [])
+    if len(data) < 20:
+        return False
+
+    # 最后一条是今天（或最近交易日）
+    latest = data[-1]
+    today_vol = latest.get('volume', 0)
+    if today_vol <= 0:
+        return False
+
+    # 前 20 条计算 MA20
+    prev_20 = data[-21:-1] if len(data) >= 21 else data[:-1]
+    volumes = [d.get('volume', 0) for d in prev_20 if d.get('volume', 0) > 0]
+    if not volumes:
+        return False
+
+    ma20 = sum(volumes) / len(volumes)
+    if ma20 <= 0:
+        return False
+
+    ratio = today_vol / ma20
+    if ratio > rule.threshold:
+        message = f"成交量 {today_vol:.0f} 是 MA20 均量的 {ratio:.1f} 倍（阈值 {rule.threshold} 倍）"
+        _create_alert_log(rule, message, ratio)
+        return True
+
+    return False
 
 
 def _create_alert_log(rule: AlertRule, message: str, value: float):
