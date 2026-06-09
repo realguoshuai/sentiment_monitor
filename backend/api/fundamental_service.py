@@ -1,3 +1,4 @@
+import json
 import pandas as pd
 import numpy as np
 import akshare as ak
@@ -27,7 +28,19 @@ class FundamentalService:
     @classmethod
     def _cache_get(cls, key):
         try:
-            return cache.get(key)
+            val = cache.get(key)
+            if val is None:
+                return None
+            # JSON 序列化的 DataFrame（CacheManager 格式）自动恢复
+            if isinstance(val, list):
+                try:
+                    import pandas as pd
+                    df = pd.DataFrame(val)
+                    if not df.empty:
+                        return df
+                except Exception:
+                    pass
+            return val
         except Exception as e:
             logger.warning(f"Cache deserialization failed for {key}: {e}")
             try:
@@ -39,7 +52,13 @@ class FundamentalService:
     @classmethod
     def _cache_set(cls, key, value, timeout):
         try:
-            cache.set(key, value, timeout)
+            # DataFrame 走 JSON 序列化，避免 Pickle 跨版本崩溃
+            if isinstance(value, pd.DataFrame):
+                json_str = value.to_json(orient='records', date_format='iso')
+                data = json.loads(json_str)
+                cache.set(key, data, timeout)
+            else:
+                cache.set(key, value, timeout)
         except Exception as e:
             logger.warning(f"Cache storage failed for {key}: {e}")
 

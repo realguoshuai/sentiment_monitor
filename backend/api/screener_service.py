@@ -33,8 +33,12 @@ class ScreenerService:
     VALUATION_CACHE_KEY = 'a_share_spot_snapshot_for_valuation'
     ROE_CACHE_KEY = 'screener_latest_roe_map_v2'
     DIVIDEND_CACHE_KEY = 'screener_latest_dividend_yield_map_v3'
+    ROE_STALE_KEY = 'screener_latest_roe_map_v2_stale'
+    DIVIDEND_STALE_KEY = 'screener_latest_dividend_yield_map_v3_stale'
     ROE_CACHE_TTL = 60 * 60 * 12
     DIVIDEND_CACHE_TTL = 60 * 60 * 12
+    ROE_STALE_TTL = 60 * 60 * 72  # 3 天
+    DIVIDEND_STALE_TTL = 60 * 60 * 72
 
     @staticmethod
     def _first_existing_column(frame: pd.DataFrame, candidates: List[str]) -> str | None:
@@ -102,6 +106,12 @@ class ScreenerService:
         if isinstance(cached, dict) and cached:
             return cached
 
+        # stale 兜底
+        try:
+            stale = cache.get(cls.ROE_STALE_KEY)
+        except Exception:
+            stale = None
+
         roe_map: Dict[str, dict] = {}
         for report_date in cls._annual_report_dates():
             try:
@@ -142,8 +152,15 @@ class ScreenerService:
         if roe_map:
             try:
                 cache.set(cls.ROE_CACHE_KEY, roe_map, cls.ROE_CACHE_TTL)
+                cache.set(cls.ROE_STALE_KEY, roe_map, cls.ROE_STALE_TTL)
             except Exception as exc:
                 logger.warning("Screener ROE cache write failed, continuing without cache: %s", exc)
+            return roe_map
+
+        # fresh 失败，用 stale 兜底
+        if stale:
+            logger.info("Using stale ROE cache as fallback")
+            return stale
         return roe_map
 
     @staticmethod
@@ -164,6 +181,12 @@ class ScreenerService:
 
         if isinstance(cached, dict) and cached:
             return cached
+
+        # stale 兜底
+        try:
+            stale = cache.get(cls.DIVIDEND_STALE_KEY)
+        except Exception:
+            stale = None
 
         payout_yearly_cash: Dict[str, Dict[int, float]] = {}
         latest_event_dates: Dict[str, pd.Timestamp] = {}
@@ -246,8 +269,15 @@ class ScreenerService:
         if dividend_map:
             try:
                 cache.set(cls.DIVIDEND_CACHE_KEY, dividend_map, cls.DIVIDEND_CACHE_TTL)
+                cache.set(cls.DIVIDEND_STALE_KEY, dividend_map, cls.DIVIDEND_STALE_TTL)
             except Exception as exc:
                 logger.warning("Screener dividend cache write failed, continuing without cache: %s", exc)
+            return dividend_map
+
+        # fresh 失败，用 stale 兜底
+        if stale:
+            logger.info("Using stale dividend cache as fallback")
+            return stale
         return dividend_map
 
     @classmethod

@@ -495,16 +495,17 @@ def search_stocks(request):
     normalized_code_query = query.replace('SH', '').replace('SZ', '')
         
     # 尝试从缓存获取全量快照，减少 AkShare 的慢采样
-    SNAPSHOT_KEY = "stock_zh_a_snapshot"
-    df = cache.get(SNAPSHOT_KEY)
-    
+    from .cache_manager import CacheManager
+    SNAPSHOT_KEY = "stock_zh_a_snapshot_v2"
+    df = CacheManager.get_df(SNAPSHOT_KEY)
+
     if df is None:
         try:
             # 首次加载或缓存过期
             df = ak.stock_zh_a_spot_em()
             # 只保留核心搜索字段，减小缓存体积
             df = df[['代码', '名称', '最新价']]
-            cache.set(SNAPSHOT_KEY, df, 3600 * 24)
+            CacheManager.set_df(SNAPSHOT_KEY, df, 3600 * 24)
         except Exception as e:
             logger.error(f"Failed to fetch stock snapshot: {e}")
             return Response([])

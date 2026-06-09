@@ -588,7 +588,7 @@ class PriceService:
         # --- [增量缓存加速核心逻辑] ---
         # 缓存键包含周期，但不包含 limit (因为我们总是缓存全量并按需裁剪)
         raw_cache_key = f"price_history_raw_{fixed_symbol}_{fetch_period}"
-        cached_raw = cache.get(raw_cache_key) # [{date, price, volume}, ...]
+        cached_raw = cls._cache_get(raw_cache_key) # [{date, price, volume}, ...]
         
         price_list = []
         if isinstance(cached_raw, list) and cached_raw:
@@ -623,7 +623,7 @@ class PriceService:
                          if new_points:
                              price_list.extend(new_points)
                              # 更新缓存
-                             cache.set(raw_cache_key, price_list, 86400 * 7) # 存档 7 天
+                             cls._cache_set(raw_cache_key, price_list, 86400 * 7) # 存档 7 天
                  except Exception:
                      pass # 增量失败不影响，后续 fallback 或使用旧数据
         
@@ -644,7 +644,7 @@ class PriceService:
                     })
                 price_list.sort(key=lambda x: x['date'])
                 if price_list:
-                    cache.set(raw_cache_key, price_list, 86400 * 7)
+                    cls._cache_set(raw_cache_key, price_list, 86400 * 7)
             except Exception as e:
                 logger.error(f"Full fetch failed for {fixed_symbol}: {e}")
                 # 兜底：尝试 Baostock 获取历史 K 线
@@ -654,7 +654,7 @@ class PriceService:
                     if bs_rows:
                         price_list = bs_rows
                         price_list.sort(key=lambda x: x['date'])
-                        cache.set(raw_cache_key, price_list, 86400 * 7)
+                        cls._cache_set(raw_cache_key, price_list, 86400 * 7)
                         logger.info("Baostock fallback succeeded for %s (%d rows)", fixed_symbol, len(price_list))
                 except Exception as bs_err:
                     logger.warning("Baostock fallback also failed for %s: %s", fixed_symbol, bs_err)
