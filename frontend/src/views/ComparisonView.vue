@@ -650,7 +650,19 @@ async function fetchComparisonData() {
         console.warn('[ComparisonView] realtime last failed:', rtLastResp.reason)
       }
       if (rtMinResp.status === 'fulfilled') {
-        historicalCache.value[`${[...symbols].sort().join(',')}_minute`] = rtMinResp.value.data
+        const minData = rtMinResp.value.data
+        historicalCache.value[`${[...symbols].sort().join(',')}_minute`] = minData
+        // 检查返回数据是否为空
+        const hasData = symbols.some((sym: string) => {
+          const series = minData?.[sym]
+          return Array.isArray(series) && series.length > 0
+        })
+        if (!hasData) {
+          dataNotice.value = '分时数据暂未返回，可能是非交易时段或数据源暂不可用。'
+        }
+      } else {
+        console.warn('[ComparisonView] intraday minute failed:', rtMinResp.reason)
+        dataNotice.value = '分时数据获取失败，请稍后重试。'
       }
     } else {
       const scale = currentTimeScale.value
@@ -678,6 +690,9 @@ async function fetchComparisonData() {
       }
       if (histResp.status === 'fulfilled' && histResp.value) {
         historicalCache.value[cacheKey] = histResp.value.data
+      } else if (histResp.status === 'rejected') {
+        console.warn('[ComparisonView] historical data failed:', histResp.reason)
+        dataNotice.value = '历史数据获取失败，请稍后重试。'
       }
     }
     // 兜底：如果 rtPrices 为空，尝试从 store 全局实时价格获取
