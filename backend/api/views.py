@@ -454,12 +454,20 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
         symbols = [s.strip() for s in request.GET.get('symbols', '').split(',') if s.strip()]
         if not symbols:
             return Response({'error': '至少需要一个股票代码'}, status=400)
-        
+
         mode = request.GET.get('type', 'last')
-        if mode == 'minute':
-            data = PriceService.get_intraday_data(symbols)
-        else:
-            data = PriceService.get_realtime_price(symbols, fetch_fundamentals=True)
+        force = request.GET.get('force', '').lower() in ('1', 'true', 'yes')
+        logger.info(f"[comparison_realtime] symbols={symbols}, mode={mode}, force={force}")
+        try:
+            if mode == 'minute':
+                data = PriceService.get_intraday_data(symbols, force_refresh=force)
+            else:
+                data = PriceService.get_realtime_price(symbols, fetch_fundamentals=True)
+            logger.info(f"[comparison_realtime] response keys={list(data.keys())}, "
+                        f"counts={{k: len(v) if isinstance(v, list) else 'dict' for k, v in data.items()}}")
+        except Exception as e:
+            logger.error(f"[comparison_realtime] error: {e}", exc_info=True)
+            data = {}
         return Response(data)
 
     @action(detail=False, methods=['get'])

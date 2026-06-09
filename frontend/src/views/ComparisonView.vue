@@ -90,6 +90,28 @@
             <span>{{ stock.stock_name }}</span>
             <span class="text-[10px] opacity-50 font-mono">{{ stock.stock_symbol }}</span>
           </button>
+          <!-- 搜索添加任意股票 -->
+          <div class="relative">
+            <input
+              v-model="searchQuery"
+              @input="onSearchInput"
+              @focus="searchFocused = true"
+              @blur="onSearchBlur"
+              placeholder="搜索股票代码/名称..."
+              class="px-3 py-2 rounded-xl border border-dashed border-slate-300 text-xs text-slate-600 bg-slate-50 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-200 w-44"
+            />
+            <div v-if="searchFocused && searchResults.length" class="absolute z-50 top-full left-0 mt-1 w-64 bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
+              <button
+                v-for="r in searchResults"
+                :key="r.symbol"
+                @mousedown.prevent="addFromSearch(r)"
+                class="w-full text-left px-4 py-2 text-xs hover:bg-indigo-50 flex items-center justify-between"
+              >
+                <span class="font-bold text-slate-700">{{ r.name }}</span>
+                <span class="text-slate-400 font-mono">{{ r.symbol }}</span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -390,6 +412,36 @@ const currentMetricMode = ref<string>('price')
 const currentCalcMode = ref<string>('diff')
 const selectedSymbols = ref<string[]>([])
 const loadingPrice = ref(false)
+
+// 搜索添加股票
+const searchQuery = ref('')
+const searchResults = ref<any[]>([])
+const searchFocused = ref(false)
+let searchTimer: ReturnType<typeof setTimeout> | null = null
+
+function onSearchInput() {
+  if (searchTimer) clearTimeout(searchTimer)
+  const q = searchQuery.value.trim()
+  if (!q) { searchResults.value = []; return }
+  searchTimer = setTimeout(async () => {
+    try {
+      const resp = await stockApi.searchStocks(q)
+      searchResults.value = (resp.data || []).slice(0, 8)
+    } catch { searchResults.value = [] }
+  }, 300)
+}
+
+function onSearchBlur() {
+  // 延迟关闭，让 mousedown 事件先触发
+  setTimeout(() => { searchFocused.value = false }, 200)
+}
+
+function addFromSearch(stock: any) {
+  const sym = normalizeSymbol(stock.symbol || stock.stock_symbol)
+  toggleStock(sym)
+  searchQuery.value = ''
+  searchResults.value = []
+}
 const rtPrices = ref<Record<string, RealtimePrice>>({})
 const comparisonData = ref<any[]>([])
 const lastGoodComparisonData = ref<any[]>([])
@@ -486,7 +538,7 @@ function getMetricLabel(val: string) {
 function getStockColor(symbol: string) {
   const fixed = normalizeSymbol(symbol)
   const index = store.dashboardStocks.findIndex(s => normalizeSymbol(s.stock_symbol) === fixed)
-  return colors[index % colors.length]
+  return colors[((index % colors.length) + colors.length) % colors.length]
 }
 
 function toggleStock(symbol: string) {
@@ -517,9 +569,11 @@ function buildDefaultComparisonSelection(availableSymbols: string[], currentSymb
 
   const availableSet = new Set(availableSymbols)
   const normalizedSelected = currentSymbols.map(normalizeSymbol)
-  const kept = normalizedSelected.filter(symbol => availableSet.has(symbol))
-  const nextSelected = [...kept]
 
+  // 保留用户已选择的股票（不强制要求在 availableSet 中），只要格式合法即可
+  const nextSelected = normalizedSelected.filter(s => /^\w{2}\d{6}$/.test(s))
+
+  // 只在用户选择不足 2 只时，才用默认值填充
   for (const symbol of defaultComparisonSymbols) {
     if (nextSelected.length >= 2) break
     if (availableSet.has(symbol) && !nextSelected.includes(symbol)) {
@@ -621,26 +675,29 @@ const drawdownStats = computed(() => {
 // 防重复请求标记
 let _fetchSeq = 0
 
-async function fetchComparisonData() {
+async function fetchComparisonData(force = false) {
   if (selectedSymbols.value.length !== 2) return
   const seq = ++_fetchSeq
+
+  // 先修正 selectedSymbols，避免 watcher 重复触发（放在 loading 状态之前，防止闪烁）
+  const symbols = selectedSymbols.value.map(normalizeSymbol)
+  const needsFix = symbols.some((symbol, index) => symbol !== selectedSymbols.value[index])
+  if (needsFix) {
+    selectedSymbols.value = symbols
+    // 修正后由 watcher 重新触发，此处直接返回避免重复请求
+    return
+  }
+
+  const loadStart = Date.now()
   loadingPrice.value = true
   try {
     dataNotice.value = ''
-    const symbols = selectedSymbols.value.map(normalizeSymbol)
-    // 先修正 selectedSymbols，避免 watcher 重复触发
-    const needsFix = symbols.some((symbol, index) => symbol !== selectedSymbols.value[index])
-    if (needsFix) {
-      selectedSymbols.value = symbols
-      // 修正后由 watcher 重新触发，此处直接返回避免重复请求
-      return
-    }
-    const rtLastPromise = stockApi.getComparisonRealtime(symbols, 'last')
+    const rtLastPromise = stockApi.getComparisonRealtime(symbols, 'last', force)
 
     if (currentTimeScale.value === 'minute') {
       const [rtLastResp, rtMinResp] = await Promise.allSettled([
         rtLastPromise,
-        stockApi.getComparisonRealtime(symbols, 'minute'),
+        stockApi.getComparisonRealtime(symbols, 'minute', force),
       ])
       // 检查是否已被更新的请求取代
       if (seq !== _fetchSeq) return
@@ -723,7 +780,15 @@ async function fetchComparisonData() {
     if (Object.keys(fallback).length) rtPrices.value = fallback
     restoreLastGoodData('本次刷新暂未拿到完整数据，已保留上一轮有效走势。')
   } finally {
-    loadingPrice.value = false
+    // 只有最新的请求才控制 loading 状态，防止旧请求的 finally 覆盖新请求的 loading
+    if (seq === _fetchSeq) {
+      // 确保 loading 动画至少显示 500ms，避免请求太快导致用户感知不到加载状态
+      const elapsed = Date.now() - loadStart
+      if (elapsed < 500) {
+        await new Promise(r => setTimeout(r, 500 - elapsed))
+      }
+      loadingPrice.value = false
+    }
   }
 }
 
@@ -754,6 +819,7 @@ function remapComparisonData() {
 
   const s1 = getSeriesForSymbol(data, symbols[0])
   const s2 = getSeriesForSymbol(data, symbols[1])
+  console.log('[Remap] data keys:', Object.keys(data || {}), 's0:', symbols[0], 's1:', symbols[1], 's1.len:', s1.length, 's2.len:', s2.length)
 
   if (!s1.length || !s2.length) {
     const fallbackSeries = scale === 'minute' ? buildRealtimeFallbackSeries(symbols) : []
@@ -805,6 +871,7 @@ function remapComparisonData() {
         }
     }
   }).filter(Boolean)
+  console.log('[Remap] after map+filter:', comparisonData.value.length, 'pts, sample:', comparisonData.value[0])
 
   if (!comparisonData.value.length) {
     restoreLastGoodData('当前指标没有可绘制的数据，已保留上一轮有效走势。')
@@ -833,7 +900,7 @@ async function refreshComparisonData() {
   if (selectedSymbols.value.length !== 2) return
   const cacheKey = getCurrentCacheKey()
   delete historicalCache.value[cacheKey]
-  await fetchComparisonData()
+  await fetchComparisonData(true)
 }
 
 function calculateIntradayMetrics(item: any, rt: any, sym: string) {
@@ -860,13 +927,22 @@ function calculateIntradayMetrics(item: any, rt: any, sym: string) {
 }
 
 function updatePriceChart() {
+  // 确保 DOM 已更新（loading 结束后容器才可见），再渲染图表
+  nextTick(() => {
+    _doUpdatePriceChart()
+  })
+}
+
+function _doUpdatePriceChart() {
   if (!priceSpreadRef.value) {
     nextTick(() => {
-      if (priceSpreadRef.value) updatePriceChart()
+      if (priceSpreadRef.value) _doUpdatePriceChart()
     })
     return
   }
-  if (!priceChart) priceChart = echarts.init(priceSpreadRef.value)
+  // 每次强制重建图表实例，避免旧实例状态污染
+  if (priceChart) { priceChart.dispose(); priceChart = null }
+  priceChart = echarts.init(priceSpreadRef.value)
   if (!comparisonData.value.length) {
     priceChart.clear()
     return
@@ -1155,6 +1231,8 @@ function updatePriceChart() {
     ]
   }
   priceChart.setOption(option, true)
+  // 强制重新计算容器尺寸，防止容器刚显示时尺寸为 0
+  setTimeout(() => { priceChart?.resize() }, 100)
 
   updateDrawdownChart()
 }
@@ -1166,7 +1244,8 @@ function updateDrawdownChart() {
     })
     return
   }
-  if (!drawdownChart) drawdownChart = echarts.init(drawdownRef.value)
+  if (drawdownChart) { drawdownChart.dispose(); drawdownChart = null }
+  drawdownChart = echarts.init(drawdownRef.value)
   if (!drawdownStats.value.series.length) {
     drawdownChart.clear()
     return
@@ -1219,6 +1298,7 @@ function updateDrawdownChart() {
     ]
   }
   drawdownChart.setOption(option, true)
+  setTimeout(() => { drawdownChart?.resize() }, 100)
 }
 
 const handleResize = () => {

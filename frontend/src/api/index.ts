@@ -242,9 +242,9 @@ export const stockApi = {
   getSentimentBySymbol: (symbol: string) => api.get<SentimentData>(`/sentiment/${symbol}/`),
   triggerCollection: () => api.post<{ status: string, message: string }>('/collect/'),
   getRealtimePrices: () => api.get<Record<string, RealtimePrice>>('/sentiment/realtime_prices/'),
-  getComparisonRealtime: (symbols: string[], type: 'last' | 'minute' = 'last') =>
+  getComparisonRealtime: (symbols: string[], type: 'last' | 'minute' = 'last', force: boolean = false) =>
     api.get<Record<string, RealtimePrice>>(
-      `/sentiment/comparison_realtime/?symbols=${symbols.join(',')}&type=${type}`,
+      `/sentiment/comparison_realtime/?symbols=${symbols.join(',')}&type=${type}${force ? '&force=1' : ''}`,
       { timeout: type === 'minute' ? 30000 : 15000 },
     ),
   getComparisonHistorical: (symbols: string[], limit: number = 30, period: string = 'day') =>

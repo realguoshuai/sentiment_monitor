@@ -958,7 +958,7 @@ class PriceService:
         return aligned
             
     @classmethod
-    def get_intraday_data(cls, symbols):
+    def get_intraday_data(cls, symbols, force_refresh=False):
         """获取当日分时价格数据。
 
         The comparison frontend only needs minute price points for 1D Price mode
@@ -966,28 +966,39 @@ class PriceService:
         metrics. Keeping this endpoint price-only avoids slow financial and
         dividend fetches blocking the chart on cold startup.
         """
-        
+
         results = {}
         missing_symbols = []
 
         for raw_symbol in symbols:
             symbol = cls._fix_symbol(raw_symbol)
+            if force_refresh:
+                logger.info(f"[get_intraday_data] force refresh, skipping cache for {symbol}")
+                missing_symbols.append(symbol)
+                continue
             cached = cls._normalize_intraday_cache_value(
                 cls._cache_get(cls._intraday_single_cache_key(symbol))
             )
             if cached:
+                logger.info(f"[get_intraday_data] cache hit for {symbol}, {len(cached)} points")
                 results[symbol] = cached
             else:
+                logger.info(f"[get_intraday_data] cache miss for {symbol}")
                 missing_symbols.append(symbol)
+
+        if missing_symbols:
+            logger.info(f"[get_intraday_data] need to fetch: {missing_symbols}")
 
         for symbol in missing_symbols:
             s = symbol.lower()
             url = f"http://ifzq.gtimg.cn/appstock/app/minute/query?code={s}"
 
             try:
+                logger.info(f"[get_intraday_data] fetching {symbol} from Tencent: {url}")
                 resp = cls._session.get(url, timeout=(8, 15), proxies={"http": None, "https": None})
                 data = resp.json()
                 if data.get('code') != 0:
+                    logger.warning(f"[get_intraday_data] Tencent returned code={data.get('code')} for {symbol}")
                     stale = cls._get_intraday_stale(symbol)
                     if stale:
                         results[symbol] = stale
@@ -995,13 +1006,16 @@ class PriceService:
 
                 stock_data = data.get('data', {}).get(s, {})
                 minutes = stock_data.get('data', {}).get('data', [])
+                logger.info(f"[get_intraday_data] Tencent returned {len(minutes)} raw minutes for {symbol}")
                 history = cls._parse_intraday_minutes(minutes)
                 if history:
+                    logger.info(f"[get_intraday_data] parsed {len(history)} points for {symbol}")
                     results[symbol] = history
                     payload = {'points': history}
                     cls._cache_set(cls._intraday_single_cache_key(symbol), payload, cls.INTRADAY_CACHE_TTL)
                     cls._cache_set(cls._intraday_single_stale_cache_key(symbol), payload, cls.INTRADAY_STALE_CACHE_TTL)
                 else:
+                    logger.warning(f"[get_intraday_data] no valid minutes parsed for {symbol}")
                     stale = cls._get_intraday_stale(symbol)
                     if stale:
                         results[symbol] = stale
