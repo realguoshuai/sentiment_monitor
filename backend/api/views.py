@@ -764,20 +764,16 @@ def get_market_diary(request):
     fixed_symbol = PriceService._fix_symbol(symbol)
     from .fundamental_service import FundamentalService
 
-    # force=true 时清除所有缓存，重新拉取
+    # force=true 时刷新今日数据；历史缺失时才补拉
     force = request.GET.get('force', '').lower() in ('true', '1', 'yes')
 
     # ---- 1. 历史 K 线（长缓存 24h，不含今天） ----
     history_cache_key = f"market_diary_hist_v1_{fixed_symbol}"
-    if force:
+    try:
+        history = cache.get(history_cache_key)
+    except Exception:
         cache.delete(history_cache_key)
         history = None
-    else:
-        try:
-            history = cache.get(history_cache_key)
-        except Exception:
-            cache.delete(history_cache_key)
-            history = None
 
     if history is None:
         try:
