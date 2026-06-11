@@ -193,11 +193,11 @@ const releaseVersion = '0.1.4'
 const releaseNotesStorageKey = `sentiment-monitor-release-notes-${releaseVersion}`
 
 const lastUpdate = computed(() => {
-  const now = new Date()
-  const month = now.getMonth() + 1
-  const day = now.getDate()
-  const hours = now.getHours().toString().padStart(2, '0')
-  const mins = now.getMinutes().toString().padStart(2, '0')
+  const d = store.lastUpdated || new Date()
+  const month = d.getMonth() + 1
+  const day = d.getDate()
+  const hours = d.getHours().toString().padStart(2, '0')
+  const mins = d.getMinutes().toString().padStart(2, '0')
   return `${month}月${day}日 ${hours}:${mins}`
 })
 

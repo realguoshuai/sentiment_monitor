@@ -432,6 +432,7 @@ import QualityPayoutChart from '@/components/QualityPayoutChart.vue'
 import QualityShareholderChart from '@/components/QualityShareholderChart.vue'
 import QualityStabilityChart from '@/components/QualityStabilityChart.vue'
 import AlgorithmExplainer from '@/components/AlgorithmExplainer.vue'
+import InfoTooltip from '@/components/InfoTooltip.vue'
 
 const route = useRoute()
 const sentimentStore = useSentimentStore()

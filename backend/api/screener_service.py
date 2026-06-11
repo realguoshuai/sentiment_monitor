@@ -738,7 +738,7 @@ class ScreenerService:
             if not match:
                 continue
             fields = match.group(2).split('~')
-            if len(fields) < 46:
+            if len(fields) < 47:
                 continue
 
             def safe_float(v):

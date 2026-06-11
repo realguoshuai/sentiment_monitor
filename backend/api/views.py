@@ -1058,11 +1058,10 @@ from .models import Portfolio, PortfolioHolding
 def get_portfolio(request):
     """获取默认组合及持仓"""
     try:
-        # 获取或创建默认组合
-        portfolio, created = Portfolio.objects.get_or_create(
-            is_default=True,
-            defaults={'name': '默认组合', 'total_capital': 0}
-        )
+        # 获取或创建默认组合（filter+first 防止 MultipleObjectsReturned）
+        portfolio = Portfolio.objects.filter(is_default=True).first()
+        if not portfolio:
+            portfolio = Portfolio.objects.create(name='默认组合', is_default=True, total_capital=0)
 
         holdings = PortfolioHolding.objects.filter(portfolio=portfolio).select_related('stock')
 
@@ -1098,11 +1097,10 @@ def save_portfolio(request):
         holdings = data.get('holdings', [])
 
         with transaction.atomic():
-            # 获取或创建默认组合
-            portfolio, created = Portfolio.objects.get_or_create(
-                is_default=True,
-                defaults={'name': '默认组合'}
-            )
+            # 获取或创建默认组合（filter+first 防止 MultipleObjectsReturned）
+            portfolio = Portfolio.objects.filter(is_default=True).first()
+            if not portfolio:
+                portfolio = Portfolio.objects.create(name='默认组合', is_default=True)
             portfolio.total_capital = total_capital
             portfolio.save()
 

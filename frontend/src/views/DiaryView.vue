@@ -146,20 +146,20 @@
             <!-- PE -->
             <div class="bg-slate-900/60 p-3 rounded-xl border border-white/5">
               <span class="text-[11px] text-slate-400 block mb-0.5">动态 PE</span>
-              <span class="text-lg font-bold font-mono text-slate-200">{{ diaryData.latest.pe.toFixed(2) }}</span>
+              <span class="text-lg font-bold font-mono text-slate-200">{{ (diaryData.latest?.pe ?? 0).toFixed(2) }}</span>
             </div>
 
             <!-- PB -->
             <div class="bg-slate-900/60 p-3 rounded-xl border border-white/5">
               <span class="text-[11px] text-slate-400 block mb-0.5">静态 PB</span>
-              <span class="text-lg font-bold font-mono text-slate-200">{{ diaryData.latest.pb.toFixed(2) }}</span>
+              <span class="text-lg font-bold font-mono text-slate-200">{{ (diaryData.latest?.pb ?? 0).toFixed(2) }}</span>
             </div>
 
             <!-- Dividend Yield -->
             <div class="bg-slate-900/60 p-3 rounded-xl border border-white/5 col-span-2">
               <span class="text-[11px] text-slate-400 block mb-0.5">滚动股息率 (TTM)</span>
               <div class="flex items-baseline gap-1">
-                <span class="text-xl font-black font-mono text-emerald-400">{{ diaryData.latest.dividend_yield.toFixed(2) }}</span>
+                <span class="text-xl font-black font-mono text-emerald-400">{{ (diaryData.latest?.dividend_yield ?? 0).toFixed(2) }}</span>
                 <span class="text-xs text-emerald-500 font-bold">%</span>
               </div>
             </div>
@@ -247,6 +247,7 @@ const onSymbolChange = async () => {
   await fetchDiaryData(selectedSymbol.value)
 }
 
+let _diarySeq = 0
 const fetchDiaryData = async (symbol: string, force = false) => {
   if (!force && diaryCache.value[symbol]) {
     diaryData.value = diaryCache.value[symbol]
@@ -254,16 +255,19 @@ const fetchDiaryData = async (symbol: string, force = false) => {
     initChart()
     return
   }
+  const seq = ++_diarySeq
   loading.value = true
   error.value = null
   try {
     const res = await stockApi.getMarketDiary(symbol)
+    if (seq !== _diarySeq) return
     diaryData.value = res.data
     diaryCache.value[symbol] = res.data
     loading.value = false
     await nextTick()
     initChart()
   } catch (err: any) {
+    if (seq !== _diarySeq) return
     error.value = err.response?.data?.error || err.message || '获取盯盘日记失败'
     loading.value = false
   }

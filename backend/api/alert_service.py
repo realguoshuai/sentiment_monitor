@@ -155,7 +155,7 @@ def _check_hot_rule(rule: AlertRule, stock: Stock, today: date) -> bool:
         return False
 
     latest = sentiments.first()
-    avg_hot = sentiments.aggregate(avg=models.Avg('hot_score'))['avg'] or 0
+    avg_hot = sentiments[1:].aggregate(avg=models.Avg('hot_score'))['avg'] or 0
 
     if avg_hot > 0 and latest.hot_score > avg_hot * rule.threshold:
         message = f"热度 {latest.hot_score:.1f} 超过均值 {avg_hot:.1f} 的 {rule.threshold} 倍"

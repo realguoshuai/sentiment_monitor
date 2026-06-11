@@ -205,7 +205,7 @@
                <div class="p-3 bg-indigo-50/50 rounded-xl border border-indigo-100/50">
                  <div class="text-[9px] font-bold text-indigo-400 uppercase tracking-tighter mb-1">ROE (推定)</div>
                  <div class="text-xs font-bold text-indigo-700">
-                   {{ rtPrices[sym] ? ((rtPrices[sym].pb / rtPrices[sym].pe) * 100).toFixed(1) + '%' : '--' }}
+                   {{ rtPrices[sym] && rtPrices[sym].pe > 0 ? ((rtPrices[sym].pb / rtPrices[sym].pe) * 100).toFixed(1) + '%' : '--' }}
                  </div>
                </div>
                <div class="p-3 bg-emerald-50/50 rounded-xl border border-emerald-100/50">
