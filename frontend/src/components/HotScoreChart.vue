@@ -79,9 +79,6 @@ const updateChart = () => {
 
         if (!rt) return `${name}: ${total.toFixed(2)}%`
 
-        let roe = (rt.pb / rt.pe) * 100
-        if (item.stock_symbol.includes('002304') && roe < 20) roe = 20
-
         return `
           <div style="font-weight:bold;margin-bottom:4px;">${name}</div>
           <div style="display:flex;justify-content:space-between;gap:16px;">
@@ -182,6 +179,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
   chart?.dispose()
   chart = null
 })

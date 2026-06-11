@@ -204,12 +204,17 @@ const lastUpdate = computed(() => {
 const refreshData = async () => {
   if (isRefreshing.value) return
   isRefreshing.value = true
-  await Promise.all([
-    store.fetchLatestSentiment(),
-    store.fetchDividendCalendar(),
-    store.fetchRealtimePrices()
-  ])
-  isRefreshing.value = false
+  try {
+    await Promise.all([
+      store.fetchLatestSentiment(),
+      store.fetchDividendCalendar(),
+      store.fetchRealtimePrices()
+    ])
+  } catch (e) {
+    console.error('刷新数据失败:', e)
+  } finally {
+    isRefreshing.value = false
+  }
 }
 
 const handleReleaseNotesClose = (remember: boolean) => {

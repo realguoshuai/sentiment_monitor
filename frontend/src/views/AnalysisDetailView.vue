@@ -112,7 +112,18 @@
       </div>
     </AlgorithmExplainer>
 
-    <div class="main-content" v-if="loading && !analysisData">
+    <div class="main-content" v-if="fetchError && !analysisData">
+      <div class="loading-overlay">
+        <div class="loading-box" style="text-align:center;">
+          <div style="font-size:2rem;margin-bottom:12px;">⚠️</div>
+          <div style="font-size:14px;color:#94a3b8;margin-bottom:16px;">{{ fetchError }}</div>
+          <button type="button" class="loading-back-btn" @click="fetchMainData()">重试</button>
+          <button type="button" class="loading-back-btn" @click="goDashboard" style="margin-top:8px;">返回首页</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="main-content" v-else-if="loading && !analysisData">
       <div class="loading-overlay">
         <div class="loading-box">
           <div class="loader-circle"></div>
@@ -393,6 +404,7 @@ const sentimentStore = useSentimentStore();
 const stockData = ref<{ symbol: string } | null>(null);
 const analysisData = ref<AnalysisPayload | null>(null);
 const loading = ref(true);
+const fetchError = ref<string | null>(null);
 const compareSymbols = ref<string[]>([]);
 const compareDataMap = ref<Record<string, AnalysisPayload>>({});
 const loadingCompare = ref(false);
@@ -475,6 +487,7 @@ const fetchMainData = async () => {
   }
 
   loading.value = true;
+  fetchError.value = null;
   currentStep.value = 0;
   clearAnalysisRefreshRetry();
   try {
@@ -484,8 +497,9 @@ const fetchMainData = async () => {
     syncAnalysisRefreshState(data);
 
     currentStep.value = 4;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to fetch analysis:', error);
+    fetchError.value = error?.message || '加载分析数据失败';
   } finally {
     loading.value = false;
     await nextTick();

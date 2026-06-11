@@ -53,7 +53,7 @@ export const useSentimentStore = defineStore('sentiment', () => {
   }
 
   // Getters
-  const calculateROI = (symbol: string, pe: number, pb: number, dividend_yield: number = 0) => {
+  const calculateROI = (_symbol: string, pe: number, pb: number, dividend_yield: number = 0) => {
     if (pe <= 0 || pb <= 0) return 0
     let roe = (pb / pe) * 100
     return (roe / pb) + dividend_yield

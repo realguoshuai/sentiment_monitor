@@ -524,10 +524,39 @@ const refreshSnapshot = async () => {
 
   try {
     const res = await stockApi.refreshScreenerSnapshot()
-    await fetchResults(1)
-    if ((res.data as any)?.source !== 'upstream' && res.data?.message) {
-      errorMessage.value = res.data.message
+    const data = res.data || {}
+
+    if (data.status === 'started' || data.status === 'refreshing') {
+      // 异步刷新已启动，轮询等待完成
+      errorMessage.value = ''
+      for (let i = 0; i < 120; i++) {
+        await new Promise(r => setTimeout(r, 3000))
+        try {
+          const poll = await stockApi.pollScreenerRefresh()
+          const pollData = poll.data || {}
+          if (pollData.status === 'done') {
+            if (pollData.source !== 'upstream' && pollData.message) {
+              errorMessage.value = pollData.message
+            }
+            break
+          }
+          if (pollData.status === 'error') {
+            errorMessage.value = `快照刷新失败：${pollData.error || '未知错误'}`
+            break
+          }
+          // status === 'refreshing' → 继续轮询
+        } catch {
+          // 轮询请求失败，继续重试
+        }
+      }
+    } else {
+      // 同步返回（旧路径或已完成）
+      if (data.source !== 'upstream' && data.message) {
+        errorMessage.value = data.message
+      }
     }
+
+    await fetchResults(1)
   } catch (error: any) {
     console.error('Failed to refresh screener snapshot:', error)
     const detail = error?.response?.data?.error || error?.response?.data?.message || error?.message || ''

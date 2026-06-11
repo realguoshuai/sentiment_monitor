@@ -116,7 +116,12 @@ class FundamentalService:
     def _schedule_ttm_refresh(cls, symbol):
         key = f"fundamentals_v7_{symbol}_refreshing"
         if not cache.add(key, True, 600): return False
-        threading.Thread(target=lambda: (cls.get_ttm_fundamentals(symbol), cache.delete(key)), daemon=True).start()
+        def _refresh():
+            try:
+                cls.get_ttm_fundamentals(symbol)
+            finally:
+                cache.delete(key)
+        threading.Thread(target=_refresh, daemon=True).start()
         return True
 
     @classmethod
@@ -430,10 +435,12 @@ class FundamentalService:
             if not bg:
                 bg = cache.add(ref_key, True, 600)
                 if bg:
-                    threading.Thread(
-                        target=lambda: (cls._build_shareholder_data(symbol), cache.delete(ref_key)),
-                        daemon=True,
-                    ).start()
+                    def _refresh_shareholder():
+                        try:
+                            cls._build_shareholder_data(symbol)
+                        finally:
+                            cache.delete(ref_key)
+                    threading.Thread(target=_refresh_shareholder, daemon=True).start()
             return stale
 
         return cls._build_shareholder_data(symbol)
@@ -453,7 +460,12 @@ class FundamentalService:
     def _schedule_quality_refresh(cls, symbol, include_sh):
         key = f"quality_v12_{symbol}_refreshing"
         if not cache.add(key, True, 600): return False
-        threading.Thread(target=lambda: (cls.get_quality_data(symbol, include_shareholder=include_sh), cache.delete(key)), daemon=True).start()
+        def _refresh_quality():
+            try:
+                cls.get_quality_data(symbol, include_shareholder=include_sh)
+            finally:
+                cache.delete(key)
+        threading.Thread(target=_refresh_quality, daemon=True).start()
         return True
 
     @classmethod

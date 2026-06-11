@@ -225,12 +225,7 @@ const rtPrice = computed(() => store.realtimePrices[symbol])
 
 const roeValue = computed(() => {
   if (!rtPrice.value || rtPrice.value.pe <= 0 || rtPrice.value.pb <= 0) return null
-  let roe = rtPrice.value.pb / rtPrice.value.pe
-  const stockSymbol = route.params.symbol as string
-  if (stockSymbol === 'SZ002304' && roe < 0.20) {
-    roe = 0.20
-  }
-  return roe
+  return rtPrice.value.pb / rtPrice.value.pe
 })
 
 const roeText = computed(() => {

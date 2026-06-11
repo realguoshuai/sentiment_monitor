@@ -265,11 +265,13 @@ export const stockApi = {
   getScreenerResults: (params: Record<string, any>) =>
     api.get<ScreenerQueryResponse>('/sentiment/screener/', { params, timeout: 30000 }),
   refreshScreenerSnapshot: () =>
-    api.post<{ snapshot_date: string, count: number, updated: boolean, message: string }>(
+    api.post<any>(
       '/sentiment/screener/refresh/',
       {},
-      { timeout: 120000 },
+      { timeout: 15000 },
     ),
+  pollScreenerRefresh: () =>
+    api.get<any>('/sentiment/screener/refresh/', { params: { poll: 1 }, timeout: 10000 }),
   getMarketDiary: (symbol: string) =>
     api.get<any>(`/sentiment/market-diary/?symbol=${symbol}`, { timeout: 30000 }),
   getDividendCalendar: () =>

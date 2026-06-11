@@ -615,8 +615,10 @@ function getDupontBarWidth(symbol: string, key: string): number {
   return (Math.abs(val) / total) * 100
 }
 
+let _dupontSeq = 0
 async function fetchDupontData() {
   if (selectedSymbols.value.length !== 2) { dupontData.value = {}; return }
+  const seq = ++_dupontSeq
   dupontLoading.value = true
   try {
     const [a, b] = selectedSymbols.value
@@ -624,11 +626,13 @@ async function fetchDupontData() {
       stockApi.getQualityAnalysis(a, false),
       stockApi.getQualityAnalysis(b, false),
     ])
+    if (seq !== _dupontSeq) return
     dupontData.value = { [a]: resA.data, [b]: resB.data }
   } catch {
+    if (seq !== _dupontSeq) return
     dupontData.value = {}
   } finally {
-    dupontLoading.value = false
+    if (seq === _dupontSeq) dupontLoading.value = false
   }
 }
 
@@ -1122,7 +1126,7 @@ async function refreshComparisonData() {
   await fetchComparisonData(true)
 }
 
-function calculateIntradayMetrics(item: any, rt: any, sym: string) {
+function calculateIntradayMetrics(item: any, rt: any, _sym: string) {
   if (!item || !item.price) return { price: 0, pe: 0, pb: 0, dividend_yield: 0, roi: 0 }
   if (!rt) return { price: item.price, pe: 0, pb: 0, dividend_yield: 0, roi: 0 }
   
@@ -1133,7 +1137,6 @@ function calculateIntradayMetrics(item: any, rt: any, sym: string) {
   
   // ROE = PB / PE * 100
   let roe = pe > 0 ? (pb / pe * 100) : 0
-  if (sym.includes('002304') && roe < 20) roe = 20
   const roi = pb > 0 ? (roe / pb) + dy : 0
 
   return {

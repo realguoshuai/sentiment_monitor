@@ -373,7 +373,7 @@ class PriceService:
             
             symbol = match.group(1).upper() # 统一转大写返回
             fields = match.group(2).split('~')
-            if len(fields) < 33: continue
+            if len(fields) < 50: continue
             
             price = cls._field_float(fields, 3)
             market_cap = cls._field_float(fields, 45) * 100000000

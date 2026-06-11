@@ -202,11 +202,7 @@ const roiValue = computed(() => {
 
 const roeValue = computed(() => {
   if (!rtPrice.value || rtPrice.value.pe <= 0 || rtPrice.value.pb <= 0) return null
-  let roe = (rtPrice.value.pb / rtPrice.value.pe) * 100
-  if (props.data.stock_symbol.includes('002304') && roe < 20) {
-    roe = 20
-  }
-  return roe / 100 // Convert back to ratio for text formatting if needed, or keep as %
+  return rtPrice.value.pb / rtPrice.value.pe
 })
 
 const roeText = computed(() => {

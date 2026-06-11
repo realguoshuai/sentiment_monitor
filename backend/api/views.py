@@ -2,6 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 from django.core.cache import cache
+from django.db import transaction
 from django.db.models import OuterRef, Subquery
 from django.utils import timezone
 from datetime import datetime, timedelta
@@ -275,7 +276,12 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'])
     def overall_trend(self, request):
         """获取最近7天每只股票的情感走势及全场均值 (优化版：移除重度预取)"""
-        days = int(request.GET.get('days', 7))
+        try:
+            days = int(request.GET.get('days', 7))
+        except (ValueError, TypeError):
+            return Response({'error': 'days 参数必须为整数'}, status=400)
+        if days < 1 or days > 365:
+            return Response({'error': 'days 参数范围 1-365'}, status=400)
         start_date = timezone.now().date() - timedelta(days=days-1)
         
         # 1. 获取情感基础数据 (不再预取新闻详情，避免内存爆炸)
@@ -478,7 +484,12 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
         symbols = [s.strip() for s in symbols_raw.split(',') if s.strip()]
         if not symbols or symbols == ['']:
             return Response({'error': '至少需要一个股票代码'}, status=400)
-        limit = int(request.GET.get('limit', 30))
+        try:
+            limit = int(request.GET.get('limit', 30))
+        except (ValueError, TypeError):
+            return Response({'error': 'limit 参数必须为整数'}, status=400)
+        if limit < 1 or limit > 1000:
+            return Response({'error': 'limit 参数范围 1-1000'}, status=400)
         period = request.GET.get('period', 'day')
         data = PriceService.get_historical_data(symbols, limit, period)
         return Response(data)
@@ -563,26 +574,57 @@ def get_screener_results(request):
         return Response({'error': str(e)}, status=500)
 
 
-@api_view(['POST'])
+@api_view(['POST', 'GET'])
 def refresh_screener_snapshot(request):
-    """刷新 A 股选股快照"""
+    """刷新 A 股选股快照（异步执行，避免 120s 超时）"""
     import sys
-    try:
-        result = ScreenerService.refresh_snapshot()
-        # 附带诊断信息，方便排查
-        result['_diag'] = {
-            'frozen': getattr(sys, 'frozen', False),
-            'source': result.get('source', 'unknown'),
-        }
-        return Response(result)
-    except Exception as e:
-        logger.error(f"Screener Refresh Error: {e}")
-        import traceback
+    import threading
+
+    lock_key = "screener_refresh_lock"
+    result_key = "screener_refresh_result"
+
+    # 检查是否正在刷新
+    if cache.get(lock_key):
+        # 正在刷新中，返回进行中状态
+        prev = cache.get(result_key) or {}
         return Response({
-            'error': str(e),
-            'traceback': traceback.format_exc()[-500:],
-            'frozen': getattr(sys, 'frozen', False),
-        }, status=500)
+            'status': 'refreshing',
+            'message': '快照刷新中，请稍候...',
+            'previous': prev,
+        })
+
+    # 检查上次结果
+    if request.GET.get('poll'):
+        result = cache.get(result_key)
+        if result:
+            return Response(result)
+        return Response({'status': 'idle', 'message': '无刷新任务'})
+
+    def _do_refresh():
+        try:
+            result = ScreenerService.refresh_snapshot()
+            result['_diag'] = {
+                'frozen': getattr(sys, 'frozen', False),
+                'source': result.get('source', 'unknown'),
+            }
+            result['status'] = 'done'
+            cache.set(result_key, result, 3600)
+        except Exception as e:
+            logger.error(f"Screener Refresh Error: {e}")
+            cache.set(result_key, {
+                'status': 'error',
+                'error': str(e),
+            }, 3600)
+        finally:
+            cache.delete(lock_key)
+
+    cache.set(lock_key, True, 600)  # 10 分钟超时保护
+    threading.Thread(target=_do_refresh, daemon=True).start()
+
+    return Response({
+        'status': 'started',
+        'message': '快照刷新已启动，后台执行中...',
+    })
 
 
 @api_view(['GET'])
@@ -1054,34 +1096,35 @@ def save_portfolio(request):
         total_capital = data.get('total_capital', 0)
         holdings = data.get('holdings', [])
 
-        # 获取或创建默认组合
-        portfolio, created = Portfolio.objects.get_or_create(
-            is_default=True,
-            defaults={'name': '默认组合'}
-        )
-        portfolio.total_capital = total_capital
-        portfolio.save()
+        with transaction.atomic():
+            # 获取或创建默认组合
+            portfolio, created = Portfolio.objects.get_or_create(
+                is_default=True,
+                defaults={'name': '默认组合'}
+            )
+            portfolio.total_capital = total_capital
+            portfolio.save()
 
-        # 清除旧持仓
-        PortfolioHolding.objects.filter(portfolio=portfolio).delete()
+            # 清除旧持仓
+            PortfolioHolding.objects.filter(portfolio=portfolio).delete()
 
-        # 批量创建新持仓
-        holdings_to_create = []
-        for h in holdings:
-            symbol = h.get('symbol', '')
-            try:
-                stock = Stock.objects.get(symbol=symbol)
-                holdings_to_create.append(PortfolioHolding(
-                    portfolio=portfolio,
-                    stock=stock,
-                    allocation_pct=h.get('allocation_pct', 0),
-                    share_count=h.get('share_count', 0),
-                    buy_price=h.get('buy_price'),
-                ))
-            except Stock.DoesNotExist:
-                logger.warning(f"股票 {symbol} 不存在，跳过")
+            # 批量创建新持仓
+            holdings_to_create = []
+            for h in holdings:
+                symbol = h.get('symbol', '')
+                try:
+                    stock = Stock.objects.get(symbol=symbol)
+                    holdings_to_create.append(PortfolioHolding(
+                        portfolio=portfolio,
+                        stock=stock,
+                        allocation_pct=h.get('allocation_pct', 0),
+                        share_count=h.get('share_count', 0),
+                        buy_price=h.get('buy_price'),
+                    ))
+                except Stock.DoesNotExist:
+                    logger.warning(f"股票 {symbol} 不存在，跳过")
 
-        PortfolioHolding.objects.bulk_create(holdings_to_create)
+            PortfolioHolding.objects.bulk_create(holdings_to_create)
 
         return Response({
             'status': 'success',
@@ -1171,7 +1214,12 @@ def toggle_alert_rule(request, rule_id):
 @api_view(['GET'])
 def get_alert_logs(request):
     """获取告警日志"""
-    limit = int(request.GET.get('limit', 50))
+    try:
+        limit = int(request.GET.get('limit', 50))
+    except (ValueError, TypeError):
+        return Response({'error': 'limit 参数必须为整数'}, status=400)
+    if limit < 1 or limit > 500:
+        return Response({'error': 'limit 参数范围 1-500'}, status=400)
     logs = AlertLog.objects.select_related('rule', 'rule__stock').all()[:limit]
 
     data = [{
