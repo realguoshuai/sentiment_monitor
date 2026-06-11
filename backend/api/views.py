@@ -764,13 +764,20 @@ def get_market_diary(request):
     fixed_symbol = PriceService._fix_symbol(symbol)
     from .fundamental_service import FundamentalService
 
+    # force=true 时清除所有缓存，重新拉取
+    force = request.GET.get('force', '').lower() in ('true', '1', 'yes')
+
     # ---- 1. 历史 K 线（长缓存 24h，不含今天） ----
     history_cache_key = f"market_diary_hist_v1_{fixed_symbol}"
-    try:
-        history = cache.get(history_cache_key)
-    except Exception:
+    if force:
         cache.delete(history_cache_key)
         history = None
+    else:
+        try:
+            history = cache.get(history_cache_key)
+        except Exception:
+            cache.delete(history_cache_key)
+            history = None
 
     if history is None:
         try:
@@ -788,7 +795,7 @@ def get_market_diary(request):
             history = []
 
     if not history:
-        return Response({'error': 'No historical data found'}, status=404)
+        history = []
 
     # ---- 2. 当日实时数据（短缓存） ----
     from datetime import datetime as _dt
@@ -799,11 +806,15 @@ def get_market_diary(request):
     today_cache_ttl = 30 if is_trading_hour else 3600
 
     today_cache_key = f"market_diary_today_v1_{fixed_symbol}"
-    try:
-        today_data = cache.get(today_cache_key)
-    except Exception:
+    if force:
         cache.delete(today_cache_key)
         today_data = None
+    else:
+        try:
+            today_data = cache.get(today_cache_key)
+        except Exception:
+            cache.delete(today_cache_key)
+            today_data = None
 
     if today_data is None:
         today_data = {}
@@ -837,11 +848,15 @@ def get_market_diary(request):
 
     # ---- 3. 分红倒计时（中缓存 6h） ----
     div_cache_key = f"market_diary_div_v1_{fixed_symbol}"
-    try:
-        next_dividend = cache.get(div_cache_key)
-    except Exception:
+    if force:
         cache.delete(div_cache_key)
         next_dividend = None
+    else:
+        try:
+            next_dividend = cache.get(div_cache_key)
+        except Exception:
+            cache.delete(div_cache_key)
+            next_dividend = None
 
     if next_dividend is None:
         try:

@@ -259,7 +259,7 @@ const fetchDiaryData = async (symbol: string, force = false) => {
   loading.value = true
   error.value = null
   try {
-    const res = await stockApi.getMarketDiary(symbol)
+    const res = await stockApi.getMarketDiary(symbol, force)
     if (seq !== _diarySeq) return
     diaryData.value = res.data
     diaryCache.value[symbol] = res.data

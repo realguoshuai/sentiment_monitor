@@ -272,8 +272,8 @@ export const stockApi = {
     ),
   pollScreenerRefresh: () =>
     api.get<any>('/sentiment/screener/refresh/', { params: { poll: 1 }, timeout: 10000 }),
-  getMarketDiary: (symbol: string) =>
-    api.get<any>(`/sentiment/market-diary/?symbol=${symbol}`, { timeout: 30000 }),
+  getMarketDiary: (symbol: string, force?: boolean) =>
+    api.get<any>('/sentiment/market-diary/', { params: { symbol, ...(force ? { force: true } : {}) }, timeout: 30000 }),
   getDividendCalendar: () =>
     api.get<any[]>('/sentiment/dividend-calendar/', { timeout: 30000 }),
   getValuationThermometer: () =>
