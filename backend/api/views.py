@@ -777,7 +777,7 @@ def get_market_diary(request):
 
     if history is None:
         try:
-            history_dict = PriceService.get_historical_data([fixed_symbol], limit=250, period='day', normalize=False)
+            history_dict = PriceService.get_historical_data([fixed_symbol], limit=250, period='day', normalize=False, skip_cache=force)
             history = history_dict.get(fixed_symbol, [])
             if history:
                 from datetime import date as _date
@@ -816,7 +816,7 @@ def get_market_diary(request):
         today_data = {}
         try:
             # 获取今天的价格和成交量
-            today_dict = PriceService.get_historical_data([fixed_symbol], limit=1, period='day', normalize=False)
+            today_dict = PriceService.get_historical_data([fixed_symbol], limit=1, period='day', normalize=False, skip_cache=force)
             today_list = today_dict.get(fixed_symbol, [])
             if today_list:
                 today_data = dict(today_list[-1])

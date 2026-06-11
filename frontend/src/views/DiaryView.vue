@@ -261,11 +261,17 @@ const fetchDiaryData = async (symbol: string, force = false) => {
   try {
     const res = await stockApi.getMarketDiary(symbol, force)
     if (seq !== _diarySeq) return
-    diaryData.value = res.data
-    diaryCache.value[symbol] = res.data
+    const data = res.data
+    // 刷新后用新数据替换缓存
+    diaryData.value = data
+    diaryCache.value[symbol] = data
     loading.value = false
     await nextTick()
     initChart()
+    // 历史数据为空时给提示
+    if (!data.history || data.history.length === 0) {
+      error.value = '暂无历史 K 线数据，仅显示今日数据'
+    }
   } catch (err: any) {
     if (seq !== _diarySeq) return
     error.value = err.response?.data?.error || err.message || '获取盯盘日记失败'

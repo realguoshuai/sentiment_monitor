@@ -574,7 +574,7 @@ class PriceService:
         return price_list
 
     @classmethod
-    def _build_single_historical_data(cls, symbol, requested_period, period, limit, rt_data, spot_fallback, normalize=True):
+    def _build_single_historical_data(cls, symbol, requested_period, period, limit, rt_data, spot_fallback, normalize=True, skip_cache=False):
         fixed_symbol = cls._fix_symbol(symbol)
         
         # 映射周期: Tencent 使用 day, week, month
@@ -589,8 +589,8 @@ class PriceService:
         # --- [增量缓存加速核心逻辑] ---
         # 缓存键包含周期，但不包含 limit (因为我们总是缓存全量并按需裁剪)
         raw_cache_key = f"price_history_raw_{fixed_symbol}_{fetch_period}" + ('' if normalize else '_raw')
-        cached_raw = cls._cache_get(raw_cache_key) # [{date, price, volume}, ...]
-        
+        cached_raw = None if skip_cache else cls._cache_get(raw_cache_key)
+
         price_list = []
         if isinstance(cached_raw, list) and cached_raw:
             price_list = cached_raw
@@ -834,7 +834,7 @@ class PriceService:
         return history
 
     @classmethod
-    def get_historical_data(cls, symbols, limit=30, period='day', normalize=True):
+    def get_historical_data(cls, symbols, limit=30, period='day', normalize=True, skip_cache=False):
         """获取历史 K 线并对齐真实财报指标 (TTM) - 带缓存"""
         requested_period = period
 
@@ -858,21 +858,23 @@ class PriceService:
         suffix = '' if normalize else '_raw'
         cache_key = f"hist_v17_{'_'.join(sorted(norm_symbols))}_{requested_period}_{period}_{limit}{suffix}"
         stale_cache_key = f"{cache_key}_stale"
-        cached_data = cls._cache_get(cache_key)
-        if cached_data is not None:
-            return cached_data
+        if not skip_cache:
+            cached_data = cls._cache_get(cache_key)
+            if cached_data is not None:
+                return cached_data
 
         results = {}
         missing_symbols = []
 
         for orig_symbol in symbols:
             symbol = cls._fix_symbol(orig_symbol)
-            single_cache_key = cls._historical_single_cache_key(orig_symbol, requested_period, period, limit, normalize=normalize)
-            cached_history = cls._cache_get(single_cache_key)
-            if cached_history is not None:
-                cached_history = cls._normalize_historical_cache_value(cached_history)
-                results[symbol] = cached_history
-                continue
+            if not skip_cache:
+                single_cache_key = cls._historical_single_cache_key(orig_symbol, requested_period, period, limit, normalize=normalize)
+                cached_history = cls._cache_get(single_cache_key)
+                if cached_history is not None:
+                    cached_history = cls._normalize_historical_cache_value(cached_history)
+                    results[symbol] = cached_history
+                    continue
             missing_symbols.append(orig_symbol)
 
         rt_data = {}
@@ -892,7 +894,7 @@ class PriceService:
                 single_stale_cache_key = cls._historical_single_stale_cache_key(orig_sym, requested_period, period, limit, normalize=normalize)
                 try:
                     hist = cls._build_single_historical_data(
-                        sym, requested_period, period, limit, rt_data, spot_fallback, normalize=normalize
+                        sym, requested_period, period, limit, rt_data, spot_fallback, normalize=normalize, skip_cache=skip_cache
                     )
                     if hist:
                         s_ttl = 3600 * 2 if period == 'day' else 3600 * 12
