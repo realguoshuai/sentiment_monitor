@@ -529,25 +529,37 @@ const refreshSnapshot = async () => {
     if (data.status === 'started' || data.status === 'refreshing') {
       // 异步刷新已启动，轮询等待完成
       errorMessage.value = ''
+      let done = false
+      let consecutiveErrors = 0
       for (let i = 0; i < 120; i++) {
         await new Promise(r => setTimeout(r, 3000))
         try {
           const poll = await stockApi.pollScreenerRefresh()
+          consecutiveErrors = 0
           const pollData = poll.data || {}
           if (pollData.status === 'done') {
             if (pollData.source !== 'upstream' && pollData.message) {
               errorMessage.value = pollData.message
             }
+            done = true
             break
           }
           if (pollData.status === 'error') {
             errorMessage.value = `快照刷新失败：${pollData.error || '未知错误'}`
+            done = true
             break
           }
           // status === 'refreshing' → 继续轮询
         } catch {
-          // 轮询请求失败，继续重试
+          if (++consecutiveErrors >= 5) {
+            errorMessage.value = '轮询连接中断，请稍后重试'
+            done = true
+            break
+          }
         }
+      }
+      if (!done) {
+        errorMessage.value = '刷新超时（6 分钟），后台仍在执行，稍后可查看结果'
       }
     } else {
       // 同步返回（旧路径或已完成）

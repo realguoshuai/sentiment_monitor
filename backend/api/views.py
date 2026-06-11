@@ -583,22 +583,24 @@ def refresh_screener_snapshot(request):
     lock_key = "screener_refresh_lock"
     result_key = "screener_refresh_result"
 
-    # 检查是否正在刷新
-    if cache.get(lock_key):
-        # 正在刷新中，返回进行中状态
+    # 轮询模式：GET ?poll=1 返回当前状态
+    if request.GET.get('poll'):
+        result = cache.get(result_key)
+        if result:
+            return Response(result)
+        # 没有结果但锁还在 → 正在刷新
+        if cache.get(lock_key):
+            return Response({'status': 'refreshing', 'message': '快照刷新中...'})
+        return Response({'status': 'idle', 'message': '无刷新任务'})
+
+    # POST 启动刷新：cache.add 原子加锁，防止并发重复刷新
+    if not cache.add(lock_key, True, 600):
         prev = cache.get(result_key) or {}
         return Response({
             'status': 'refreshing',
             'message': '快照刷新中，请稍候...',
             'previous': prev,
         })
-
-    # 检查上次结果
-    if request.GET.get('poll'):
-        result = cache.get(result_key)
-        if result:
-            return Response(result)
-        return Response({'status': 'idle', 'message': '无刷新任务'})
 
     def _do_refresh():
         try:
@@ -618,7 +620,6 @@ def refresh_screener_snapshot(request):
         finally:
             cache.delete(lock_key)
 
-    cache.set(lock_key, True, 600)  # 10 分钟超时保护
     threading.Thread(target=_do_refresh, daemon=True).start()
 
     return Response({
