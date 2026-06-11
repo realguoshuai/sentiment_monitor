@@ -397,13 +397,14 @@ class PriceService:
         return format_symbol(s)
 
     @classmethod
-    def _historical_single_cache_key(cls, symbol, requested_period, period, limit):
+    def _historical_single_cache_key(cls, symbol, requested_period, period, limit, normalize=True):
         fixed_symbol = cls._fix_symbol(symbol)
-        return f"hist_single_v8_{fixed_symbol}_{requested_period}_{period}_{limit}"
+        suffix = '' if normalize else '_raw'
+        return f"hist_single_v8_{fixed_symbol}_{requested_period}_{period}_{limit}{suffix}"
 
     @classmethod
-    def _historical_single_stale_cache_key(cls, symbol, requested_period, period, limit):
-        return f"{cls._historical_single_cache_key(symbol, requested_period, period, limit)}_stale"
+    def _historical_single_stale_cache_key(cls, symbol, requested_period, period, limit, normalize=True):
+        return f"{cls._historical_single_cache_key(symbol, requested_period, period, limit, normalize=normalize)}_stale"
 
     @classmethod
     def _intraday_single_cache_key(cls, symbol):
@@ -573,7 +574,7 @@ class PriceService:
         return price_list
 
     @classmethod
-    def _build_single_historical_data(cls, symbol, requested_period, period, limit, rt_data, spot_fallback):
+    def _build_single_historical_data(cls, symbol, requested_period, period, limit, rt_data, spot_fallback, normalize=True):
         fixed_symbol = cls._fix_symbol(symbol)
         
         # 映射周期: Tencent 使用 day, week, month
@@ -587,7 +588,7 @@ class PriceService:
         
         # --- [增量缓存加速核心逻辑] ---
         # 缓存键包含周期，但不包含 limit (因为我们总是缓存全量并按需裁剪)
-        raw_cache_key = f"price_history_raw_{fixed_symbol}_{fetch_period}"
+        raw_cache_key = f"price_history_raw_{fixed_symbol}_{fetch_period}" + ('' if normalize else '_raw')
         cached_raw = cls._cache_get(raw_cache_key) # [{date, price, volume}, ...]
         
         price_list = []
@@ -667,18 +668,17 @@ class PriceService:
         # 截断到请求的 limit
         price_list = price_list[-fetch_limit:]
 
-        # [锚定归一化算法] 强制锚定当前价
-        # 这确保了图表的终点绝对等于实时价，且所有历史点都相对于今天进行折算
-        rt = rt_data.get(fixed_symbol, {})
-        fallback = spot_fallback.get(fixed_symbol, {})
-        curr_price = rt.get('price', 0) or fallback.get('price', 0)
-        
-        if curr_price > 0 and price_list:
-            last_hist_price = price_list[-1]['price']
-            # 计算物理缩放因子，将整条原始价格曲线平移/缩放到今日基准
-            scale_factor = curr_price / last_hist_price
-            for item in price_list:
-                item['price'] = round(item['price'] * scale_factor, 4)
+        # [锚定归一化算法] 强制锚定当前价（仅对冲对比页需要，盯盘日记用原始收盘价）
+        if normalize:
+            rt = rt_data.get(fixed_symbol, {})
+            fallback = spot_fallback.get(fixed_symbol, {})
+            curr_price = rt.get('price', 0) or fallback.get('price', 0)
+
+            if curr_price > 0 and price_list:
+                last_hist_price = price_list[-1]['price']
+                scale_factor = curr_price / last_hist_price
+                for item in price_list:
+                    item['price'] = round(item['price'] * scale_factor, 4)
         
         df_prices = pd.DataFrame(price_list)
         try:
@@ -834,7 +834,7 @@ class PriceService:
         return history
 
     @classmethod
-    def get_historical_data(cls, symbols, limit=30, period='day'):
+    def get_historical_data(cls, symbols, limit=30, period='day', normalize=True):
         """获取历史 K 线并对齐真实财报指标 (TTM) - 带缓存"""
         requested_period = period
 
@@ -855,7 +855,8 @@ class PriceService:
             limit = p_limit
 
         norm_symbols = [cls._fix_symbol(s) for s in symbols]
-        cache_key = f"hist_v17_{'_'.join(sorted(norm_symbols))}_{requested_period}_{period}_{limit}"
+        suffix = '' if normalize else '_raw'
+        cache_key = f"hist_v17_{'_'.join(sorted(norm_symbols))}_{requested_period}_{period}_{limit}{suffix}"
         stale_cache_key = f"{cache_key}_stale"
         cached_data = cls._cache_get(cache_key)
         if cached_data is not None:
@@ -866,7 +867,7 @@ class PriceService:
 
         for orig_symbol in symbols:
             symbol = cls._fix_symbol(orig_symbol)
-            single_cache_key = cls._historical_single_cache_key(orig_symbol, requested_period, period, limit)
+            single_cache_key = cls._historical_single_cache_key(orig_symbol, requested_period, period, limit, normalize=normalize)
             cached_history = cls._cache_get(single_cache_key)
             if cached_history is not None:
                 cached_history = cls._normalize_historical_cache_value(cached_history)
@@ -887,11 +888,11 @@ class PriceService:
             
             def _build_task(orig_sym):
                 sym = cls._fix_symbol(orig_sym)
-                single_cache_key = cls._historical_single_cache_key(orig_sym, requested_period, period, limit)
-                single_stale_cache_key = cls._historical_single_stale_cache_key(orig_sym, requested_period, period, limit)
+                single_cache_key = cls._historical_single_cache_key(orig_sym, requested_period, period, limit, normalize=normalize)
+                single_stale_cache_key = cls._historical_single_stale_cache_key(orig_sym, requested_period, period, limit, normalize=normalize)
                 try:
                     hist = cls._build_single_historical_data(
-                        sym, requested_period, period, limit, rt_data, spot_fallback
+                        sym, requested_period, period, limit, rt_data, spot_fallback, normalize=normalize
                     )
                     if hist:
                         s_ttl = 3600 * 2 if period == 'day' else 3600 * 12

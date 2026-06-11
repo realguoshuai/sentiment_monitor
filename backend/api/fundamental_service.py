@@ -167,7 +167,9 @@ class FundamentalService:
             df = Calc.calculate_ttm_cashflow(df_raw)
             cls._cache_set(cache_key, df, cls.CACHE_TTL)
             return df
-        except Exception: return pd.DataFrame()
+        except Exception as e:
+            logger.error(f"[Cashflow] TTM cashflow fetch failed for {symbol}: {e}")
+            return pd.DataFrame()
 
     @classmethod
     def get_xueqiu_token(cls):
@@ -350,7 +352,8 @@ class FundamentalService:
             df = Calc.extract_dividend_metrics(df_raw)
             cls._cache_set(cache_key, df, cls.CACHE_TTL)
             return df
-        except Exception:
+        except Exception as e:
+            logger.error(f"[Dividend] Historical dividend fetch failed for {symbol}: {e}")
             return pd.DataFrame()
 
     @classmethod
@@ -365,7 +368,9 @@ class FundamentalService:
             df = cls._fetch_yearly_cashflow(symbol)
             cls._cache_set(cache_key, df, cls.CACHE_TTL)
             return df
-        except Exception: return pd.DataFrame()
+        except Exception as e:
+            logger.error(f"[Cashflow] Yearly cashflow fetch failed for {symbol}: {e}")
+            return pd.DataFrame()
 
 
 
@@ -379,7 +384,9 @@ class FundamentalService:
             df = Fetcher.fetch_northbound_history(symbol)
             cls._cache_set(cache_key, df, 12 * 3600)
             return df
-        except Exception: return pd.DataFrame()
+        except Exception as e:
+            logger.error(f"[Northbound] Northbound holding fetch failed for {symbol}: {e}")
+            return pd.DataFrame()
 
     @classmethod
     def get_quality_response(cls, symbol, include_shareholder=True):
@@ -474,12 +481,12 @@ class FundamentalService:
                 future_d = executor.submit(_safe_fetch, cls.get_historical_dividends, 'dividends', symbol)
                 future_cap = executor.submit(_safe_fetch, cls._fetch_market_cap, 'market_cap', symbol)
 
-                # 等待所有结果
-                df_p = future_p.result()
-                df_b = future_b.result()
-                df_c = future_c.result()
-                df_d = future_d.result()
-                m_cap = future_cap.result()
+                # 等待所有结果（单源超时 15s，防止 AkShare 挂起导致无限等待）
+                df_p = future_p.result(timeout=15)
+                df_b = future_b.result(timeout=15)
+                df_c = future_c.result(timeout=15)
+                df_d = future_d.result(timeout=15)
+                m_cap = future_cap.result(timeout=15)
 
             logger.info(f"[Quality] Data fetched for {symbol}, calculating metrics...")
 

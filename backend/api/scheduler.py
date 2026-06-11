@@ -26,6 +26,15 @@ def check_alerts_job():
     except Exception as e:
         logger.error(f"Scheduled alert check failed: {e}")
 
+def refresh_snapshot_job():
+    """定时刷新东财全市场快照缓存，确保 PE/PB/市值字段不因缓存过期而缺失"""
+    try:
+        from .price_service import PriceService
+        PriceService.refresh_snapshot_cache()
+        logger.info("Scheduled snapshot refresh completed")
+    except Exception as e:
+        logger.error(f"Scheduled snapshot refresh failed: {e}")
+
 def start():
     scheduler = BackgroundScheduler()
     scheduler.add_jobstore(DjangoJobStore(), "default")
@@ -43,6 +52,20 @@ def start():
         coalesce=True,
         misfire_grace_time=15 * 60,
         next_run_time=datetime.now() + timedelta(hours=1),
+    )
+
+    # 每小时刷新东财快照缓存（热缓存 TTL=1h，冷缓存 TTL=24h，必须定期刷新）
+    scheduler.add_job(
+        refresh_snapshot_job,
+        trigger="interval",
+        hours=1,
+        id="refresh_snapshot_job",
+        name="refresh_snapshot_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=10 * 60,
+        next_run_time=datetime.now() + timedelta(minutes=2),  # 启动 2 分钟后首次执行，等应用预热完成
     )
 
     # 每 30 分钟检查一次告警规则

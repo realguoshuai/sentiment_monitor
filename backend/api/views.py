@@ -731,11 +731,14 @@ def get_market_diary(request):
 
     if history is None:
         try:
-            history_dict = PriceService.get_historical_data([fixed_symbol], limit=250, period='day')
+            history_dict = PriceService.get_historical_data([fixed_symbol], limit=250, period='day', normalize=False)
             history = history_dict.get(fixed_symbol, [])
             if history:
-                # 去掉最后一条（今天），单独处理
-                history = history[:-1]
+                from datetime import date as _date
+                today_str = _date.today().isoformat()
+                # 只去掉最后一条当它确实是今天的数据时，避免误删昨天收盘价
+                if history[-1].get('date', '')[:10] == today_str:
+                    history = history[:-1]
                 cache.set(history_cache_key, history, 24 * 3600)
         except Exception as e:
             logger.error(f"Failed to fetch historical data for {fixed_symbol}: {e}")
@@ -763,7 +766,7 @@ def get_market_diary(request):
         today_data = {}
         try:
             # 获取今天的价格和成交量
-            today_dict = PriceService.get_historical_data([fixed_symbol], limit=1, period='day')
+            today_dict = PriceService.get_historical_data([fixed_symbol], limit=1, period='day', normalize=False)
             today_list = today_dict.get(fixed_symbol, [])
             if today_list:
                 today_data = dict(today_list[-1])

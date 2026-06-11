@@ -23,6 +23,16 @@
             {{ stock.name }} ({{ stock.symbol }})
           </option>
         </select>
+        <button
+          @click="selectedSymbol && fetchDiaryData(selectedSymbol, true)"
+          :disabled="loading"
+          class="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-xl text-sm transition-all border border-slate-700 disabled:opacity-40"
+          title="刷新数据"
+        >
+          <svg class="w-4 h-4" :class="{ 'animate-spin': loading }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M5 19A9 9 0 0019 5M19 5h-4M5 19h4"/>
+          </svg>
+        </button>
         <button @click="$router.back()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-xl text-sm transition-all border border-slate-700">
           返回
         </button>
@@ -54,10 +64,11 @@
         <div class="glass-card p-4 flex flex-col flex-1 min-h-0">
           <div class="flex justify-between items-center mb-2 shrink-0">
             <div>
-              <h2 class="text-base font-bold text-slate-200">成交量与 20 日均量对照图</h2>
-              <p class="text-[11px] text-slate-400">识别缩量买点与放量信号</p>
+              <h2 class="text-base font-bold text-slate-200">价格与成交量走势</h2>
+              <p class="text-[11px] text-slate-400">缩量买点 · 放量信号 · 价格趋势</p>
             </div>
             <div class="flex gap-4 text-xs">
+              <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-[#f59e0b]"></span>价格</span>
               <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-[#06b6d4]"></span>成交量</span>
               <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-[#6366f1] border border-dashed border-[#6366f1]"></span>20日均量</span>
             </div>
@@ -193,6 +204,7 @@ const selectedSymbol = ref('')
 const loading = ref(false)
 const error = ref<string | null>(null)
 const diaryData = ref<any | null>(null)
+const diaryCache = ref<Record<string, any>>({})
 
 const chartRef = ref<HTMLElement | null>(null)
 let myChart: any = null
@@ -216,11 +228,18 @@ onMounted(async () => {
   }
 })
 
+const handleResize = () => {
+  if (myChart) myChart.resize()
+}
+window.addEventListener('resize', handleResize)
+
 onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
   if (myChart) {
     myChart.dispose()
     myChart = null
   }
+  diaryCache.value = {}
 })
 
 const onSymbolChange = async () => {
@@ -228,20 +247,22 @@ const onSymbolChange = async () => {
   await fetchDiaryData(selectedSymbol.value)
 }
 
-const fetchDiaryData = async (symbol: string) => {
+const fetchDiaryData = async (symbol: string, force = false) => {
+  if (!force && diaryCache.value[symbol]) {
+    diaryData.value = diaryCache.value[symbol]
+    await nextTick()
+    initChart()
+    return
+  }
   loading.value = true
   error.value = null
   try {
     const res = await stockApi.getMarketDiary(symbol)
     diaryData.value = res.data
-    // 先关闭 loading，确保 DOM 容器元素被渲染挂载
+    diaryCache.value[symbol] = res.data
     loading.value = false
-    nextTick(() => {
-      // 延时 50ms 确保浏览器布局渲染完成，避免 0 宽高
-      setTimeout(() => {
-        initChart()
-      }, 50)
-    })
+    await nextTick()
+    initChart()
   } catch (err: any) {
     error.value = err.response?.data?.error || err.message || '获取盯盘日记失败'
     loading.value = false
@@ -250,6 +271,8 @@ const fetchDiaryData = async (symbol: string) => {
 
 const initChart = () => {
   if (!chartRef.value || !diaryData.value) return
+  if (!diaryData.value.history || diaryData.value.history.length === 0) return
+  try {
   if (myChart) {
     myChart.dispose()
   }
@@ -258,6 +281,7 @@ const initChart = () => {
   const dates = diaryData.value.history.map((h: any) => h.date || '')
   const volumes = diaryData.value.history.map((h: any) => h.volume || 0.0)
   const ma20s = diaryData.value.history.map((h: any) => h.ma20_volume || 0.0)
+  const prices = diaryData.value.history.map((h: any) => h.price || 0.0)
   
   const option = {
     backgroundColor: 'transparent',
@@ -269,19 +293,23 @@ const initChart = () => {
       borderWidth: 1,
       textStyle: { color: '#e2e8f0' },
       formatter: (params: any) => {
-        let res = `<div class="p-1 font-sans text-xs">
-          <div class="font-bold mb-1 border-b border-white/10 pb-1">${params[0].name}</div>`
+        let res = `<div style="padding:4px;font-family:monospace;font-size:12px;">
+          <div style="font-weight:bold;margin-bottom:4px;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:4px;">${params[0].name}</div>`
         params.forEach((p: any) => {
           let val = p.value
-          if (val >= 1e8) val = (val / 1e8).toFixed(2) + ' 亿手'
-          else if (val >= 1e4) val = (val / 1e4).toFixed(2) + ' 万手'
-          else val = val.toLocaleString() + ' 手'
-          res += `<div class="flex items-center justify-between gap-4 mt-1">
-            <span class="flex items-center gap-1.5">
-              <span class="w-2 h-2 rounded-full" style="background-color: ${p.color}"></span>
+          if (p.seriesName === '价格') {
+            val = parseFloat(val).toFixed(2) + ' 元'
+          } else {
+            if (val >= 1e8) val = (val / 1e8).toFixed(2) + ' 亿手'
+            else if (val >= 1e4) val = (val / 1e4).toFixed(2) + ' 万手'
+            else val = val.toLocaleString() + ' 手'
+          }
+          res += `<div style="display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:4px;">
+            <span style="display:flex;align-items:center;gap:6px;">
+              <span style="width:8px;height:8px;border-radius:50%;background:${p.color}"></span>
               ${p.seriesName}
             </span>
-            <span class="font-mono font-bold">${val}</span>
+            <span style="font-weight:bold;">${val}</span>
           </div>`
         })
         res += '</div>'
@@ -301,23 +329,40 @@ const initChart = () => {
       axisLine: { lineStyle: { color: 'rgba(255,255,255,0.1)' } },
       axisLabel: { color: '#94a3b8', fontSize: 10 }
     },
-    yAxis: {
-      type: 'value',
-      name: '成交量',
-      nameTextStyle: { color: '#06b6d4', fontSize: 10 },
-      axisLine: { show: false },
-      axisTick: { show: false },
-      axisLabel: {
-        color: '#06b6d4',
-        fontSize: 10,
-        formatter: (v: number) => {
-          if (v >= 1e8) return (v / 1e8).toFixed(2) + '亿'
-          if (v >= 1e4) return (v / 1e4).toFixed(2) + '万'
-          return v
-        }
+    yAxis: [
+      {
+        type: 'value',
+        name: '成交量',
+        nameTextStyle: { color: '#06b6d4', fontSize: 10 },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: {
+          color: '#06b6d4',
+          fontSize: 10,
+          formatter: (v: number) => {
+            if (v >= 1e8) return (v / 1e8).toFixed(2) + '亿'
+            if (v >= 1e4) return (v / 1e4).toFixed(2) + '万'
+            return v
+          }
+        },
+        splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)', type: 'dashed' } }
       },
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)', type: 'dashed' } }
-    },
+      {
+        type: 'value',
+        name: '价格',
+        nameTextStyle: { color: '#f59e0b', fontSize: 10 },
+        position: 'right',
+        scale: true,
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: {
+          color: '#f59e0b',
+          fontSize: 10,
+          formatter: (v: number) => v.toFixed(2)
+        },
+        splitLine: { show: false }
+      }
+    ],
     dataZoom: [
       {
         type: 'inside',
@@ -345,6 +390,7 @@ const initChart = () => {
       {
         name: '成交量',
         type: 'bar',
+        yAxisIndex: 0,
         data: volumes,
         itemStyle: {
           color: {
@@ -363,27 +409,41 @@ const initChart = () => {
       {
         name: '20日均量',
         type: 'line',
+        yAxisIndex: 0,
         data: ma20s,
         showSymbol: false,
         lineStyle: { width: 1.5, type: 'dashed' },
         itemStyle: { color: '#6366f1' }
+      },
+      {
+        name: '价格',
+        type: 'line',
+        yAxisIndex: 1,
+        data: prices,
+        showSymbol: false,
+        smooth: true,
+        lineStyle: { width: 2, color: '#f59e0b' },
+        itemStyle: { color: '#f59e0b' },
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(245, 158, 11, 0.15)' },
+              { offset: 1, color: 'rgba(245, 158, 11, 0)' }
+            ]
+          }
+        }
       }
     ]
   }
   
   myChart.setOption(option)
-}
-
-// Watch window resize to redraw chart smoothly
-const handleResize = () => {
-  if (myChart) {
-    myChart.resize()
+  } catch (e) {
+    console.error('Chart init failed:', e)
   }
 }
-window.addEventListener('resize', handleResize)
-onUnmounted(() => {
-  window.removeEventListener('resize', handleResize)
-})
+
 </script>
 
 <style scoped>
@@ -399,5 +459,11 @@ onUnmounted(() => {
 }
 .animate-pulse-glow {
   animation: pulse-glow 3s infinite ease-in-out;
+}
+.glass-card {
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 1rem;
 }
 </style>

@@ -8,9 +8,15 @@ logger = logging.getLogger(__name__)
 class FundamentalCalculator:
     @staticmethod
     def safe_ratio(numerator, denominator):
-        if denominator and denominator > 0:
+        if denominator and denominator != 0:
             return numerator / denominator
         return 0.0
+
+    @staticmethod
+    def safe_div(num, den, fill=0.0):
+        """向量化安全除法，分母为 0 时返回 fill"""
+        den = den.replace(0, np.nan)
+        return (num / den).fillna(fill)
 
     @staticmethod
     def first_existing_column(df, candidates):
@@ -181,10 +187,18 @@ class FundamentalCalculator:
             # 连续的列插入会导致 DataFrame 碎片化，copy() 会进行碎片整理
             df = df.copy()
             
-            # 3. 基础指标计算
-            df['net_margin'] = df.apply(lambda r: cls.safe_ratio(r.get('PARENT_NETPROFIT', 0), r.get('TOTAL_OPERATE_INCOME', 0)) * 100, axis=1)
-            df['gross_margin'] = df.apply(lambda r: cls.safe_ratio(r.get('TOTAL_OPERATE_INCOME', 0) - r.get('OPERATE_COST', 0), r.get('TOTAL_OPERATE_INCOME', 0)) * 100, axis=1)
-            df['roe'] = df.apply(lambda r: cls.safe_ratio(r.get('PARENT_NETPROFIT', 0), r.get('TOTAL_PARENT_EQUITY', 1)) * 100, axis=1)
+            # 3. 基础指标计算（向量化）
+            revenue = df['TOTAL_OPERATE_INCOME'].fillna(0)
+            net_profit = df['PARENT_NETPROFIT'].fillna(0)
+            equity = df['TOTAL_PARENT_EQUITY'].fillna(0)
+            total_assets = df['TOTAL_ASSETS'].fillna(0)
+
+            df['net_margin'] = cls.safe_div(net_profit, revenue) * 100
+            df['gross_margin'] = cls.safe_div(revenue - df['OPERATE_COST'].fillna(0), revenue) * 100
+            df['roe'] = cls.safe_div(net_profit, equity) * 100
+            # 杜邦三因子
+            df['asset_turnover'] = cls.safe_div(revenue, total_assets)
+            df['equity_multiplier'] = cls.safe_div(total_assets, equity)
             df['fcf'] = df['cfo'] - df['capex']
             
             # 4. 分红逻辑
@@ -194,70 +208,55 @@ class FundamentalCalculator:
                 div_by_year = df_div.groupby('attr_year')['cash_div'].sum().to_dict()
             
             df['dps'] = df['REPORT_DATE'].dt.year.map(div_by_year).fillna(0)
-            df['payout_ratio'] = df.apply(lambda r: cls.safe_ratio(r['dps'], r.get('BASIC_EPS', 0)) * 100 if r.get('BASIC_EPS', 0) > 0 else 0, axis=1)
+            eps = df['BASIC_EPS'].fillna(0)
+            df['payout_ratio'] = cls.safe_div(df['dps'], eps) * 100
+            df.loc[eps <= 0, 'payout_ratio'] = 0
             
             # 5. 更多指标 (省略部分，保持核心)
             df['revenue_growth_pct'] = df['TOTAL_OPERATE_INCOME'].pct_change().fillna(0) * 100
             
-            # 计算股本总数和每股净资产 BVPS (用于资本分配计算)
-            def calculate_shares_and_bvps(row):
-                net_profit = row.get('PARENT_NETPROFIT', 0)
-                eps = row.get('BASIC_EPS', 0)
-                equity = row.get('TOTAL_PARENT_EQUITY', 0)
-                shares = (net_profit / eps) if eps and eps > 0 else 0
-                bvps = (equity / shares) if shares and shares > 0 else 0
-                return pd.Series([shares, bvps], index=['shares', 'bvps'])
-            
+            # 计算股本总数和每股净资产 BVPS (向量化)
             try:
-                df[['shares', 'bvps']] = df.apply(calculate_shares_and_bvps, axis=1)
+                df['shares'] = cls.safe_div(net_profit, eps)
+                df['bvps'] = cls.safe_div(equity, df['shares'])
                 # 如果大部分 shares 都是 0，说明数据源缺失 EPS，回退到使用 parent equity 作为 bvps 替代
                 if (df['shares'] == 0).sum() / len(df) > 0.5:
                     df['share_change_pct'] = 0.0
-                    df['bvps_growth_pct'] = df['TOTAL_PARENT_EQUITY'].pct_change().fillna(0) * 100
+                    df['bvps_growth_pct'] = equity.pct_change().fillna(0) * 100
                 else:
                     df['share_change_pct'] = df['shares'].pct_change().fillna(0) * 100
                     df['bvps_growth_pct'] = df['bvps'].pct_change().fillna(0) * 100
             except Exception:
                 df['share_change_pct'] = 0.0
-                df['bvps_growth_pct'] = df['TOTAL_PARENT_EQUITY'].pct_change().fillna(0) * 100
+                df['bvps_growth_pct'] = equity.pct_change().fillna(0) * 100
 
-            # --- [核心修复：解决 JSON 序列化 nan 问题] ---
-            # 在生成 Summary 之前，全量清理 DataFrame 中的 NaN 和 Inf
-            df = df.replace([np.inf, -np.inf], np.nan).fillna(0)
-            
-            # 补齐原有指标列以供测试和老前端兼容
-            df['cfo_to_profit_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('cfo', 0), r.get('PARENT_NETPROFIT', 0)) * 100, axis=1)
-            df['fcf_to_profit_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('fcf', 0), r.get('PARENT_NETPROFIT', 0)) * 100, axis=1)
-            df['capex_intensity_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('capex', 0), r.get('TOTAL_OPERATE_INCOME', 0)) * 100, axis=1)
-            df['reinvestment_rate_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('capex', 0), r.get('cfo', 0)) * 100, axis=1)
+            # 补齐原有指标列以供测试和老前端兼容（向量化）
+            df['cfo_to_profit_pct'] = cls.safe_div(df['cfo'].fillna(0), net_profit) * 100
+            df['fcf_to_profit_pct'] = cls.safe_div(df['fcf'].fillna(0), net_profit) * 100
+            df['capex_intensity_pct'] = cls.safe_div(df['capex'].fillna(0), revenue) * 100
+            df['reinvestment_rate_pct'] = cls.safe_div(df['capex'].fillna(0), df['cfo'].fillna(0)) * 100
             df['retention_ratio_pct'] = 100 - df.get('payout_ratio', 0)
             
-            # Invested Capital & ROIC 计算
+            # Invested Capital & ROIC 计算（向量化）
             # 当 invested_capital 全为 0（数据源缺少现金/负债字段）时，用归母净资产兜底
-            df['invested_capital'] = df.get('invested_capital', 0)
+            df['invested_capital'] = df.get('invested_capital', pd.Series(0, index=df.index))
             if (df['invested_capital'] == 0).all():
-                df['invested_capital'] = df['TOTAL_PARENT_EQUITY'].fillna(0)
-            previous_invested_capital = df['invested_capital'].shift(1)
-            df['avg_invested_capital'] = df.apply(
-                lambda r: (r['invested_capital'] + (previous_invested_capital.loc[r.name] if pd.notnull(previous_invested_capital.loc[r.name]) else r['invested_capital'])) / 2,
-                axis=1
-            )
-            # 真正的 ROIC = NOPAT / avg_invested_capital
-            # NOPAT = 营业利润 × (1 - 有效税率)
+                df['invested_capital'] = equity.copy()
+            df['avg_invested_capital'] = (df['invested_capital'] + df['invested_capital'].shift(1).fillna(df['invested_capital'])) / 2
+
             # 有效税率 = 1 - (净利润 / 利润总额)，亏损年份取 25% 默认值
-            df['effective_tax_rate'] = df.apply(
-                lambda r: max(0, min(1, 1 - cls.safe_ratio(r.get('PARENT_NETPROFIT', 0), r.get('PROFIT_TOTAL', 0))))
-                if pd.notnull(r.get('PROFIT_TOTAL')) and r.get('PROFIT_TOTAL', 0) > 0 else 0.25,
-                axis=1
-            )
-            # 优先用营业利润计算 NOPAT，回退到 (营收-成本)
-            df['nopat'] = df.apply(
-                lambda r: r.get('OPERATE_PROFIT', 0) * (1 - r['effective_tax_rate'])
-                if pd.notnull(r.get('OPERATE_PROFIT')) and r.get('OPERATE_PROFIT', 0) != 0
-                else (r.get('TOTAL_OPERATE_INCOME', 0) - r.get('OPERATE_COST', 0)) * (1 - r['effective_tax_rate']),
-                axis=1
-            )
-            df['roic_proxy_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('nopat', 0), r.get('avg_invested_capital', 1)) * 100, axis=1)
+            profit_total = df['PROFIT_TOTAL'].fillna(0)
+            raw_tax_rate = 1 - cls.safe_div(net_profit, profit_total)
+            df['effective_tax_rate'] = raw_tax_rate.clip(0, 1)
+            df.loc[profit_total <= 0, 'effective_tax_rate'] = 0.25
+
+            # NOPAT = 营业利润 × (1 - 有效税率)，回退到 (营收-成本)
+            operate_profit = df['OPERATE_PROFIT'].fillna(0)
+            operating_income = revenue - df['OPERATE_COST'].fillna(0)
+            nopat_base = operate_profit.where(operate_profit != 0, operating_income)
+            df['nopat'] = nopat_base * (1 - df['effective_tax_rate'])
+
+            df['roic_proxy_pct'] = cls.safe_div(df['nopat'], df['avg_invested_capital']) * 100
             df['roic_pct'] = df['roic_proxy_pct']
             
             df['implied_share_count'] = df.get('shares', 0)
@@ -265,18 +264,30 @@ class FundamentalCalculator:
             df['book_value_per_share_growth_pct'] = df.get('bvps_growth_pct', 0)
             df['equity_growth_pct'] = df['TOTAL_PARENT_EQUITY'].pct_change().fillna(0) * 100
             
-            # 补齐资产负债表与风险指标
-            df['net_cash'] = df['cash_balance'] - df['interest_bearing_debt']
-            df['debt_to_equity_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('interest_bearing_debt', 0), r.get('TOTAL_PARENT_EQUITY', 0)) * 100, axis=1)
-            df['debt_to_assets_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('interest_bearing_debt', 0), r.get('TOTAL_ASSETS', 0)) * 100, axis=1)
-            df['net_cash_to_equity_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('net_cash', 0), r.get('TOTAL_PARENT_EQUITY', 0)) * 100, axis=1)
-            df['short_debt_coverage_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('cash_balance', 0), r.get('short_debt', 0)) * 100 if r.get('short_debt', 0) > 0 else 0, axis=1)
+            # 补齐资产负债表与风险指标（向量化）
+            interest_debt = df['interest_bearing_debt'].fillna(0)
+            cash_bal = df['cash_balance'].fillna(0)
+            short_debt = df['short_debt'].fillna(0)
+            goodwill = df.get('goodwill_balance', pd.Series(0, index=df.index)).fillna(0)
+            recv = df.get('receivable_balance', pd.Series(0, index=df.index)).fillna(0)
+            inv = df.get('inventory_balance', pd.Series(0, index=df.index)).fillna(0)
+            prep = df.get('prepayment_balance', pd.Series(0, index=df.index)).fillna(0)
+
+            df['net_cash'] = cash_bal - interest_debt
+            df['debt_to_equity_pct'] = cls.safe_div(interest_debt, equity) * 100
+            df['debt_to_assets_pct'] = cls.safe_div(interest_debt, total_assets) * 100
+            df['net_cash_to_equity_pct'] = cls.safe_div(df['net_cash'], equity) * 100
+            df['short_debt_coverage_pct'] = cls.safe_div(cash_bal, short_debt) * 100
+            df.loc[short_debt <= 0, 'short_debt_coverage_pct'] = 0
+
+            df['receivable_inventory_prepay_balance'] = recv + inv + prep
+            df['receivable_inventory_prepay_to_revenue_pct'] = cls.safe_div(df['receivable_inventory_prepay_balance'], revenue) * 100
+            df['goodwill_to_equity_pct'] = cls.safe_div(goodwill, equity) * 100
             
-            df['receivable_inventory_prepay_balance'] = df.get('receivable_balance', 0) + df.get('inventory_balance', 0) + df.get('prepayment_balance', 0)
-            df['receivable_inventory_prepay_to_revenue_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('receivable_inventory_prepay_balance', 0), r.get('TOTAL_OPERATE_INCOME', 0)) * 100, axis=1)
-            df['goodwill_to_equity_pct'] = df.apply(lambda r: cls.safe_ratio(r.get('goodwill_balance', 0), r.get('TOTAL_PARENT_EQUITY', 0)) * 100, axis=1)
-            
-            # 6. 生成 Summary
+            # 6. 全量清理 NaN/Inf（在所有计算完成后、生成 Summary 之前）
+            df = df.replace([np.inf, -np.inf], np.nan).fillna(0)
+
+            # 7. 生成 Summary
             latest = df.iloc[-1]
             stability_window = df.tail(5)
             
