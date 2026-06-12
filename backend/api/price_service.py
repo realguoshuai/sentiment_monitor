@@ -913,6 +913,11 @@ class PriceService:
                     results[sym] = hist
 
         if results and len(results) == len(symbols):
+            # skip_cache 时如果结果有空数据，回退到 stale 缓存
+            if skip_cache and any(not v for v in results.values()):
+                stale_data = cls._cache_get(stale_cache_key)
+                if stale_data is not None:
+                    return stale_data
             ttl = 3600 * 12
             if period == 'day':
                 ttl = 3600 * 2

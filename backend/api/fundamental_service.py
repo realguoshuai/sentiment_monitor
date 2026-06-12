@@ -119,6 +119,8 @@ class FundamentalService:
         def _refresh():
             try:
                 cls.get_ttm_fundamentals(symbol)
+            except Exception as e:
+                logger.error(f"Background TTM refresh failed for {symbol}: {e}")
             finally:
                 cache.delete(key)
         threading.Thread(target=_refresh, daemon=True).start()
@@ -438,6 +440,8 @@ class FundamentalService:
                     def _refresh_shareholder():
                         try:
                             cls._build_shareholder_data(symbol)
+                        except Exception as e:
+                            logger.error(f"Background shareholder refresh failed for {symbol}: {e}")
                         finally:
                             cache.delete(ref_key)
                     threading.Thread(target=_refresh_shareholder, daemon=True).start()
@@ -463,6 +467,8 @@ class FundamentalService:
         def _refresh_quality():
             try:
                 cls.get_quality_data(symbol, include_shareholder=include_sh)
+            except Exception as e:
+                logger.error(f"Background quality refresh failed for {symbol}: {e}")
             finally:
                 cache.delete(key)
         threading.Thread(target=_refresh_quality, daemon=True).start()

@@ -604,6 +604,7 @@ def refresh_screener_snapshot(request):
 
     def _do_refresh():
         try:
+            cache.delete(result_key)
             result = ScreenerService.refresh_snapshot()
             result['_diag'] = {
                 'frozen': getattr(sys, 'frozen', False),
@@ -775,6 +776,11 @@ def get_market_diary(request):
         cache.delete(history_cache_key)
         history = None
 
+    # force 时如果历史缓存为空，清除重新拉取
+    if force and not history:
+        cache.delete(history_cache_key)
+        history = None
+
     if history is None:
         try:
             history_dict = PriceService.get_historical_data([fixed_symbol], limit=250, period='day', normalize=False, skip_cache=force)
@@ -862,7 +868,7 @@ def get_market_diary(request):
             next_dividend = {}
 
     # ---- 4. 拼接历史 + 今天，计算 MA20 ----
-    full_history = history + [today_data] if today_data.get('volume') else history
+    full_history = history + [today_data] if 'volume' in today_data else history
 
     volumes = [h.get('volume', 0.0) for h in full_history]
     history_with_ma = []
@@ -892,7 +898,7 @@ def get_market_diary(request):
     result = {
         'symbol': fixed_symbol,
         'latest': {
-            'price': today_data.get('price', full_history[-1].get('price', 0.0)),
+            'price': today_data.get('price') or (full_history[-1].get('price', 0.0) if full_history else 0.0),
             'pe': today_data.get('pe', 0.0),
             'pb': today_data.get('pb', 0.0),
             'dividend_yield': today_data.get('dividend_yield', 0.0),

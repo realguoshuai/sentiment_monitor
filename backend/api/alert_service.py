@@ -146,16 +146,16 @@ def _check_hot_rule(rule: AlertRule, stock: Stock, today: date) -> bool:
     """检查热度飙升规则"""
     # 获取最近 7 天的热度数据
     week_ago = today - timedelta(days=7)
-    sentiments = SentimentData.objects.filter(
-        stock=stock,
-        date__gte=week_ago
-    ).order_by('-date')
+    sentiment_list = list(
+        SentimentData.objects.filter(stock=stock, date__gte=week_ago)
+        .order_by('-date')[:8]
+    )
 
-    if sentiments.count() < 2:
+    if len(sentiment_list) < 2:
         return False
 
-    latest = sentiments.first()
-    avg_hot = sentiments[1:].aggregate(avg=models.Avg('hot_score'))['avg'] or 0
+    latest = sentiment_list[0]
+    avg_hot = sum(s.hot_score for s in sentiment_list[1:]) / len(sentiment_list[1:])
 
     if avg_hot > 0 and latest.hot_score > avg_hot * rule.threshold:
         message = f"热度 {latest.hot_score:.1f} 超过均值 {avg_hot:.1f} 的 {rule.threshold} 倍"
