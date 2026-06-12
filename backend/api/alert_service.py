@@ -8,6 +8,7 @@ from django.db import models
 from django.utils import timezone
 
 from .models import Stock, SentimentData, FundamentalSnapshot, AlertRule, AlertLog
+from .utils import format_symbol
 from .price_service import PriceService
 from .fundamental_service import FundamentalService
 
@@ -103,7 +104,7 @@ def _check_price_rule(rule: AlertRule, stock: Stock) -> bool:
     if not realtime:
         return False
 
-    price_info = realtime.get(stock.symbol)
+    price_info = realtime.get(format_symbol(stock.symbol))
     if not price_info:
         return False
 
@@ -224,7 +225,7 @@ def _check_price_target(rule: AlertRule, stock: Stock) -> bool:
     if not realtime:
         return False
 
-    price_info = realtime.get(stock.symbol)
+    price_info = realtime.get(format_symbol(stock.symbol))
     if not price_info:
         return False
 
@@ -277,7 +278,7 @@ def _check_volume_anomaly(rule: AlertRule, stock: Stock) -> bool:
     except Exception:
         return False
 
-    data = history.get(stock.symbol, [])
+    data = history.get(format_symbol(stock.symbol), [])
     if len(data) < 20:
         return False
 

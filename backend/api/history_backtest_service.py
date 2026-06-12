@@ -243,6 +243,9 @@ class HistoryBacktestService:
                 results.append(None)
                 continue
             future_price = prices[target_idx]
+            if not future_price:
+                results.append(None)
+                continue
             results.append(round((future_price / price - 1) * 100, 2))
         return results
 

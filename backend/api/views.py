@@ -497,9 +497,10 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'])
     def analysis(self, request):
         """获取个股深度分析数据 (分位、F-Score、预测)"""
-        symbol = request.GET.get('symbol')
+        symbol = request.GET.get('symbol', '').strip().upper()
         if not symbol:
             return Response({'error': '需要股票代码'}, status=400)
+        symbol = format_symbol(symbol)
 
         period = request.GET.get('period', '10y')
         return Response(AnalysisService.get_analysis_response(symbol, period))
@@ -555,7 +556,7 @@ def search_stocks(request):
             results.append({
                 'name': str(row['名称']), # 确保为字符串
                 'symbol': symbol,
-                'price': float(row['最新价']) if pd.notnull(row['最新价']) else 0.0 # 确保为 float，解决 NumPy 问题
+                'price': (lambda v: float(v) if pd.notnull(v) else 0.0)(pd.to_numeric(row['最新价'], errors='coerce')),
             })
         return Response(results)
     except Exception as e:

@@ -792,7 +792,7 @@ class PriceService:
             mask_gap = (df['month'] >= 9) & (df['curr_year_div'] <= 0) & ((df['date_dt'] - last_div_date).dt.days <= 450)
             df.loc[mask_gap, 'dy_sum'] = df['last_year_div']
 
-            df['dividend_yield'] = (df['dy_sum'] / df['price'] * 100)
+            df['dividend_yield'] = np.where(df['price'] > 0, df['dy_sum'] / df['price'] * 100, 0.0)
         else:
             df['dividend_yield'] = 0
 
