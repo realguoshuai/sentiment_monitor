@@ -508,6 +508,11 @@ class FundamentalService:
 
             logger.info(f"[Quality] Data fetched for {symbol}, calculating metrics...")
 
+            # 确保 ann_date 是 datetime 类型
+            if isinstance(df_d, pd.DataFrame) and not df_d.empty and 'ann_date' in df_d.columns:
+                df_d['ann_date'] = pd.to_datetime(df_d['ann_date'], errors='coerce')
+                df_d = df_d.dropna(subset=['ann_date'])
+
             payload = Calc.calculate_quality_metrics(df_p, df_b, df_c, df_d, m_cap)
             
             if include_shareholder:

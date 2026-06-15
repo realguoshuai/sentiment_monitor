@@ -790,6 +790,7 @@ class FundamentalCalculator:
             df_prices['ttm_profit'] = 0
             df_prices['TOTAL_PARENT_EQUITY'] = 0
             return df_prices
+        df_fund['NOTICE_DATE'] = pd.to_datetime(df_fund['NOTICE_DATE'], errors='coerce')
         df_fund = df_fund.dropna(subset=['NOTICE_DATE']).sort_values('NOTICE_DATE')
         df_prices = df_prices.sort_values('date_dt')
         df_merged = pd.merge_asof(df_prices, df_fund, left_on='date_dt', right_on='NOTICE_DATE', direction='backward')

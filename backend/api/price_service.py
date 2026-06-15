@@ -698,6 +698,9 @@ class PriceService:
 
         try:
             df_divs = FundamentalService.get_historical_dividends(fixed_symbol)
+            if not df_divs.empty and 'ann_date' in df_divs.columns:
+                df_divs['ann_date'] = pd.to_datetime(df_divs['ann_date'], errors='coerce')
+                df_divs = df_divs.dropna(subset=['ann_date'])
         except Exception as e:
             logger.warning(f"Historical dividends unavailable for {fixed_symbol}, using zero dividend yield: {e}")
             df_divs = pd.DataFrame()
