@@ -114,10 +114,14 @@ class StockViewSet(viewsets.ModelViewSet):
         
         # 如果名称为空，尝试从实时接口获取
         if not data.get('name'):
-            rt = PriceService.get_realtime_price([fixed_symbol])
-            if fixed_symbol in rt:
-                data['name'] = rt[fixed_symbol]['name']
-            else:
+            try:
+                rt = PriceService.get_realtime_price([fixed_symbol])
+                if fixed_symbol in rt:
+                    data['name'] = rt[fixed_symbol]['name']
+                else:
+                    data['name'] = fixed_symbol
+            except Exception as e:
+                logger.warning(f"Failed to fetch stock name for {fixed_symbol}: {e}")
                 data['name'] = fixed_symbol
         
         serializer = self.get_serializer(data=data)
@@ -148,7 +152,12 @@ class StockViewSet(viewsets.ModelViewSet):
 
                 # 防御并发写：当全局批量采集任务运行时，挂起当前线程以防 SQLite 锁冲突
                 import time
+                _lock_wait_count = 0
                 while cache.get(COLLECTION_LOCK_KEY):
+                    _lock_wait_count += 1
+                    if _lock_wait_count > 30:  # 最多等 5 分钟
+                        logger.warning("Global collection lock held too long, proceeding with %s anyway", queued_stock.symbol)
+                        break
                     logger.info("Global collection in progress. Waiting 10 seconds before collecting %s...", queued_stock.symbol)
                     time.sleep(10)
 
@@ -491,8 +500,15 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
         if limit < 1 or limit > 1000:
             return Response({'error': 'limit 参数范围 1-1000'}, status=400)
         period = request.GET.get('period', 'day')
-        data = PriceService.get_historical_data(symbols, limit, period)
-        return Response(data)
+        allowed_periods = ('day', 'week', 'month', 'year', '1d', '30d', '1y_week', '5y', '10y', 'annual')
+        if period not in allowed_periods:
+            return Response({'error': f'period 参数无效，允许值: {", ".join(allowed_periods)}'}, status=400)
+        try:
+            data = PriceService.get_historical_data(symbols, limit, period)
+            return Response(data)
+        except Exception as e:
+            logger.error(f"comparison_historical error: {e}")
+            return Response({'error': f'历史数据获取失败: {e}'}, status=500)
 
     @action(detail=False, methods=['get'])
     def analysis(self, request):
@@ -696,11 +712,15 @@ def refresh_quality_data(request):
         return Response({'error': 'No symbol provided'}, status=400)
     
     from .fundamental_service import FundamentalService
-    success = FundamentalService.purge_data(symbol)
-    if success:
-        return Response({'message': f'Successfully purged cache and snapshots for {symbol}'})
-    else:
-        return Response({'error': 'Failed to purge data'}, status=500)
+    try:
+        success = FundamentalService.purge_data(symbol)
+        if success:
+            return Response({'message': f'Successfully purged cache and snapshots for {symbol}'})
+        else:
+            return Response({'error': 'Failed to purge data'}, status=500)
+    except Exception as e:
+        logger.error(f"purge_data error for {symbol}: {e}")
+        return Response({'error': f'清理数据失败: {e}'}, status=500)
 
 
 @api_view(['GET'])
@@ -956,10 +976,10 @@ def _build_dividend_calendar():
             future = executor.submit(FundamentalService.get_next_dividend, s['symbol'])
             future_map[future] = s
 
-        for future in as_completed(future_map):
+        for future in as_completed(future_map, timeout=60):
             stock_info = future_map[future]
             try:
-                div_info = future.result()
+                div_info = future.result(timeout=15)
                 if div_info.get('status') != 'none':
                     results.append({
                         'symbol': stock_info['symbol'],
@@ -974,7 +994,10 @@ def _build_dividend_calendar():
                 logger.warning(f"Failed to get dividend for {stock_info['symbol']}: {e}")
 
     results.sort(key=lambda x: x.get('days_left') if x.get('days_left') is not None else 9999)
-    cache.set(calendar_cache_key, results, 3600)
+    try:
+        cache.set(calendar_cache_key, results, 3600)
+    except Exception as e:
+        logger.warning(f"Failed to cache dividend calendar: {e}")
     return results
 
 
@@ -1009,10 +1032,10 @@ def get_valuation_thermometer(request):
                 future = executor.submit(FundamentalService.get_pb_water_level, s['symbol'])
                 future_map[future] = s
 
-            for future in as_completed(future_map):
+            for future in as_completed(future_map, timeout=60):
                 stock_info = future_map[future]
                 try:
-                    result = future.result()
+                    result = future.result(timeout=15)
                     if result:
                         result['name'] = stock_info['name']
                         results.append(result)
@@ -1182,18 +1205,22 @@ from .alert_service import check_alerts, get_unread_count, mark_as_read
 @api_view(['GET'])
 def get_alert_rules(request):
     """获取所有告警规则"""
-    rules = AlertRule.objects.select_related('stock').all()
-    data = [{
-        'id': r.id,
-        'stock_symbol': r.stock.symbol,
-        'stock_name': r.stock.name,
-        'rule_type': r.rule_type,
-        'rule_type_display': r.get_rule_type_display(),
-        'threshold': r.threshold,
-        'is_active': r.is_active,
-        'created_at': r.created_at,
-    } for r in rules]
-    return Response(data)
+    try:
+        rules = AlertRule.objects.select_related('stock').all()
+        data = [{
+            'id': r.id,
+            'stock_symbol': r.stock.symbol,
+            'stock_name': r.stock.name,
+            'rule_type': r.rule_type,
+            'rule_type_display': r.get_rule_type_display(),
+            'threshold': r.threshold,
+            'is_active': r.is_active,
+            'created_at': r.created_at,
+        } for r in rules]
+        return Response(data)
+    except Exception as e:
+        logger.error(f"get_alert_rules error: {e}")
+        return Response({'error': str(e)}, status=500)
 
 
 @api_view(['POST'])
@@ -1256,21 +1283,24 @@ def get_alert_logs(request):
         return Response({'error': 'limit 参数必须为整数'}, status=400)
     if limit < 1 or limit > 500:
         return Response({'error': 'limit 参数范围 1-500'}, status=400)
-    logs = AlertLog.objects.select_related('rule', 'rule__stock').all()[:limit]
 
-    data = [{
-        'id': l.id,
-        'stock_symbol': l.rule.stock.symbol,
-        'stock_name': l.rule.stock.name,
-        'rule_type': l.rule.rule_type,
-        'rule_type_display': l.rule.get_rule_type_display(),
-        'message': l.message,
-        'value': l.value,
-        'triggered_at': l.triggered_at,
-        'is_read': l.is_read,
-    } for l in logs]
-
-    return Response(data)
+    try:
+        logs = AlertLog.objects.select_related('rule', 'rule__stock').all()[:limit]
+        data = [{
+            'id': l.id,
+            'stock_symbol': l.rule.stock.symbol,
+            'stock_name': l.rule.stock.name,
+            'rule_type': l.rule.rule_type,
+            'rule_type_display': l.rule.get_rule_type_display(),
+            'message': l.message,
+            'value': l.value,
+            'triggered_at': l.triggered_at,
+            'is_read': l.is_read,
+        } for l in logs]
+        return Response(data)
+    except Exception as e:
+        logger.error(f"get_alert_logs error: {e}")
+        return Response({'error': str(e)}, status=500)
 
 
 @api_view(['GET'])
@@ -1309,12 +1339,16 @@ def trigger_alert_check(request):
 @api_view(['GET'])
 def get_alert_notifications(request):
     """获取未读告警通知（供 Electron 原生通知轮询）"""
-    logs = AlertLog.objects.filter(is_read=False).select_related('rule', 'rule__stock').order_by('-triggered_at')[:10]
-    data = [{
-        'id': l.id,
-        'stock_name': l.rule.stock.name,
-        'rule_type': l.rule.rule_type,
-        'message': l.message,
-        'triggered_at': l.triggered_at,
-    } for l in logs]
-    return Response(data)
+    try:
+        logs = AlertLog.objects.filter(is_read=False).select_related('rule', 'rule__stock').order_by('-triggered_at')[:10]
+        data = [{
+            'id': l.id,
+            'stock_name': l.rule.stock.name,
+            'rule_type': l.rule.rule_type,
+            'message': l.message,
+            'triggered_at': l.triggered_at,
+        } for l in logs]
+        return Response(data)
+    except Exception as e:
+        logger.error(f"get_alert_notifications error: {e}")
+        return Response({'error': str(e)}, status=500)
