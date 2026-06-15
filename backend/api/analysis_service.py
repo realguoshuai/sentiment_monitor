@@ -99,13 +99,23 @@ class AnalysisService:
 
         from .utils import get_valuation_config
         val_config = get_valuation_config(fixed_symbol)
-        valuation_conclusion = cls.build_valuation_conclusion(
-            stock_hist,
-            percentiles,
-            forward,
-            quality_data,
-            val_config=val_config
-        )
+        try:
+            valuation_conclusion = cls.build_valuation_conclusion(
+                stock_hist,
+                percentiles,
+                forward,
+                quality_data,
+                val_config=val_config
+            )
+        except Exception as e:
+            logger.error(f"Failed to build valuation conclusion for {fixed_symbol}: {e}")
+            valuation_conclusion = cls._build_data_insufficient_payload(
+                current={},
+                assumptions={},
+                signals={},
+                models=[],
+                blended_range={},
+            )
 
         try:
             peer_comparison = cls.build_peer_comparison(
