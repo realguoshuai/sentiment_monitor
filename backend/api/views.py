@@ -503,7 +503,11 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
         symbol = format_symbol(symbol)
 
         period = request.GET.get('period', '10y')
-        return Response(AnalysisService.get_analysis_response(symbol, period))
+        try:
+            return Response(AnalysisService.get_analysis_response(symbol, period))
+        except Exception as e:
+            logger.error(f"Analysis API error for {symbol}: {e}")
+            return Response({'error': f'分析数据获取失败: {e}'}, status=500)
 
 @api_view(['GET'])
 def search_stocks(request):
@@ -768,6 +772,7 @@ def get_market_diary(request):
 
     # force=true 时刷新今日数据；历史缺失时才补拉
     force = request.GET.get('force', '').lower() in ('true', '1', 'yes')
+    MIN_HISTORY_DAYS = 100  # 刷新时要求的最低历史天数
 
     # ---- 1. 历史 K 线（长缓存 24h，不含今天） ----
     history_cache_key = f"market_diary_hist_v1_{fixed_symbol}"
@@ -777,14 +782,28 @@ def get_market_diary(request):
         cache.delete(history_cache_key)
         history = None
 
-    # force 时如果历史缓存为空，清除重新拉取
-    if force and not history:
-        cache.delete(history_cache_key)
+    if not history:
         history = None
+
+    # force 时：先看缓存量够不够，不够就跳过 PriceService 缓存强制重拉
+    need_deep_refresh = False
+    if force:
+        if history and len(history) >= MIN_HISTORY_DAYS:
+            # 数据量够，清缓存走普通刷新（PriceService 有 stale 兜底）
+            cache.delete(history_cache_key)
+            history = None
+        else:
+            # 数据不足，标记需要深度刷新
+            need_deep_refresh = True
+            cache.delete(history_cache_key)
+            history = None
 
     if history is None:
         try:
-            history_dict = PriceService.get_historical_data([fixed_symbol], limit=250, period='day', normalize=False, skip_cache=force)
+            history_dict = PriceService.get_historical_data(
+                [fixed_symbol], limit=250, period='day', normalize=False,
+                skip_cache=need_deep_refresh,
+            )
             history = history_dict.get(fixed_symbol, [])
             if history:
                 from datetime import date as _date
@@ -822,8 +841,8 @@ def get_market_diary(request):
     if today_data is None:
         today_data = {}
         try:
-            # 获取今天的价格和成交量
-            today_dict = PriceService.get_historical_data([fixed_symbol], limit=1, period='day', normalize=False, skip_cache=force)
+            # 获取今天的价格和成交量（不传 skip_cache，让 PriceService stale 兜底生效）
+            today_dict = PriceService.get_historical_data([fixed_symbol], limit=1, period='day', normalize=False)
             today_list = today_dict.get(fixed_symbol, [])
             if today_list:
                 today_data = dict(today_list[-1])

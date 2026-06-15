@@ -64,14 +64,30 @@ class AnalysisService:
                 include_shareholder=False
             )
 
-            # 获取结果
-            hist_data = future_hist.result()
-            stock_hist = hist_data.get(fixed_symbol, []) or hist_data.get(symbol, [])
-            forward = future_forward.result()
-            f_score = future_f_score.result()
+            # 获取结果（每个数据源独立兜底，避免单一故障导致整体失败）
+            try:
+                hist_data = future_hist.result()
+                stock_hist = hist_data.get(fixed_symbol, []) or hist_data.get(symbol, [])
+            except Exception as e:
+                logger.error(f"Failed to fetch history for {fixed_symbol}: {e}")
+                stock_hist = []
+
+            try:
+                forward = future_forward.result()
+            except Exception as e:
+                logger.error(f"Failed to fetch forward metrics for {fixed_symbol}: {e}")
+                forward = {'expected_roe': 12.0, 'avg_roe_5y': 12.0}
+
+            try:
+                f_score = future_f_score.result()
+            except Exception as e:
+                logger.error(f"Failed to fetch f_score for {fixed_symbol}: {e}")
+                f_score = {'score': 0, 'details': []}
+
             try:
                 quality_data = future_quality.result()
-            except Exception:
+            except Exception as e:
+                logger.error(f"Failed to fetch quality data for {fixed_symbol}: {e}")
                 quality_data = {}
 
         percentiles = {
@@ -90,11 +106,38 @@ class AnalysisService:
             quality_data,
             val_config=val_config
         )
-        peer_comparison = cls.build_peer_comparison(
-            fixed_symbol,
-            forward=forward,
-            history=stock_hist,
-        )
+
+        try:
+            peer_comparison = cls.build_peer_comparison(
+                fixed_symbol,
+                forward=forward,
+                history=stock_hist,
+            )
+        except Exception as e:
+            logger.error(f"Failed to build peer comparison for {fixed_symbol}: {e}")
+            peer_comparison = cls._build_empty_peer_comparison(
+                fixed_symbol, reason='同行对比构建异常，请稍后重试。',
+            )
+
+        try:
+            investment_thesis = cls.build_investment_thesis(
+                valuation_conclusion,
+                f_score,
+                quality_data,
+            )
+        except Exception as e:
+            logger.error(f"Failed to build investment thesis for {fixed_symbol}: {e}")
+            investment_thesis = {
+                'stance': '数据不足',
+                'stance_color': 'slate',
+                'confidence_score': 0,
+                'headline': '投资 Thesis 构建异常，请稍后重试。',
+                'scorecard': {'valuation': '--', 'quality': '--', 'cashflow': '--', 'stability': '--'},
+                'buy_case': [],
+                'key_assumptions': [],
+                'risk_checklist': [],
+                'review_triggers': [],
+            }
 
         return {
             'symbol': fixed_symbol,
@@ -103,11 +146,7 @@ class AnalysisService:
             'forward': forward,
             'valuation_conclusion': valuation_conclusion,
             'peer_comparison': peer_comparison,
-            'investment_thesis': cls.build_investment_thesis(
-                valuation_conclusion,
-                f_score,
-                quality_data,
-            ),
+            'investment_thesis': investment_thesis,
             'history': stock_hist,
         }
 
