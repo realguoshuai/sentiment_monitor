@@ -2,7 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 from django.core.cache import cache
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import OuterRef, Subquery
 from django.utils import timezone
 from datetime import datetime, timedelta
@@ -126,7 +126,10 @@ class StockViewSet(viewsets.ModelViewSet):
         
         serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)
-        self.perform_create(serializer)
+        try:
+            self.perform_create(serializer)
+        except IntegrityError:
+            return Response({'error': f'股票 {fixed_symbol} 已存在'}, status=status.HTTP_409_CONFLICT)
         self._trigger_single_stock_collection(serializer.instance)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -544,7 +547,12 @@ def search_stocks(request):
             # 首次加载或缓存过期
             df = ak.stock_zh_a_spot_em()
             # 只保留核心搜索字段，减小缓存体积
-            df = df[['代码', '名称', '最新价']]
+            required_cols = ['代码', '名称', '最新价']
+            missing = [c for c in required_cols if c not in df.columns]
+            if missing:
+                logger.error(f"AkShare schema changed, missing columns: {missing}, got: {list(df.columns)}")
+                return Response([])
+            df = df[required_cols]
             CacheManager.set_df(SNAPSHOT_KEY, df, 3600 * 24)
         except Exception as e:
             logger.error(f"Failed to fetch stock snapshot: {e}")
@@ -908,7 +916,7 @@ def get_market_diary(request):
             next_dividend = {}
 
     # ---- 4. 拼接历史 + 今天，计算 MA20 ----
-    full_history = history + [today_data] if 'volume' in today_data else history
+    full_history = history + [today_data] if today_data and today_data.get('volume') else history
 
     volumes = [h.get('volume', 0.0) for h in full_history]
     history_with_ma = []
@@ -1100,9 +1108,11 @@ def diagnose_connectivity(request):
         import baostock as bs
         lr = bs.login()
         ok = lr.error_code == '0'
-        if ok:
-            bs.logout()
-        results['tests'].append({'name': 'Baostock', 'ok': ok, 'detail': lr.error_msg})
+        try:
+            results['tests'].append({'name': 'Baostock', 'ok': ok, 'detail': lr.error_msg})
+        finally:
+            if ok:
+                bs.logout()
     except Exception as e:
         results['tests'].append({'name': 'Baostock', 'ok': False, 'error': str(e)[:200]})
 
@@ -1228,12 +1238,28 @@ def create_alert_rule(request):
     """创建告警规则"""
     try:
         data = request.data
-        stock = Stock.objects.get(symbol=data['stock_symbol'])
+
+        # 参数校验
+        symbol = data.get('stock_symbol', '').strip().upper()
+        if not symbol:
+            return Response({'error': '缺少 stock_symbol'}, status=400)
+
+        rule_type = data.get('rule_type', '').strip()
+        valid_rule_types = {choice[0] for choice in AlertRule._meta.get_field('rule_type').choices}
+        if rule_type not in valid_rule_types:
+            return Response({'error': f'rule_type 无效，允许值: {", ".join(valid_rule_types)}'}, status=400)
+
+        try:
+            threshold = float(data.get('threshold', 0))
+        except (ValueError, TypeError):
+            return Response({'error': 'threshold 必须为数字'}, status=400)
+
+        stock = Stock.objects.get(symbol=symbol)
 
         rule = AlertRule.objects.create(
             stock=stock,
-            rule_type=data['rule_type'],
-            threshold=data['threshold'],
+            rule_type=rule_type,
+            threshold=threshold,
             is_active=data.get('is_active', True),
         )
 
@@ -1256,6 +1282,9 @@ def delete_alert_rule(request, rule_id):
         return Response({'message': '告警规则已删除'})
     except AlertRule.DoesNotExist:
         return Response({'error': '规则不存在'}, status=404)
+    except Exception as e:
+        logger.error(f"delete_alert_rule error: {e}")
+        return Response({'error': str(e)}, status=500)
 
 
 @api_view(['PUT'])
@@ -1272,6 +1301,9 @@ def toggle_alert_rule(request, rule_id):
         })
     except AlertRule.DoesNotExist:
         return Response({'error': '规则不存在'}, status=404)
+    except Exception as e:
+        logger.error(f"toggle_alert_rule error: {e}")
+        return Response({'error': str(e)}, status=500)
 
 
 @api_view(['GET'])
