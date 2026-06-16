@@ -601,7 +601,7 @@ class FundamentalService:
         return Calc.calculate_percentiles(history, column, period_years)
 
     @classmethod
-    def get_pb_water_level(cls, symbol: str) -> dict | None:
+    def get_pb_water_level(cls, symbol: str):
         """计算单只股票当前 PB 在近十年历史中的百分位（水位）"""
         from .price_service import PriceService
 

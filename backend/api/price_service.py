@@ -799,11 +799,16 @@ class PriceService:
         else:
             df['dividend_yield'] = 0
 
-        # 实时股息率补充
+        # 股息率兜底：优先使用雪球实时值，按价格比例推算历史
         rt_dy = rt.get('dividend_yield', 0)
-        if rt_dy > 0:
-            mask = (df['dividend_yield'] <= 0) & ((datetime.now() - df['date_dt']).dt.days <= 365)
-            df.loc[mask, 'dividend_yield'] = rt_dy
+        if rt_dy > 0 and curr_price > 0:
+            # 雪球值覆盖计算值（近1年），历史数据按价格比例推算
+            # 公式: xq_dy * (curr_price / hist_price) → 分红金额不变，价格变化导致收益率变化
+            df['dividend_yield'] = np.where(
+                df['price'] > 0,
+                rt_dy * (curr_price / df['price']),
+                0.0
+            )
 
         # 3. 计算 ROE 与 ROI
         # ROE = PB / PE * 100
