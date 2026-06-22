@@ -132,11 +132,11 @@ class FundamentalCalculator:
         # 统一列名以应对中英文/历史/不同接口差异
         profit_aliases = {
             'REPORT_DATE': ['REPORT_DATE', '报告期', '截止日期', 'REPORT_DATE'],
-            'TOTAL_OPERATE_INCOME': ['TOTAL_OPERATE_INCOME', '营业总收入', '营业收入', 'TOTAL_OPERATE_INCOME'],
+            'TOTAL_OPERATE_INCOME': ['TOTAL_OPERATE_INCOME', '营业总收入', '营业收入', 'OPERATE_INCOME', 'TOTAL_OPERATE_INCOME'],
             'PARENT_NETPROFIT': ['PARENT_NETPROFIT', '归属于母公司所有者的净利润', '净利润', 'PARENT_NETPROFIT'],
-            'OPERATE_COST': ['OPERATE_COST', '营业成本', 'OPERATE_COST'],
+            'OPERATE_COST': ['OPERATE_COST', '营业成本', 'OPERATE_EXPENSE', 'OPERATE_COST'],
             'OPERATE_PROFIT': ['OPERATE_PROFIT', '营业利润', 'OPERATE_PROFIT'],
-            'PROFIT_TOTAL': ['PROFIT_TOTAL', '利润总额', 'PROFIT_TOTAL'],
+            'PROFIT_TOTAL': ['PROFIT_TOTAL', '利润总额', 'TOTAL_PROFIT', 'PROFIT_TOTAL'],
             'BASIC_EPS': ['BASIC_EPS', '基本每股收益', '每股收益', 'BASIC_EPS'],
             'NOTICE_DATE': ['NOTICE_DATE', '公告日期', '公告日', 'NOTICE_DATE'],
         }
