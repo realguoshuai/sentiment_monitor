@@ -610,7 +610,8 @@ class FundamentalService:
     def get_f_score(cls, symbol):
         cache_key = f"f_score_v8_{symbol}"
         cached = cls._cache_get_value(cache_key)
-        if cached: return cached
+        if cached is not None:
+            return cached
         try:
             df_f = cls.get_ttm_fundamentals(symbol)
             df_c = cls.get_ttm_cashflow(symbol)
@@ -626,7 +627,10 @@ class FundamentalService:
             return res
         except Exception as e:
             logger.debug("F-Score calculation failed for %s: %s", symbol, e)
-            return {"score": 0, "details": []}
+            empty_result = {"score": 0, "details": []}
+            # 缓存空结果，避免重复计算失败
+            cls._cache_set_value(cache_key, empty_result, 3 * 24 * 3600)
+            return empty_result
 
     @classmethod
     def align_to_prices(cls, df_fund, df_prices, symbol):
