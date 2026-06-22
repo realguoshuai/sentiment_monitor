@@ -114,23 +114,23 @@ class Command(BaseCommand):
                     # === 1. 基础数据（无依赖） ===
                     # TTM 基本面（利润表 + 资产负债表）
                     FundamentalService.get_ttm_fundamentals(symbol)
-                    self.stdout.write(f'    ✓ TTM 基本面')
+                    self.stdout.write(f'    [OK] TTM 基本面')
 
                     # TTM 现金流
                     FundamentalService.get_ttm_cashflow(symbol)
-                    self.stdout.write(f'    ✓ TTM 现金流')
+                    self.stdout.write(f'    [OK] TTM 现金流')
 
                     # 雪球 F10（ROE/毛利率/增长率等）
                     FundamentalService.get_xueqiu_f10(symbol)
-                    self.stdout.write(f'    ✓ 雪球 F10')
+                    self.stdout.write(f'    [OK] 雪球 F10')
 
                     # 雪球股息率
                     FundamentalService.get_xueqiu_dividend_yield(symbol)
-                    self.stdout.write(f'    ✓ 雪球股息率')
+                    self.stdout.write(f'    [OK] 雪球股息率')
 
                     # 北向持仓历史
                     FundamentalService.get_northbound_holding_history(symbol)
-                    self.stdout.write(f'    ✓ 北向持仓')
+                    self.stdout.write(f'    [OK] 北向持仓')
 
                     # === 2. 质量分析（内部会调用 yearly_cashflow, historical_dividends） ===
                     # 财务质量（ROE/毛利率/现金流/护城河等）
@@ -139,30 +139,30 @@ class Command(BaseCommand):
                         symbol,
                         include_shareholder=include_shareholder,
                     )
-                    self.stdout.write(f'    ✓ 财务质量')
+                    self.stdout.write(f'    [OK] 财务质量')
 
                     # === 3. 依赖 quality_data 的指标 ===
                     # F-Score 评分（依赖 quality_data）
                     FundamentalService.get_f_score(symbol)
-                    self.stdout.write(f'    ✓ F-Score')
+                    self.stdout.write(f'    [OK] F-Score')
 
                     # 前瞻指标（预期 ROE，用于 DDM 估值，依赖 quality_data）
                     FundamentalService.get_forward_metrics(symbol)
-                    self.stdout.write(f'    ✓ 前瞻指标')
+                    self.stdout.write(f'    [OK] 前瞻指标')
 
                     # === 4. 上层服务（依赖多个基础数据） ===
                     # 深度分析（估值/Thesis/DDM）
                     AnalysisService.get_analysis(symbol)
-                    self.stdout.write(f'    ✓ 深度分析')
+                    self.stdout.write(f'    [OK] 深度分析')
 
                     # 历史回测（价格/PE/PB 历史）
                     HistoryBacktestService.get_history_backtest(symbol)
-                    self.stdout.write(f'    ✓ 历史回测')
+                    self.stdout.write(f'    [OK] 历史回测')
 
                     # === 5. 实时行情 ===
                     # 实时价格（用于更新缓存）
                     PriceService.get_realtime_price([symbol], fetch_fundamentals=True)
-                    self.stdout.write(f'    ✓ 实时行情')
+                    self.stdout.write(f'    [OK] 实时行情')
 
                     ok_count += 1
                     consecutive_fail = 0
