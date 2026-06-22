@@ -844,6 +844,16 @@ class ScreenerService:
 
     @classmethod
     def refresh_snapshot(cls) -> dict:
+        # 清除 ROE 和分红缓存，确保使用最新年报数据
+        try:
+            cache.delete(cls.ROE_CACHE_KEY)
+            cache.delete(cls.ROE_STALE_KEY)
+            cache.delete(cls.DIVIDEND_CACHE_KEY)
+            cache.delete(cls.DIVIDEND_STALE_KEY)
+            logger.info("Cleared ROE and dividend caches before refresh")
+        except Exception as e:
+            logger.warning("Failed to clear caches: %s", e)
+
         # 1. 腾讯 API 全量快照（Baostock 列表 + 腾讯批量查询，约 1-2 秒）
         df = cls._fetch_tencent_snapshot()
         source = 'tencent'
