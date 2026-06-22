@@ -29,6 +29,8 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
+from ..utils import safe_float
+
 logger = logging.getLogger(__name__)
 
 
@@ -161,14 +163,14 @@ class TushareProvider:
 
             r = df.iloc[0]
             return {
-                'roe': cls._safe_float(r.get('roe')),
-                'roa': cls._safe_float(r.get('roa')),
-                'gross_margin': cls._safe_float(r.get('grossprofit_margin')),
-                'net_margin': cls._safe_float(r.get('netprofit_margin')),
-                'eps': cls._safe_float(r.get('eps')),
-                'bps': cls._safe_float(r.get('bps')),
-                'ocfps': cls._safe_float(r.get('ocfps')),
-                'cfps': cls._safe_float(r.get('cfps')),
+                'roe': safe_float(r.get('roe')),
+                'roa': safe_float(r.get('roa')),
+                'gross_margin': safe_float(r.get('grossprofit_margin')),
+                'net_margin': safe_float(r.get('netprofit_margin')),
+                'eps': safe_float(r.get('eps')),
+                'bps': safe_float(r.get('bps')),
+                'ocfps': safe_float(r.get('ocfps')),
+                'cfps': safe_float(r.get('cfps')),
                 'end_date': str(r.get('end_date', '')),
             }
         except Exception as e:
@@ -246,10 +248,3 @@ class TushareProvider:
         """返回当前可用的接口列表"""
         return list(cls.FREE_ENDPOINTS)
 
-    @staticmethod
-    def _safe_float(value) -> float:
-        try:
-            f = float(value)
-            return f if f == f else 0.0  # NaN check
-        except (TypeError, ValueError):
-            return 0.0

@@ -36,7 +36,7 @@ class Stock(models.Model):
         """获取同行股票代码列表"""
         try:
             return json.loads(self.peer_symbols)
-        except Exception:
+        except (json.JSONDecodeError, TypeError):
             return []
 
     def set_peer_symbols(self, peer_symbols_list):

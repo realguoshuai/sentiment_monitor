@@ -1,4 +1,14 @@
+import math
 import re
+
+
+def safe_float(value) -> float:
+    """将任意值安全转换为 float，处理 None / 空串 / NaN / Inf。"""
+    try:
+        result = float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return result if math.isfinite(result) else 0.0
 
 
 def _infer_symbol_prefix(code: str) -> str:

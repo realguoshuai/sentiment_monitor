@@ -18,7 +18,7 @@ from .history_backtest_service import HistoryBacktestService
 from .models import Announcement, News, Report, SentimentData, Stock, StockScreenerSnapshot
 from .price_service import PriceService
 from .screener_service import ScreenerService
-from .utils import format_symbol
+from .utils import format_symbol, safe_float
 
 
 @override_settings(CACHES={
@@ -1654,10 +1654,10 @@ class SentimentApiTests(APITestCase):
         self.assertEqual(result['SZ000001']['dividend_yield'], 0.0)
 
     def test_safe_float_rejects_non_finite_values(self):
-        self.assertEqual(PriceService._safe_float('nan'), 0.0)
-        self.assertEqual(PriceService._safe_float('inf'), 0.0)
-        self.assertEqual(PriceService._safe_float('-inf'), 0.0)
-        self.assertEqual(PriceService._safe_float('10.25'), 10.25)
+        self.assertEqual(safe_float('nan'), 0.0)
+        self.assertEqual(safe_float('inf'), 0.0)
+        self.assertEqual(safe_float('-inf'), 0.0)
+        self.assertEqual(safe_float('10.25'), 10.25)
 
     @patch('api.price_service.PriceService._session.get')
     def test_intraday_data_caches_successful_minute_points(self, mock_get):

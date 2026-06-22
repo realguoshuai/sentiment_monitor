@@ -19,6 +19,9 @@ from .views import (
     get_alert_unread_count,
     mark_alert_read,
     trigger_alert_check,
+    comparison_realtime,
+    comparison_historical,
+    analysis,
 )
 
 router = DefaultRouter()
@@ -36,6 +39,9 @@ urlpatterns = [
     path('sentiment/quality/shareholder-structure/', get_quality_shareholder_structure, name='quality-shareholder-structure'),
     path('sentiment/quality/refresh/', refresh_quality_data, name='refresh-quality-data'),
     path('sentiment/history-backtest/', views.get_history_backtest, name='history-backtest'),
+    path('sentiment/comparison_realtime/', comparison_realtime, name='comparison-realtime'),
+    path('sentiment/comparison_historical/', comparison_historical, name='comparison-historical'),
+    path('sentiment/analysis/', analysis, name='analysis'),
     path('collect/', trigger_collection, name='trigger-collection'),
     path('diagnose/', diagnose_connectivity, name='diagnose-connectivity'),
     # 组合持仓

@@ -15,6 +15,8 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
+from ..utils import safe_float
+
 logger = logging.getLogger(__name__)
 
 
@@ -93,18 +95,18 @@ class BaostockProvider:
             while result.next():
                 row = result.get_row_data()
                 date_str = row[0]
-                price = cls._safe_float(row[1])
-                volume = cls._safe_float(row[2])
+                price = safe_float(row[1])
+                volume = safe_float(row[2])
                 if price <= 0:
                     continue
                 rows.append({
                     'date': date_str,
                     'price': round(price, 4),
                     'volume': round(volume, 2),
-                    'amount': cls._safe_float(row[3]),
-                    'turnover_rate': cls._safe_float(row[4]),
-                    'pe': cls._safe_float(row[5]),
-                    'pb': cls._safe_float(row[6]),
+                    'amount': safe_float(row[3]),
+                    'turnover_rate': safe_float(row[4]),
+                    'pe': safe_float(row[5]),
+                    'pb': safe_float(row[6]),
                 })
             return rows
         except Exception as e:
@@ -149,11 +151,11 @@ class BaostockProvider:
             row = result.get_row_data()
             # baostock profit fields: code, pubDate, statDate, roeAvg, npMargin, gpMargin, ...
             return {
-                'roe': cls._safe_float(row[3]),
-                'np_margin': cls._safe_float(row[4]),
-                'gp_margin': cls._safe_float(row[5]),
-                'net_profit': cls._safe_float(row[6]) if len(row) > 6 else 0,
-                'eps': cls._safe_float(row[7]) if len(row) > 7 else 0,
+                'roe': safe_float(row[3]),
+                'np_margin': safe_float(row[4]),
+                'gp_margin': safe_float(row[5]),
+                'net_profit': safe_float(row[6]) if len(row) > 6 else 0,
+                'eps': safe_float(row[7]) if len(row) > 7 else 0,
                 'year': year,
                 'quarter': quarter,
             }
@@ -198,9 +200,9 @@ class BaostockProvider:
 
             row = result.get_row_data()
             return {
-                'revenue_yoy': cls._safe_float(row[3]),
-                'np_yoy': cls._safe_float(row[4]),
-                'nav_yoy': cls._safe_float(row[5]) if len(row) > 5 else 0,
+                'revenue_yoy': safe_float(row[3]),
+                'np_yoy': safe_float(row[4]),
+                'nav_yoy': safe_float(row[5]) if len(row) > 5 else 0,
                 'year': year,
                 'quarter': quarter,
             }
@@ -208,10 +210,3 @@ class BaostockProvider:
             logger.warning("Baostock growth fetch error for %s: %s", symbol, e)
             return None
 
-    @staticmethod
-    def _safe_float(value) -> float:
-        try:
-            f = float(value)
-            return f if f == f else 0.0  # NaN check
-        except (TypeError, ValueError):
-            return 0.0

@@ -11,7 +11,7 @@ from django.core.cache import cache
 from django.utils import timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .utils import format_symbol
+from .utils import format_symbol, safe_float
 from .cache_manager import CacheManager
 from .fundamental.fetcher import FundamentalFetcher as Fetcher
 from .fundamental.calculator import FundamentalCalculator as Calc
@@ -194,7 +194,9 @@ class FundamentalService:
             val = float(data.get('data', {}).get('quote', {}).get('dividend_yield') or 0)
             cls._cache_set_value(cache_key, val, cls.CACHE_TTL)
             return val
-        except Exception: return 0.0
+        except Exception as e:
+            logger.debug("Xueqiu dividend yield fetch failed for %s: %s", symbol, e)
+            return 0.0
 
     @classmethod
     def get_xueqiu_quote_metrics(cls, symbol):
@@ -479,8 +481,23 @@ class FundamentalService:
         symbol = cls._fix_symbol(symbol)
         cache_key = f"quality_v12_{symbol}" if include_shareholder else f"quality_core_v2_{symbol}"
         stale_key = f"{cache_key}_stale"
+        lock_key = f"{cache_key}_fetching"
+        got_lock = False
         try:
-            logger.info(f"[Quality] Start fetching full quality data for {symbol}")
+            # 缓存锁：如果另一个线程正在抓取，等待其完成后直接读缓存
+            for _attempt in range(30):  # 最多等 30s
+                if not cache.get(lock_key):
+                    break
+                import time
+                time.sleep(1)
+                cached = cls._cache_get_value(cache_key)
+                if cached and isinstance(cached, dict) and cached.get('quality_history'):
+                    logger.info(f"[Quality] Cache filled by concurrent fetch for {symbol}")
+                    return cached
+
+            # 尝试获取锁（原子操作）
+            got_lock = cache.add(lock_key, True, 120)
+            logger.info(f"[Quality] Start fetching full quality data for {symbol} (lock={got_lock})")
 
             # 3 个并发请求，平衡速度和稳定性
             import concurrent.futures
@@ -537,6 +554,9 @@ class FundamentalService:
             import traceback
             logger.error(traceback.format_exc())
             return {}
+        finally:
+            if got_lock:
+                cache.delete(lock_key)
 
     @classmethod
     def get_shareholder_history(cls, symbol):
@@ -590,7 +610,9 @@ class FundamentalService:
             res = Calc.calculate_f_score(df_f, df_c, df_p_raw, df_b_raw)
             cls._cache_set_value(cache_key, res, 3 * 24 * 3600)
             return res
-        except Exception: return {"score": 0, "details": []}
+        except Exception as e:
+            logger.debug("F-Score calculation failed for %s: %s", symbol, e)
+            return {"score": 0, "details": []}
 
     @classmethod
     def align_to_prices(cls, df_fund, df_prices, symbol):
@@ -633,7 +655,8 @@ class FundamentalService:
                 date=pd.to_datetime(latest['REPORT_DATE']).date(),
                 defaults={'ttm_profit': float(latest.get('ttm_profit', 0)), 'total_equity': float(latest.get('TOTAL_PARENT_EQUITY', 0))}
             )
-        except Exception: pass
+        except Exception as e:
+            logger.debug("Failed to save snapshot for %s: %s", symbol, e)
 
     @classmethod
     def _load_snapshot_as_df(cls, symbol):
@@ -643,7 +666,9 @@ class FundamentalService:
             if not snaps.exists(): return None
             rows = [{'REPORT_DATE': pd.Timestamp(s.date), 'NOTICE_DATE': pd.Timestamp(s.date) + pd.Timedelta(days=60), 'ttm_profit': s.ttm_profit, 'TOTAL_PARENT_EQUITY': s.total_equity} for s in snaps]
             return pd.DataFrame(rows)
-        except Exception: return None
+        except Exception as e:
+            logger.debug("Failed to load snapshot for %s: %s", symbol, e)
+            return None
 
     @classmethod
     def get_forward_metrics(cls, symbol: str) -> dict:
@@ -799,18 +824,14 @@ class FundamentalService:
         transfer_col = next((c for c in cols if '转增' in c or '转' in c), None)
         cash_col = next((c for c in cols if '派息' in c or '派' in c), None)
 
-        def _safe_float(value):
-            val = pd.to_numeric(value, errors='coerce')
-            return float(val) if pd.notna(val) else 0.0
-
         def _build_plan(row):
             parts = []
-            if bonus_col and _safe_float(row.get(bonus_col)) > 0:
-                parts.append(f"送{_safe_float(row[bonus_col]):.2f}")
-            if transfer_col and _safe_float(row.get(transfer_col)) > 0:
-                parts.append(f"转{_safe_float(row[transfer_col]):.2f}")
-            if cash_col and _safe_float(row.get(cash_col)) > 0:
-                parts.append(f"派{_safe_float(row[cash_col]):.2f}元")
+            if bonus_col and safe_float(row.get(bonus_col)) > 0:
+                parts.append(f"送{safe_float(row[bonus_col]):.2f}")
+            if transfer_col and safe_float(row.get(transfer_col)) > 0:
+                parts.append(f"转{safe_float(row[transfer_col]):.2f}")
+            if cash_col and safe_float(row.get(cash_col)) > 0:
+                parts.append(f"派{safe_float(row[cash_col]):.2f}元")
             return ' '.join(parts) if parts else '暂无方案'
 
         df_parsed = []

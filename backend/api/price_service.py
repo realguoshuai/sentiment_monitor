@@ -2,14 +2,13 @@ import requests
 from requests.adapters import HTTPAdapter
 import re
 import logging
-import math
 import pandas as pd
 from datetime import datetime
 from django.utils import timezone
 from django.core.cache import cache
 
 import numpy as np
-from .utils import format_symbol
+from .utils import format_symbol, safe_float
 from .fundamental_service import FundamentalService
 
 logger = logging.getLogger('api')
@@ -112,10 +111,10 @@ class PriceService:
             if not isinstance(row, dict):
                 continue
 
-            price = cls._safe_float(row.get('最新价'))
-            market_cap = cls._safe_float(row.get('总市值'))
-            pe = cls._safe_float(row.get('市盈率-动态'))
-            pb = cls._safe_float(row.get('市净率'))
+            price = safe_float(row.get('最新价'))
+            market_cap = safe_float(row.get('总市值'))
+            pe = safe_float(row.get('市盈率-动态'))
+            pb = safe_float(row.get('市净率'))
 
             result[fixed] = {
                 'name': fixed,
@@ -138,31 +137,23 @@ class PriceService:
         fixed = cls._fix_symbol(symbol)
         return {
             'name': data.get('name') or fixed,
-            'price': cls._safe_float(data.get('price')),
-            'change_amount': cls._safe_float(data.get('change_amount')),
-            'change_percent': cls._safe_float(data.get('change_percent')),
-            'pe': cls._safe_float(data.get('pe')),
-            'pb': cls._safe_float(data.get('pb')),
-            'dividend_yield': cls._safe_float(data.get('dividend_yield')),
-            'market_cap': cls._safe_float(data.get('market_cap')),
-            'total_shares': cls._safe_float(data.get('total_shares')),
+            'price': safe_float(data.get('price')),
+            'change_amount': safe_float(data.get('change_amount')),
+            'change_percent': safe_float(data.get('change_percent')),
+            'pe': safe_float(data.get('pe')),
+            'pb': safe_float(data.get('pb')),
+            'dividend_yield': safe_float(data.get('dividend_yield')),
+            'market_cap': safe_float(data.get('market_cap')),
+            'total_shares': safe_float(data.get('total_shares')),
             'time': str(data.get('time') or timezone.now().strftime('%Y%m%d%H%M%S')),
             'source': data.get('source') or source,
         }
-
-    @staticmethod
-    def _safe_float(value):
-        try:
-            result = float(value or 0.0)
-        except (TypeError, ValueError):
-            return 0.0
-        return result if math.isfinite(result) else 0.0
 
     @classmethod
     def _field_float(cls, fields, index):
         if len(fields) <= index:
             return 0.0
-        return cls._safe_float(fields[index])
+        return safe_float(fields[index])
 
     @classmethod
     def _merge_realtime_payload(cls, symbol, primary, fallback, *, source='fallback'):
@@ -326,7 +317,8 @@ class PriceService:
                         snap = FundamentalSnapshot.objects.filter(symbol=fixed).order_by('-date').first()
                         if snap:
                             return fixed, {'pe': snap.pe, 'pb': snap.pb}
-                    except Exception: pass
+                    except Exception as e:
+                        logger.debug("Snapshot fallback failed for %s: %s", fixed, e)
                     return fixed, {}
 
             with ThreadPoolExecutor(max_workers=min(len(rt_data), 5)) as executor:
@@ -437,7 +429,7 @@ class PriceService:
                 if df is None or df.empty:
                     continue
                 last = df.iloc[-1]
-                price = cls._safe_float(last.get('close'))
+                price = safe_float(last.get('close'))
                 if price > 0:
                     result[fixed] = {
                         'symbol': fixed,
@@ -461,19 +453,19 @@ class PriceService:
             try:
                 f10 = FundamentalService.get_xueqiu_f10(fixed)
                 nq = f10.get('normalized_quote', {})
-                price = cls._safe_float(nq.get('price'))
+                price = safe_float(nq.get('price'))
                 if price <= 0:
                     continue
                 result[fixed] = {
                     'name': fixed,
                     'price': price,
                     'change_amount': 0.0,
-                    'change_percent': cls._safe_float(nq.get('change_percent')),
-                    'pe': cls._safe_float(nq.get('pe')),
-                    'pb': cls._safe_float(nq.get('pb')),
-                    'dividend_yield': cls._safe_float(nq.get('dividend_yield')),
-                    'market_cap': cls._safe_float(nq.get('market_cap')),
-                    'total_shares': cls._safe_float(nq.get('total_shares')),
+                    'change_percent': safe_float(nq.get('change_percent')),
+                    'pe': safe_float(nq.get('pe')),
+                    'pb': safe_float(nq.get('pb')),
+                    'dividend_yield': safe_float(nq.get('dividend_yield')),
+                    'market_cap': safe_float(nq.get('market_cap')),
+                    'total_shares': safe_float(nq.get('total_shares')),
                     'source': 'xueqiu',
                 }
             except Exception as e:
@@ -494,7 +486,7 @@ class PriceService:
             points = []
             for _, row in df.iterrows():
                 raw = str(row.get('day', ''))
-                p = cls._safe_float(row.get('close'))
+                p = safe_float(row.get('close'))
                 if p <= 0 or not raw:
                     continue
                 # 只保留当日数据
@@ -545,7 +537,7 @@ class PriceService:
             fields = str(minute).split(' ')
             if len(fields) < 2:
                 continue
-            price = cls._safe_float(fields[1])
+            price = safe_float(fields[1])
             if price <= 0:
                 continue
             t = cls._normalize_intraday_time(fields[0])
@@ -568,7 +560,7 @@ class PriceService:
         price_list = []
         for _, row in df.iterrows():
             date_str = str(row['日期'])
-            price = cls._safe_float(row['收盘'])
+            price = safe_float(row['收盘'])
             if price <= 0: continue
             price_list.append({'date': date_str, 'price': price})
         return price_list
@@ -615,10 +607,10 @@ class PriceService:
                          for day in inc_data:
                              d_str = day[0]
                              if d_str > last_cached_date:
-                                 volume = cls._safe_float(day[5]) if len(day) >= 6 else 0.0
+                                 volume = safe_float(day[5]) if len(day) >= 6 else 0.0
                                  new_points.append({
                                      'date': d_str,
-                                     'price': cls._safe_float(day[2]),
+                                     'price': safe_float(day[2]),
                                      'volume': volume
                                  })
                          if new_points:
@@ -637,10 +629,10 @@ class PriceService:
                 days = data_res.get(fetch_period) or []
                 for day in days:
                     if len(day) < 3: continue
-                    volume = cls._safe_float(day[5]) if len(day) >= 6 else 0.0
+                    volume = safe_float(day[5]) if len(day) >= 6 else 0.0
                     price_list.append({
                         'date': day[0],
-                        'price': cls._safe_float(day[2]),
+                        'price': safe_float(day[2]),
                         'volume': volume
                     })
                 price_list.sort(key=lambda x: x['date'])

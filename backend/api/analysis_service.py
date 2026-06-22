@@ -10,6 +10,7 @@ from django.utils import timezone
 from .fundamental_service import FundamentalService
 from .models import Stock
 from .price_service import PriceService
+from .utils import safe_float
 
 logger = logging.getLogger(__name__)
 
@@ -278,12 +279,12 @@ class AnalysisService:
         val_config: Optional[dict] = None,
     ) -> dict:
         latest = cls._latest_history_point(history)
-        current_price = cls._safe_float(latest.get('price'))
-        current_pb = cls._safe_float(latest.get('pb'))
-        current_pe = cls._safe_float(latest.get('pe'))
-        current_dy = cls._safe_float(latest.get('dividend_yield'))
-        current_roi = cls._safe_float(latest.get('roi'))
-        expected_roe = cls._safe_float(forward.get('expected_roe') or forward.get('avg_roe_5y'))
+        current_price = safe_float(latest.get('price'))
+        current_pb = safe_float(latest.get('pb'))
+        current_pe = safe_float(latest.get('pe'))
+        current_dy = safe_float(latest.get('dividend_yield'))
+        current_roi = safe_float(latest.get('roi'))
+        expected_roe = safe_float(forward.get('expected_roe') or forward.get('avg_roe_5y'))
         normalized_earnings = cls._build_normalized_earnings_view(
             current_price=current_price,
             current_pe=current_pe,
@@ -465,35 +466,35 @@ class AnalysisService:
         shareholder_summary = quality_data.get('shareholder_summary') or {}
 
         discount_label = valuation_conclusion.get('discount_premium', {}).get('label', '未知')
-        discount_pct = cls._safe_float(valuation_conclusion.get('discount_premium', {}).get('pct'))
-        margin_pct = cls._safe_float(valuation_conclusion.get('margin_of_safety', {}).get('pct'))
-        expected_return_pct = cls._safe_float(
+        discount_pct = safe_float(valuation_conclusion.get('discount_premium', {}).get('pct'))
+        margin_pct = safe_float(valuation_conclusion.get('margin_of_safety', {}).get('pct'))
+        expected_return_pct = safe_float(
             valuation_conclusion.get('expected_return', {}).get('total_annual_return_pct')
         )
-        expected_roe = cls._safe_float(
+        expected_roe = safe_float(
             valuation_conclusion.get('assumptions', {}).get('expected_roe')
         )
-        f_score_value = int(cls._safe_float((f_score or {}).get('score')))
-        cfo_to_profit_pct = cls._safe_float(cashflow_summary.get('latest_cfo_to_profit_pct'))
-        fcf_to_profit_pct = cls._safe_float(cashflow_summary.get('latest_fcf_to_profit_pct'))
-        roic_proxy_pct = cls._safe_float(capital_allocation_summary.get('latest_roic_proxy_pct'))
-        bvps_growth_pct = cls._safe_float(
+        f_score_value = int(safe_float((f_score or {}).get('score')))
+        cfo_to_profit_pct = safe_float(cashflow_summary.get('latest_cfo_to_profit_pct'))
+        fcf_to_profit_pct = safe_float(cashflow_summary.get('latest_fcf_to_profit_pct'))
+        roic_proxy_pct = safe_float(capital_allocation_summary.get('latest_roic_proxy_pct'))
+        bvps_growth_pct = safe_float(
             capital_allocation_summary.get('latest_book_value_per_share_growth_pct')
         )
-        share_change_pct = cls._safe_float(capital_allocation_summary.get('latest_share_change_pct'))
-        roe_volatility_pct = cls._safe_float(stability_summary.get('roe_volatility_pct'))
-        negative_growth_years = int(cls._safe_float(stability_summary.get('negative_growth_years')))
-        revenue_growth_volatility_pct = cls._safe_float(
+        share_change_pct = safe_float(capital_allocation_summary.get('latest_share_change_pct'))
+        roe_volatility_pct = safe_float(stability_summary.get('roe_volatility_pct'))
+        negative_growth_years = int(safe_float(stability_summary.get('negative_growth_years')))
+        revenue_growth_volatility_pct = safe_float(
             stability_summary.get('revenue_growth_volatility_pct')
         )
-        debt_to_equity_pct = cls._safe_float(balance_sheet_summary.get('latest_debt_to_equity_pct'))
-        short_debt_coverage_pct = cls._safe_float(balance_sheet_summary.get('latest_short_debt_coverage_pct'))
-        receivable_inventory_prepay_to_revenue_pct = cls._safe_float(
+        debt_to_equity_pct = safe_float(balance_sheet_summary.get('latest_debt_to_equity_pct'))
+        short_debt_coverage_pct = safe_float(balance_sheet_summary.get('latest_short_debt_coverage_pct'))
+        receivable_inventory_prepay_to_revenue_pct = safe_float(
             balance_sheet_summary.get('latest_receivable_inventory_prepay_to_revenue_pct')
         )
-        goodwill_to_equity_pct = cls._safe_float(balance_sheet_summary.get('latest_goodwill_to_equity_pct'))
+        goodwill_to_equity_pct = safe_float(balance_sheet_summary.get('latest_goodwill_to_equity_pct'))
         balance_sheet_label = balance_sheet_summary.get('balance_sheet_label', '待验证')
-        holder_count_change_pct = cls._safe_float(shareholder_summary.get('holder_count_change_pct'))
+        holder_count_change_pct = safe_float(shareholder_summary.get('holder_count_change_pct'))
 
         score = 0
         if discount_label == '折价':
@@ -887,7 +888,7 @@ class AnalysisService:
 
         normalized_earnings = normalized_earnings or {}
         reported_eps = current_price / current_pe
-        normalized_eps = cls._safe_float(normalized_earnings.get('normalized_eps'))
+        normalized_eps = safe_float(normalized_earnings.get('normalized_eps'))
         use_normalized = normalized_eps > 0
         earnings_per_share = normalized_eps if use_normalized else reported_eps
         pe_low = 100 / cls.CONSERVATIVE_REQUIRED_RETURN
@@ -951,41 +952,41 @@ class AnalysisService:
         window = history[-5:]
         latest = window[-1]
         window_years = len(window)
-        latest_share_count = cls._safe_float(latest.get('implied_share_count'))
+        latest_share_count = safe_float(latest.get('implied_share_count'))
         share_count_candidates = [
-            cls._safe_float(item.get('implied_share_count'))
+            safe_float(item.get('implied_share_count'))
             for item in window
-            if cls._safe_float(item.get('implied_share_count')) > 0
+            if safe_float(item.get('implied_share_count')) > 0
         ]
         share_count = latest_share_count or (median(share_count_candidates) if share_count_candidates else 0.0)
 
-        current_eps = cls._safe_float(current_price / current_pe) if current_price > 0 and current_pe > 0 else 0.0
+        current_eps = safe_float(current_price / current_pe) if current_price > 0 and current_pe > 0 else 0.0
         if current_eps <= 0:
-            current_eps = cls._safe_float(latest.get('BASIC_EPS'))
+            current_eps = safe_float(latest.get('BASIC_EPS'))
 
         eps_candidates = [
-            cls._safe_float(item.get('BASIC_EPS'))
+            safe_float(item.get('BASIC_EPS'))
             for item in window
-            if cls._safe_float(item.get('BASIC_EPS')) > 0
+            if safe_float(item.get('BASIC_EPS')) > 0
         ]
         normalized_eps = median(eps_candidates) if eps_candidates else 0.0
 
         current_fcf_per_share = 0.0
         if share_count > 0:
-            current_fcf_per_share = cls._safe_float(latest.get('fcf')) / share_count
+            current_fcf_per_share = safe_float(latest.get('fcf')) / share_count
 
         fcf_per_share_candidates = []
         for item in window:
-            item_share_count = cls._safe_float(item.get('implied_share_count')) or share_count
+            item_share_count = safe_float(item.get('implied_share_count')) or share_count
             if item_share_count <= 0:
                 continue
-            fcf_value = cls._safe_float(item.get('fcf'))
+            fcf_value = safe_float(item.get('fcf'))
             fcf_per_share_candidates.append(fcf_value / item_share_count)
         normalized_fcf_per_share = median(fcf_per_share_candidates) if fcf_per_share_candidates else 0.0
 
-        current_net_margin_pct = cls._safe_float(latest.get('net_margin'))
+        current_net_margin_pct = safe_float(latest.get('net_margin'))
         margin_candidates = [
-            cls._safe_float(item.get('net_margin'))
+            safe_float(item.get('net_margin'))
             for item in window
             if item.get('net_margin') is not None
         ]
@@ -1102,11 +1103,11 @@ class AnalysisService:
             )
 
         latest = history[-1]
-        share_count = cls._safe_float(latest.get('implied_share_count'))
+        share_count = safe_float(latest.get('implied_share_count'))
         positive_fcf = [
-            cls._safe_float(item.get('fcf'))
+            safe_float(item.get('fcf'))
             for item in history[-3:]
-            if cls._safe_float(item.get('fcf')) > 0
+            if safe_float(item.get('fcf')) > 0
         ]
         normalized_fcf = median(positive_fcf) if positive_fcf else 0.0
         if normalized_fcf <= 0 or share_count <= 0:
@@ -1117,7 +1118,7 @@ class AnalysisService:
             )
 
         fcf_per_share = normalized_fcf / share_count
-        retention_ratio_pct = cls._safe_float(latest.get('retention_ratio_pct'))
+        retention_ratio_pct = safe_float(latest.get('retention_ratio_pct'))
         sustainable_growth_pct = max(expected_roe * max(retention_ratio_pct, 0) / 100, 0)
         growth_base_pct = min(max(sustainable_growth_pct * 0.6, 1.5), 6.0)
         growth_low_pct = max(min(growth_base_pct - 1.5, growth_base_pct), 0.5)
@@ -1264,7 +1265,7 @@ class AnalysisService:
             total = 0.0
             for model in models:
                 value = model[field] if subfield is None else model[field].get(subfield)
-                total += cls._safe_float(value) * (model['weight'] / total_weight)
+                total += safe_float(value) * (model['weight'] / total_weight)
             return total
 
         price_low = weighted('fair_value_range', 'price_low')
@@ -1339,14 +1340,14 @@ class AnalysisService:
         is_target: bool = False,
     ) -> Optional[dict]:
         latest_history = latest_history or {}
-        price = cls._safe_float(realtime.get('price') or latest_history.get('price'))
-        pe = cls._safe_float(realtime.get('pe') or latest_history.get('pe'))
-        pb = cls._safe_float(realtime.get('pb') or latest_history.get('pb'))
-        dividend_yield = cls._safe_float(
+        price = safe_float(realtime.get('price') or latest_history.get('price'))
+        pe = safe_float(realtime.get('pe') or latest_history.get('pe'))
+        pb = safe_float(realtime.get('pb') or latest_history.get('pb'))
+        dividend_yield = safe_float(
             realtime.get('dividend_yield') or latest_history.get('dividend_yield')
         )
-        expected_roe = cls._safe_float(forward.get('expected_roe') or forward.get('avg_roe_5y'))
-        market_cap = cls._safe_float(realtime.get('market_cap'))
+        expected_roe = safe_float(forward.get('expected_roe') or forward.get('avg_roe_5y'))
+        market_cap = safe_float(realtime.get('market_cap'))
 
         if max(price, pe, pb, dividend_yield, expected_roe, market_cap) <= 0:
             return None
@@ -1367,7 +1368,7 @@ class AnalysisService:
     @classmethod
     def _build_peer_medians(cls, rows: List[dict]) -> dict:
         def metric_median(field: str) -> float:
-            values = [cls._safe_float(item.get(field)) for item in rows if cls._safe_float(item.get(field)) > 0]
+            values = [safe_float(item.get(field)) for item in rows if safe_float(item.get(field)) > 0]
             return cls._round(median(values)) if values else 0
 
         return {
@@ -1434,16 +1435,16 @@ class AnalysisService:
 
     @staticmethod
     def _pct_vs_median(current, median_value) -> float:
-        current_value = AnalysisService._safe_float(current)
-        benchmark = AnalysisService._safe_float(median_value)
+        current_value = safe_float(current)
+        benchmark = safe_float(median_value)
         if current_value <= 0 or benchmark <= 0:
             return 0.0
         return ((current_value / benchmark) - 1) * 100
 
     @staticmethod
     def _point_diff_vs_median(current, median_value) -> float:
-        current_value = AnalysisService._safe_float(current)
-        benchmark = AnalysisService._safe_float(median_value)
+        current_value = safe_float(current)
+        benchmark = safe_float(median_value)
         if current_value <= 0 or benchmark <= 0:
             return 0.0
         return current_value - benchmark
@@ -1480,13 +1481,6 @@ class AnalysisService:
         spread_pct = max(required_return_pct - effective_growth, 4.0)
         capitalization_multiple = 100 / spread_pct
         return owner_earnings_per_share * (1 + effective_growth / 100) * capitalization_multiple
-
-    @staticmethod
-    def _safe_float(value) -> float:
-        try:
-            return float(value or 0)
-        except (TypeError, ValueError):
-            return 0.0
 
     @staticmethod
     def _round(value: float) -> float:
@@ -1537,9 +1531,9 @@ class AnalysisService:
 
     @staticmethod
     def _classify_percentile_zone(metric: dict, reverse: bool) -> str:
-        current = AnalysisService._safe_float(metric.get('current'))
-        p10 = AnalysisService._safe_float(metric.get('p10'))
-        p90 = AnalysisService._safe_float(metric.get('p90'))
+        current = safe_float(metric.get('current'))
+        p10 = safe_float(metric.get('p10'))
+        p90 = safe_float(metric.get('p90'))
         if current <= 0:
             return '未知'
         if reverse:
