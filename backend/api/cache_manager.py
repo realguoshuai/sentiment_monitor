@@ -76,11 +76,15 @@ class CacheManager:
         try:
             data = df.to_dict(orient='records')
             # 将 Timestamp/datetime 列转为 ISO 字符串，确保 JSON 安全
+            # NaT 有 isoformat 属性但调用会抛 ValueError，需用 pd.notna 过滤
             for row in data:
                 for col in cls.DATE_COLUMNS:
                     val = row.get(col)
-                    if val is not None and hasattr(val, 'isoformat'):
+                    if val is not None and hasattr(val, 'isoformat') and pd.notna(val):
                         row[col] = val.isoformat()
+                    elif val is not None and not isinstance(val, (int, float, str, bool)):
+                        # NaT / NaN 等非标量统一转 None，确保 cache 安全
+                        row[col] = None
             cache.set(key, data, ttl)
             return True
         except Exception as e:

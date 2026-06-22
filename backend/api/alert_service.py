@@ -25,8 +25,8 @@ def check_alerts():
 
     logger.info(f"检查 {len(rules)} 条告警规则...")
 
-    # 获取最新情感数据
-    today = date.today()
+    # 获取最新情感数据（使用本地日期，与 triggered_at 的 UTC 存储对齐）
+    today = timezone.localdate()
     week_ago = today - timedelta(days=7)
 
     triggered_count = 0
@@ -46,7 +46,7 @@ def check_alerts():
 def _check_single_rule(rule: AlertRule) -> bool:
     """检查单条规则"""
     stock = rule.stock
-    today = date.today()
+    today = timezone.localdate()
 
     # 早退：如果该规则今天已触发过，跳过昂贵的网络请求
     if AlertLog.objects.filter(rule=rule, triggered_at__date=today).exists():
@@ -315,7 +315,7 @@ def _check_volume_anomaly(rule: AlertRule, stock: Stock) -> bool:
 def _create_alert_log(rule: AlertRule, message: str, value: float):
     """创建告警日志"""
     # 检查是否已经触发过（避免重复告警）
-    today = date.today()
+    today = timezone.localdate()
     existing = AlertLog.objects.filter(
         rule=rule,
         triggered_at__date=today
