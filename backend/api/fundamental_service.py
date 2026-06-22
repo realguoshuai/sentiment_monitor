@@ -277,13 +277,27 @@ class FundamentalService:
             }
 
             def _val(pair):
-                """雪球指标格式 [value, yoy_change]，取第一个"""
-                if isinstance(pair, (list, tuple)) and pair:
+                """雪球指标格式 [value, yoy_change]，取第一个
+
+                兼容多种格式：
+                - [value, yoy_change] → 取 value
+                - value (直接是数值) → 直接返回
+                - None / 空 → 返回 0.0
+                """
+                if pair is None:
+                    return 0.0
+                if isinstance(pair, (list, tuple)):
+                    if not pair:
+                        return 0.0
                     try:
                         return float(pair[0] or 0)
                     except (TypeError, ValueError):
                         return 0.0
-                return 0.0
+                # 直接是数值的情况
+                try:
+                    return float(pair or 0)
+                except (TypeError, ValueError):
+                    return 0.0
 
             # 解析最新一期财务指标
             latest = indicators[0] if indicators else {}

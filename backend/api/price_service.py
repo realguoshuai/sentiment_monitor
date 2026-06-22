@@ -303,34 +303,42 @@ class PriceService:
                     if price <= 0: return fixed, {}
 
                     updates = {}
+                    source_info = {}
 
-                    # TTM 财务数据 → PE/PB
+                    # TTM 财务数据 → PE/PB（优先使用自己计算的 TTM 值）
                     df_fund = FundamentalService.get_ttm_fundamentals(fixed)
                     total_shares = data.get('total_shares', 0)
                     if not df_fund.empty and total_shares > 0:
                         latest_f = df_fund.iloc[-1]
                         if latest_f.get('TOTAL_PARENT_EQUITY', 0) > 0:
                             updates['pb'] = round((price * total_shares) / latest_f['TOTAL_PARENT_EQUITY'], 2)
+                            source_info['pb'] = 'ttm_calc'
                         if latest_f.get('ttm_profit', 0) > 0:
                             updates['pe'] = round((price * total_shares) / latest_f['ttm_profit'], 2)
-                    return fixed, updates
+                            source_info['pe'] = 'ttm_calc'
+                    return fixed, updates, source_info
                 except Exception as e:
                     logger.warning(f"Concurrent fundamental task failed for {fixed}: {e}")
                     try:
                         from .models import FundamentalSnapshot
                         snap = FundamentalSnapshot.objects.filter(symbol=fixed).order_by('-date').first()
                         if snap:
-                            return fixed, {'pe': snap.pe, 'pb': snap.pb}
+                            return fixed, {'pe': snap.pe, 'pb': snap.pb}, {'pe': 'snapshot', 'pb': 'snapshot'}
                     except Exception as e:
                         logger.debug("Snapshot fallback failed for %s: %s", fixed, e)
-                    return fixed, {}
+                    return fixed, {}, {}
 
             with ThreadPoolExecutor(max_workers=min(len(rt_data), 5)) as executor:
                 futures = [executor.submit(_update_fundamental_task, sym, data) for sym, data in rt_data.items()]
                 for future in futures:
-                    sym, updates = future.result()
+                    sym, updates, source_info = future.result()
                     if updates:
                         rt_data[sym].update(updates)
+                        # 记录数据来源
+                        if 'source_info' not in rt_data[sym]:
+                            rt_data[sym]['source_info'] = {}
+                        rt_data[sym]['source_info'].update(source_info)
+                        logger.debug("PE/PB source for %s: %s", sym, source_info)
 
         # ⑧ 最终兜底：StockScreenerSnapshot DB 批量补全仍然缺失的估值字段
         from .models import StockScreenerSnapshot
@@ -364,6 +372,18 @@ class PriceService:
                             data['total_shares'] = snap.market_cap / data['price']
             except Exception:
                 pass
+
+        # 记录数据源对照日志
+        for sym, data in rt_data.items():
+            source_info = data.pop('source_info', {})
+            logger.info(
+                "[DataSource] %s: price=%.2f (source=%s), pe=%.2f (source=%s), pb=%.2f (source=%s), dy=%.2f (source=%s)",
+                sym,
+                data.get('price', 0), data.get('source', 'unknown'),
+                data.get('pe', 0), source_info.get('pe', data.get('source', 'unknown')),
+                data.get('pb', 0), source_info.get('pb', data.get('source', 'unknown')),
+                data.get('dividend_yield', 0), 'xueqiu' if data.get('dividend_yield', 0) > 0 else 'unknown',
+            )
 
         cls._cache_realtime_success(rt_data)
         return rt_data
@@ -819,9 +839,33 @@ class PriceService:
             )
 
         # 3. 计算 ROE 与 ROI
-        # ROE = PB / PE * 100
+        # ROE = PB / PE * 100（仅当 PE > 0 时有效，亏损公司使用 quality_history 中的真实 ROE）
         df['calc_roe'] = (df['pb'] / df['pe'].replace(0, np.nan) * 100).fillna(0)
-        
+
+        # 对亏损公司（PE <= 0），尝试使用 quality_history 中的真实 ROE
+        try:
+            quality_data = FundamentalService.get_quality_data(symbol, include_shareholder=False)
+            quality_history = quality_data.get('quality_history', [])
+            if quality_history:
+                # 构建年份到 ROE 的映射
+                roe_by_year = {}
+                for item in quality_history:
+                    year = str(item.get('year', ''))[:4]
+                    roe_val = item.get('roe')
+                    if year and roe_val is not None:
+                        roe_by_year[year] = float(roe_val)
+
+                # 对 PE <= 0 的行，使用真实 ROE
+                mask_pe_negative = df['pe'] <= 0
+                if mask_pe_negative.any():
+                    for idx in df[mask_pe_negative].index:
+                        year = str(df.loc[idx, 'date'])[:4]
+                        if year in roe_by_year:
+                            df.loc[idx, 'calc_roe'] = roe_by_year[year]
+                    logger.debug("Used quality_history ROE for %d negative-PE rows", mask_pe_negative.sum())
+        except Exception as e:
+            logger.debug("Failed to fetch quality ROE for %s: %s", symbol, e)
+
         # 应用动态估值配置 (如 ROE 地板)
         roe_floor = val_config.get('roe_floor')
         if roe_floor:
