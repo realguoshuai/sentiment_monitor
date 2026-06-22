@@ -228,7 +228,16 @@ sentiment_monitor/
 
 ## 数据同步
 
-全量同步：
+### 同步脚本
+
+项目提供两种同步脚本：
+
+| 脚本 | 说明 | 适用场景 |
+|------|------|----------|
+| `sync_all_data` | 串行同步，稳定可靠 | 日常使用、首次同步 |
+| `sync_all_data_parallel` | 并行同步，速度更快 | 多只股票、追求效率 |
+
+### 串行同步（推荐）
 
 ```powershell
 cd backend
@@ -236,7 +245,37 @@ cd backend
 python manage.py sync_all_data
 ```
 
-只执行监控池舆情采集：
+### 并行同步
+
+```powershell
+cd backend
+.\venv\Scripts\activate
+python manage.py sync_all_data_parallel --workers 3
+```
+
+### 同步内容
+
+同步脚本会依次执行以下步骤：
+
+1. **监控池采集** - 舆情/公告/研报
+2. **选股快照** - 全市场 PE/PB/ROE/股息率
+3. **缓存预热** - 每只监控股票的完整数据：
+   - TTM 基本面、现金流
+   - 雪球 F10（ROE/毛利率/增长率）
+   - 北向持仓、股东结构
+   - 财务质量、F-Score、前瞻指标
+   - 深度分析、历史回测
+   - 实时行情
+
+### 常用参数
+
+- `--skip-collector`：跳过监控池新闻/公告/研报采集。
+- `--skip-screener`：跳过全市场选股快照刷新。
+- `--skip-quality`：跳过财务质量缓存预热。
+- `--with-shareholder`：财务预热时拉取股东结构数据（耗时更长）。
+- `--workers N`：并行同步的线程数（默认 3，仅 `sync_all_data_parallel`）。
+
+### 只执行采集
 
 ```powershell
 cd backend
@@ -244,12 +283,22 @@ cd backend
 python manage.py run_collector
 ```
 
-常用参数：
+### 定时任务
 
-- `--skip-collector`：跳过监控池新闻/公告/研报采集。
-- `--skip-screener`：跳过全市场选股快照刷新。
-- `--skip-quality`：跳过财务质量缓存预热。
-- `--with-shareholder`：财务预热时拉取股东结构数据。
+项目已内置 APScheduler 定时任务：
+
+| 任务 | 频率 | 说明 |
+|------|------|------|
+| 舆情采集 | 每小时 | 自动采集新闻/公告/研报 |
+| 快照刷新 | 每小时 | 更新 PE/PB/市值缓存 |
+| 告警检查 | 每30分钟 | 检查告警规则（工作日 9:00-16:00） |
+
+如需额外定时同步，可配置系统任务计划：
+
+```powershell
+# Windows 任务计划程序 - 每天凌晨 2 点执行
+schtasks /create /tn "SentimentSync" /tr "cd D:\code\git\sentiment_monitor\backend && python manage.py sync_all_data_parallel --workers 3" /sc daily /st 02:00
+```
 
 ## 数据链路与容灾
 
