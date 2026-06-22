@@ -58,5 +58,8 @@ urlpatterns = [
     path('alerts/read-all/', mark_alert_read, name='mark-all-alerts-read'),
     path('alerts/check/', trigger_alert_check, name='trigger-alert-check'),
     path('alerts/notifications/', views.get_alert_notifications, name='alert-notifications'),
+    # 缓存监控
+    path('cache/stats/', views.get_cache_stats, name='cache-stats'),
+    path('cache/health/', views.get_cache_health, name='cache-health'),
     path('', include(router.urls)),
 ]

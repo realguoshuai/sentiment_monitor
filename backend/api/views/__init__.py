@@ -47,3 +47,6 @@ from .alert import (  # noqa: F401
 
 # 杂项
 from .misc import search_stocks, trigger_collection, diagnose_connectivity  # noqa: F401
+
+# 缓存监控
+from .misc import get_cache_stats, get_cache_health  # noqa: F401

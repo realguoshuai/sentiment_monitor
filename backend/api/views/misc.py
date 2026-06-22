@@ -178,3 +178,30 @@ def diagnose_connectivity(request):
                 test_results[idx] = {'name': tests[idx][0], 'ok': False, 'error': str(e)[:200]}
 
     return Response({'tests': [r for r in test_results if r]})
+
+
+@api_view(['GET'])
+def get_cache_stats(request):
+    """获取缓存统计信息"""
+    from ..cache_manager import CacheManager, CacheMonitor
+
+    # 获取缓存文件统计
+    file_stats = CacheMonitor.get_cache_stats()
+
+    # 获取缓存命中统计
+    hit_stats = CacheManager.get_stats()
+
+    return Response({
+        'file_stats': file_stats,
+        'hit_stats': hit_stats,
+    })
+
+
+@api_view(['GET'])
+def get_cache_health(request):
+    """检查缓存健康状态"""
+    from ..cache_manager import CacheMonitor
+
+    health = CacheMonitor.check_health()
+
+    return Response(health)
