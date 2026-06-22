@@ -27,40 +27,16 @@ class FundamentalService:
 
     @classmethod
     def _cache_get(cls, key):
-        try:
-            val = cache.get(key)
-            if val is None:
-                return None
-            # JSON 序列化的 DataFrame（CacheManager 格式）自动恢复
-            if isinstance(val, list):
-                try:
-                    import pandas as pd
-                    df = pd.DataFrame(val)
-                    if not df.empty:
-                        return df
-                except Exception:
-                    pass
-            return val
-        except Exception as e:
-            logger.warning(f"Cache deserialization failed for {key}: {e}")
-            try:
-                cache.delete(key)
-            except Exception:
-                pass
-            return None
+        """获取缓存，支持 DataFrame 反序列化"""
+        return CacheManager.get_df(key)
 
     @classmethod
     def _cache_set(cls, key, value, timeout):
-        try:
-            # DataFrame 走 JSON 序列化，避免 Pickle 跨版本崩溃
-            if isinstance(value, pd.DataFrame):
-                json_str = value.to_json(orient='records', date_format='iso')
-                data = json.loads(json_str)
-                cache.set(key, data, timeout)
-            else:
-                cache.set(key, value, timeout)
-        except Exception as e:
-            logger.warning(f"Cache storage failed for {key}: {e}")
+        """设置缓存，支持 DataFrame 序列化"""
+        if isinstance(value, pd.DataFrame):
+            CacheManager.set_df(key, value, timeout)
+        else:
+            CacheManager._cache_set(key, value, timeout)
 
     # 向后兼容：_cache_get_value / _cache_set_value 已合并到 _cache_get / _cache_set
     _cache_get_value = _cache_get
@@ -99,50 +75,57 @@ class FundamentalService:
 
     @classmethod
     def get_ttm_fundamentals_response(cls, symbol: str) -> dict:
+        """获取 TTM 基本面数据（带缓存状态）"""
         cache_key = f"fundamentals_v7_{symbol}"
-        stale_key = f"{cache_key}_stale"
-        fresh = cls._cache_get(cache_key)
-        if fresh is not None:
-            return {'data': fresh, 'cache_status': 'fresh', 'background_refreshing': False}
-        stale = cls._cache_get(stale_key)
-        if stale is not None:
-            refresh_key = f"{cache_key}_refreshing"
-            bg = bool(cache.get(refresh_key))
-            if not bg: bg = cls._schedule_ttm_refresh(symbol)
-            return {'data': stale, 'cache_status': 'stale', 'background_refreshing': bg}
-        return {'data': cls.get_ttm_fundamentals(symbol), 'cache_status': 'fresh', 'background_refreshing': False}
 
-    @classmethod
-    def _schedule_ttm_refresh(cls, symbol):
-        key = f"fundamentals_v7_{symbol}_refreshing"
-        if not cache.add(key, True, 600): return False
-        def _refresh():
-            try:
-                cls.get_ttm_fundamentals(symbol)
-            except Exception as e:
-                logger.error(f"Background TTM refresh failed for {symbol}: {e}")
-            finally:
-                cache.delete(key)
-        threading.Thread(target=_refresh, daemon=True).start()
-        return True
+        def _fetch():
+            return cls._fetch_ttm_fundamentals(symbol)
+
+        data, status = CacheManager.get_or_fetch(
+            key=cache_key,
+            fetcher=_fetch,
+            ttl=cls.CACHE_TTL,
+            stale_ttl=cls.STALE_TTL,
+            use_lock=True,
+        )
+
+        return {
+            'data': data if data is not None else pd.DataFrame(),
+            'cache_status': status,
+            'background_refreshing': status == 'stale',
+        }
 
     @classmethod
     def get_ttm_fundamentals(cls, symbol):
+        """获取 TTM 基本面数据"""
         symbol = cls._fix_symbol(symbol)
         cache_key = f"fundamentals_v7_{symbol}"
-        stale_key = f"{cache_key}_stale"
-        cached = cls._cache_get(cache_key)
-        if cached is not None:
-            if isinstance(cached, list):
-                return pd.DataFrame(cached)
-            return cached
+
+        def _fetch():
+            return cls._fetch_ttm_fundamentals(symbol)
+
+        data, status = CacheManager.get_or_fetch(
+            key=cache_key,
+            fetcher=_fetch,
+            ttl=cls.CACHE_TTL,
+            stale_ttl=cls.STALE_TTL,
+            use_lock=True,
+        )
+
+        if data is not None:
+            return data
+
+        # 兜底：尝试从快照加载
+        return cls._load_snapshot_as_df(symbol) or pd.DataFrame()
+
+    @classmethod
+    def _fetch_ttm_fundamentals(cls, symbol):
+        """实际获取 TTM 基本面数据"""
         try:
             df_p = Fetcher.fetch_profit_sheet(symbol)
             df_b = Fetcher.fetch_balance_sheet(symbol)
             df = Calc.calculate_ttm_fundamentals(df_p, df_b)
             if not df.empty:
-                cls._cache_set(cache_key, df, cls.CACHE_TTL)
-                cls._cache_set(stale_key, df, cls.STALE_TTL)
                 cls._save_snapshot(symbol, df)
             return df
         except Exception as e:
@@ -152,104 +135,93 @@ class FundamentalService:
                 from .providers.tushare_provider import TushareProvider
                 df = cls._fetch_fundamentals_from_tushare(symbol, TushareProvider)
                 if not df.empty:
-                    cls._cache_set(cache_key, df, cls.CACHE_TTL)
-                    cls._cache_set(stale_key, df, cls.STALE_TTL)
                     cls._save_snapshot(symbol, df)
                     logger.info("Tushare fallback succeeded for fundamentals %s", symbol)
                     return df
             except Exception as ts_err:
                 logger.warning("Tushare fundamentals fallback failed for %s: %s", symbol, ts_err)
-            return cls._load_snapshot_as_df(symbol) or pd.DataFrame()
+            return None
 
     @classmethod
     def get_ttm_cashflow(cls, symbol):
         symbol = cls._fix_symbol(symbol)
         cache_key = f"cashflow_v7_{symbol}"
-        cached = cls._cache_get(cache_key)
-        if cached is not None:
-            if isinstance(cached, list): return pd.DataFrame(cached)
-            return cached
-        try:
+
+        def _fetch():
             df_raw = Fetcher.fetch_cash_flow_sheet(symbol)
-            df = Calc.calculate_ttm_cashflow(df_raw)
-            cls._cache_set(cache_key, df, cls.CACHE_TTL)
-            return df
-        except Exception as e:
-            logger.error(f"[Cashflow] TTM cashflow fetch failed for {symbol}: {e}")
-            return pd.DataFrame()
+            return Calc.calculate_ttm_cashflow(df_raw)
+
+        data, status = CacheManager.get_or_fetch(
+            key=cache_key,
+            fetcher=_fetch,
+            ttl=cls.CACHE_TTL,
+            use_lock=False,
+        )
+
+        return data if data is not None else pd.DataFrame()
 
     @classmethod
     def get_xueqiu_token(cls):
-        return Fetcher.get_xueqiu_token(cls._cache_get_value, cls._cache_set_value)
+        return Fetcher.get_xueqiu_token(CacheManager._cache_get, CacheManager._cache_set)
 
     @classmethod
     def get_xueqiu_dividend_yield(cls, symbol):
         cache_key = f"xq_yield_v1_{symbol}"
-        cached = cls._cache_get_value(cache_key)
-        if cached is not None: return float(cached)
-        token = cls.get_xueqiu_token()
-        if not token: return 0.0
-        try:
+
+        def _fetch():
+            token = cls.get_xueqiu_token()
+            if not token:
+                return None
             data = Fetcher.fetch_xueqiu_dividend_yield(symbol, token)
-            val = float(data.get('data', {}).get('quote', {}).get('dividend_yield') or 0)
-            cls._cache_set_value(cache_key, val, cls.CACHE_TTL)
-            return val
-        except Exception as e:
-            logger.debug("Xueqiu dividend yield fetch failed for %s: %s", symbol, e)
-            return 0.0
+            return float(data.get('data', {}).get('quote', {}).get('dividend_yield') or 0)
+
+        data, status = CacheManager.get_or_fetch(
+            key=cache_key,
+            fetcher=_fetch,
+            ttl=cls.CACHE_TTL,
+            use_lock=False,
+        )
+
+        return float(data) if data is not None else 0.0
 
     @classmethod
     def get_xueqiu_quote_metrics(cls, symbol):
         """从雪球获取最新实时 PE, PB, 股息率等基本面指标"""
         symbol = cls._fix_symbol(symbol)
         cache_key = f"xq_quote_metrics_v2_{symbol}"
-        cached = cls._cache_get_value(cache_key)
-        if cached is not None:
-            return cached
-            
-        token = cls.get_xueqiu_token()
-        if not token:
-            return {'pe': 0.0, 'pb': 0.0, 'dividend_yield': 0.0}
-            
-        try:
+
+        def _fetch():
+            token = cls.get_xueqiu_token()
+            if not token:
+                return None
             data = Fetcher.fetch_xueqiu_dividend_yield(symbol, token)
             quote = data.get('data', {}).get('quote', {})
-            
-            pe = float(quote.get('pe_ttm') or quote.get('pe_lyr') or quote.get('pe_forecast') or 0.0)
-            pb = float(quote.get('pb') or quote.get('pb_mrq') or 0.0)
-            dy = float(quote.get('dividend_yield') or 0.0)
-            
-            result = {'pe': pe, 'pb': pb, 'dividend_yield': dy}
-            cls._cache_set_value(cache_key, result, cls.CACHE_TTL)
-            return result
-        except Exception as e:
-            logger.warning(f"Failed to fetch quote metrics from Xueqiu for {symbol}: {e}")
-            return {'pe': 0.0, 'pb': 0.0, 'dividend_yield': 0.0}
+            return {
+                'pe': float(quote.get('pe_ttm') or quote.get('pe_lyr') or quote.get('pe_forecast') or 0.0),
+                'pb': float(quote.get('pb') or quote.get('pb_mrq') or 0.0),
+                'dividend_yield': float(quote.get('dividend_yield') or 0.0),
+            }
+
+        data, status = CacheManager.get_or_fetch(
+            key=cache_key,
+            fetcher=_fetch,
+            ttl=cls.CACHE_TTL,
+            use_lock=False,
+        )
+
+        return data if data is not None else {'pe': 0.0, 'pb': 0.0, 'dividend_yield': 0.0}
 
     @classmethod
     def get_xueqiu_f10(cls, symbol: str) -> dict:
-        """从雪球获取完整 F10 数据（报价 + 财务指标），作为 AkShare 的备份链路
-
-        返回字段:
-            quote: pe_ttm, pe_lyr, pb, dividend_yield, eps, navps, market_capital,
-                   float_market_capital, total_shares, float_shares, turnover_rate,
-                   current_year_percent, high52w, low52w, pledge_ratio, dividend
-            latest_indicator: roe, gross_margin, net_margin, revenue_yoy, profit_yoy,
-                              eps, current_ratio, quick_ratio, asset_liab_ratio, roa,
-                              cash_flow_ps, undistri_profit_ps
-            historical_indicators: 最近 N 期的指标列表
-        """
+        """从雪球获取完整 F10 数据（报价 + 财务指标），作为 AkShare 的备份链路"""
         symbol = cls._fix_symbol(symbol)
         cache_key = f"xq_f10_v1_{symbol}"
-        cached = cls._cache_get_value(cache_key)
-        if cached is not None:
-            return cached
 
-        token = cls.get_xueqiu_token()
-        if not token:
-            return {}
+        def _fetch():
+            token = cls.get_xueqiu_token()
+            if not token:
+                return None
 
-        try:
             raw = Fetcher.fetch_xueqiu_f10(symbol, token)
             quote = raw.get('quote', {})
             indicators = raw.get('indicators', [])
@@ -277,13 +249,7 @@ class FundamentalService:
             }
 
             def _val(pair):
-                """雪球指标格式 [value, yoy_change]，取第一个
-
-                兼容多种格式：
-                - [value, yoy_change] → 取 value
-                - value (直接是数值) → 直接返回
-                - None / 空 → 返回 0.0
-                """
+                """雪球指标格式 [value, yoy_change]，取第一个"""
                 if pair is None:
                     return 0.0
                 if isinstance(pair, (list, tuple)):
@@ -293,7 +259,6 @@ class FundamentalService:
                         return float(pair[0] or 0)
                     except (TypeError, ValueError):
                         return 0.0
-                # 直接是数值的情况
                 try:
                     return float(pair or 0)
                 except (TypeError, ValueError):
@@ -337,7 +302,7 @@ class FundamentalService:
                     'roa': _val(item.get('net_interest_of_total_assets')),
                 })
 
-            # 统一字段名，与 PriceService / 前端 RealtimePrice 接口对齐
+            # 统一字段名
             normalized_quote = {
                 'price': q['current_price'],
                 'pe': q['pe_ttm'],
@@ -350,50 +315,56 @@ class FundamentalService:
                 'navps': q['navps'],
             }
 
-            result = {
+            return {
                 'quote': q,
                 'normalized_quote': normalized_quote,
                 'latest_indicator': li,
                 'historical_indicators': history,
             }
-            cls._cache_set_value(cache_key, result, cls.CACHE_TTL)
-            return result
-        except Exception as e:
-            logger.warning("Xueqiu F10 fetch failed for %s: %s", symbol, e)
-            return {}
+
+        data, status = CacheManager.get_or_fetch(
+            key=cache_key,
+            fetcher=_fetch,
+            ttl=cls.CACHE_TTL,
+            use_lock=False,
+        )
+
+        return data if data is not None else {}
 
     @classmethod
     def get_historical_dividends(cls, symbol):
         symbol = cls._fix_symbol(symbol)
         cache_key = f"dividends_v4_{symbol}"
-        cached = cls._cache_get(cache_key)
-        if cached is not None:
-            if isinstance(cached, list): return pd.DataFrame(cached)
-            return cached
-        try:
+
+        def _fetch():
             df_raw = Fetcher.fetch_dividend_detail(symbol)
-            df = Calc.extract_dividend_metrics(df_raw)
-            cls._cache_set(cache_key, df, cls.CACHE_TTL)
-            return df
-        except Exception as e:
-            logger.error(f"[Dividend] Historical dividend fetch failed for {symbol}: {e}")
-            return pd.DataFrame()
+            return Calc.extract_dividend_metrics(df_raw)
+
+        data, status = CacheManager.get_or_fetch(
+            key=cache_key,
+            fetcher=_fetch,
+            ttl=cls.CACHE_TTL,
+            use_lock=False,
+        )
+
+        return data if data is not None else pd.DataFrame()
 
     @classmethod
     def get_yearly_cashflow(cls, symbol):
         symbol = cls._fix_symbol(symbol)
         cache_key = f"cashflow_yearly_v1_{symbol}"
-        cached = cls._cache_get(cache_key)
-        if cached is not None:
-            if isinstance(cached, list): return pd.DataFrame(cached)
-            return cached
-        try:
-            df = cls._fetch_yearly_cashflow(symbol)
-            cls._cache_set(cache_key, df, cls.CACHE_TTL)
-            return df
-        except Exception as e:
-            logger.error(f"[Cashflow] Yearly cashflow fetch failed for {symbol}: {e}")
-            return pd.DataFrame()
+
+        def _fetch():
+            return cls._fetch_yearly_cashflow(symbol)
+
+        data, status = CacheManager.get_or_fetch(
+            key=cache_key,
+            fetcher=_fetch,
+            ttl=cls.CACHE_TTL,
+            use_lock=False,
+        )
+
+        return data if data is not None else pd.DataFrame()
 
 
 
@@ -401,15 +372,18 @@ class FundamentalService:
     def get_northbound_holding_history(cls, symbol):
         symbol = cls._fix_symbol(symbol)
         cache_key = f"northbound_history_v1_{symbol}"
-        cached = cls._cache_get(cache_key)
-        if cached is not None: return cached
-        try:
-            df = Fetcher.fetch_northbound_history(symbol)
-            cls._cache_set(cache_key, df, 12 * 3600)
-            return df
-        except Exception as e:
-            logger.error(f"[Northbound] Northbound holding fetch failed for {symbol}: {e}")
-            return pd.DataFrame()
+
+        def _fetch():
+            return Fetcher.fetch_northbound_history(symbol)
+
+        data, status = CacheManager.get_or_fetch(
+            key=cache_key,
+            fetcher=_fetch,
+            ttl=12 * 3600,
+            use_lock=False,
+        )
+
+        return data if data is not None else pd.DataFrame()
 
     @classmethod
     def get_quality_response(cls, symbol, include_shareholder=True):
@@ -609,10 +583,8 @@ class FundamentalService:
     @classmethod
     def get_f_score(cls, symbol):
         cache_key = f"f_score_v8_{symbol}"
-        cached = cls._cache_get_value(cache_key)
-        if cached is not None:
-            return cached
-        try:
+
+        def _fetch():
             df_f = cls.get_ttm_fundamentals(symbol)
             df_c = cls.get_ttm_cashflow(symbol)
             # 获取原始利润表/资产负债表用于 F-Score 补充项
@@ -622,15 +594,16 @@ class FundamentalService:
             for df in [df_p_raw, df_b_raw]:
                 if df is not None and not df.empty and 'REPORT_DATE' in df.columns:
                     df['REPORT_DATE'] = pd.to_datetime(df['REPORT_DATE'])
-            res = Calc.calculate_f_score(df_f, df_c, df_p_raw, df_b_raw)
-            cls._cache_set_value(cache_key, res, 3 * 24 * 3600)
-            return res
-        except Exception as e:
-            logger.debug("F-Score calculation failed for %s: %s", symbol, e)
-            empty_result = {"score": 0, "details": []}
-            # 缓存空结果，避免重复计算失败
-            cls._cache_set_value(cache_key, empty_result, 3 * 24 * 3600)
-            return empty_result
+            return Calc.calculate_f_score(df_f, df_c, df_p_raw, df_b_raw)
+
+        data, status = CacheManager.get_or_fetch(
+            key=cache_key,
+            fetcher=_fetch,
+            ttl=3 * 24 * 3600,
+            use_lock=False,
+        )
+
+        return data if data is not None else {"score": 0, "details": []}
 
     @classmethod
     def align_to_prices(cls, df_fund, df_prices, symbol):
@@ -693,15 +666,12 @@ class FundamentalService:
         """获取前瞻预测指标（预期 ROE 和 5 年平均 ROE）"""
         symbol = cls._fix_symbol(symbol)
         cache_key = f"forward_metrics_v2_{symbol}"
-        cached = cls._cache_get_value(cache_key)
-        if cached is not None:
-            return cached
 
-        try:
+        def _fetch():
             # 1. 获取 quality 数据（包含最近 5-10 年的 ROE）
             q_data = cls.get_quality_data(symbol, include_shareholder=False)
             history = q_data.get('quality_history', [])
-            
+
             if history:
                 roes = [float(h.get('roe', 0)) for h in history if h.get('roe') is not None]
                 if roes:
@@ -713,7 +683,7 @@ class FundamentalService:
             else:
                 avg_roe_5y = 12.0
                 expected_roe = 12.0
-            
+
             # 2. 如果存在 TTM fundamentals，也可以拿 TTM ROE 修正
             try:
                 ttm_df = cls.get_ttm_fundamentals(symbol)
@@ -725,16 +695,20 @@ class FundamentalService:
                         expected_roe = (ttm_profit / total_equity) * 100
             except Exception:
                 pass
-                
-            payload = {
+
+            return {
                 'expected_roe': round(expected_roe, 2),
                 'avg_roe_5y': round(avg_roe_5y, 2)
             }
-            cls._cache_set_value(cache_key, payload, cls.CACHE_TTL)
-            return payload
-        except Exception as e:
-            logger.error(f"Failed to calculate forward metrics for {symbol}: {e}")
-            return {'expected_roe': 12.0, 'avg_roe_5y': 12.0}
+
+        data, status = CacheManager.get_or_fetch(
+            key=cache_key,
+            fetcher=_fetch,
+            ttl=cls.CACHE_TTL,
+            use_lock=False,
+        )
+
+        return data if data is not None else {'expected_roe': 12.0, 'avg_roe_5y': 12.0}
 
     @classmethod
     def _fetch_fundamentals_from_tushare(cls, symbol, TushareProvider):

@@ -74,10 +74,11 @@ class CacheManager:
         # 1. 尝试主缓存
         data = cls._cache_get(main_key)
         if data is not None:
-            if data == cls.EMPTY_MARKER:
+            # 使用 isinstance 检查标记，避免 DataFrame 布尔判断问题
+            if isinstance(data, str) and data == cls.EMPTY_MARKER:
                 cls._update_stats('empty_hit')
                 return None, 'empty'
-            if data == cls.ERROR_MARKER:
+            if isinstance(data, str) and data == cls.ERROR_MARKER:
                 cls._update_stats('error_hit')
                 return None, 'error'
             cls._update_stats('hit')
@@ -86,11 +87,14 @@ class CacheManager:
         # 2. 尝试 stale 缓存
         if stale_ttl:
             stale_data = cls._cache_get(stale_key)
-            if stale_data is not None and stale_data not in (cls.EMPTY_MARKER, cls.ERROR_MARKER):
-                cls._update_stats('hit')
-                # 触发后台刷新
-                cls._schedule_background_refresh(main_key, stale_key, fetcher, ttl, stale_ttl)
-                return stale_data, 'stale'
+            if stale_data is not None:
+                if isinstance(stale_data, str) and stale_data in (cls.EMPTY_MARKER, cls.ERROR_MARKER):
+                    pass  # 跳过无效缓存
+                else:
+                    cls._update_stats('hit')
+                    # 触发后台刷新
+                    cls._schedule_background_refresh(main_key, stale_key, fetcher, ttl, stale_ttl)
+                    return stale_data, 'stale'
 
         # 3. 计算新数据
         if use_lock:
@@ -167,9 +171,19 @@ class CacheManager:
         cls._update_stats('miss')
 
         try:
+            import pandas as pd
             data = fetcher()
 
-            if data is None or (hasattr(data, 'empty') and data.empty):
+            # 检查是否为空结果
+            is_empty = False
+            if data is None:
+                is_empty = True
+            elif isinstance(data, pd.DataFrame) and data.empty:
+                is_empty = True
+            elif isinstance(data, dict) and not data:
+                is_empty = True
+
+            if is_empty:
                 # 缓存空结果，避免穿透
                 cls._cache_set(main_key, cls.EMPTY_MARKER, empty_ttl)
                 return None, 'empty'
