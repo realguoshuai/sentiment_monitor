@@ -210,7 +210,7 @@ class AnalysisService:
         
         symbols = [fixed_symbol, *peer_symbols]
         # 并行获取所有同行的前瞻财务数据
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(symbols)) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(symbols), 8)) as executor:
             future_map = {
                 item_symbol: executor.submit(FundamentalService.get_forward_metrics, item_symbol)
                 for item_symbol in symbols

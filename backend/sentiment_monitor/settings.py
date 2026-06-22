@@ -16,12 +16,17 @@ try:
 except ImportError:
     pass
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-default-key-for-dev-only')
-
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get('DJANGO_DEBUG', 'True') == 'True'
+DEBUG = os.environ.get('DJANGO_DEBUG', 'True').lower() in ('true', '1', 'yes')
 IS_DESKTOP = os.environ.get('SENTIMENT_MONITOR_DESKTOP') == '1'
+
+# SECURITY WARNING: keep the secret key used in production secret!
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    if DEBUG or IS_DESKTOP:
+        SECRET_KEY = 'django-insecure-default-key-for-dev-only'
+    else:
+        raise ValueError("DJANGO_SECRET_KEY environment variable is required in production")
 
 
 ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost').split(',')

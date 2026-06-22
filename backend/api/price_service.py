@@ -2,6 +2,7 @@ import requests
 from requests.adapters import HTTPAdapter
 import re
 import logging
+import threading
 import pandas as pd
 from datetime import datetime
 from django.utils import timezone
@@ -68,15 +69,17 @@ class PriceService:
     SNAPSHOT_CACHE_KEY = "a_share_spot_snapshot_for_valuation"
     SNAPSHOT_STALE_KEY = "a_share_spot_snapshot_stale"
     _snapshot_circuit_until = 0  # 熔断截止时间戳
+    _snapshot_circuit_lock = threading.Lock()  # 保护电路断路器的 check-then-set
 
     @classmethod
     def refresh_snapshot_cache(cls):
         """后台异步抓取全量快照，不阻塞前台请求（带熔断）"""
         import time
         now = time.time()
-        if now < cls._snapshot_circuit_until:
-            logger.debug("Snapshot circuit breaker active, skipping.")
-            return
+        with cls._snapshot_circuit_lock:
+            if now < cls._snapshot_circuit_until:
+                logger.debug("Snapshot circuit breaker active, skipping.")
+                return
 
         import akshare as ak
         try:
@@ -90,7 +93,8 @@ class PriceService:
             logger.info("Spot snapshot cache warmed up.")
         except Exception as e:
             # 熔断 5 分钟，避免反复重试挂掉的接口
-            cls._snapshot_circuit_until = now + 300
+            with cls._snapshot_circuit_lock:
+                cls._snapshot_circuit_until = time.time() + 300
             logger.warning(f"Background warming failed (circuit breaker 5min): {e}")
 
     @classmethod
@@ -278,15 +282,15 @@ class PriceService:
 
         # ⑦ 雪球股息率：始终并发获取
         if rt_data:
-            from concurrent.futures import ThreadPoolExecutor as _Pool
+            from concurrent.futures import ThreadPoolExecutor
             def _fetch_xq_yield(sym):
                 try:
                     y = FundamentalService.get_xueqiu_dividend_yield(sym)
                     return sym, y if y > 0 else 0
                 except Exception:
                     return sym, 0
-            with _Pool(max_workers=min(len(rt_data), 8)) as pool:
-                for sym, y in pool.map(lambda s: _fetch_xq_yield(s), list(rt_data.keys())):
+            with ThreadPoolExecutor(max_workers=min(len(rt_data), 8)) as pool:
+                for sym, y in pool.map(_fetch_xq_yield, list(rt_data.keys())):
                     if y > 0:
                         rt_data[sym]['dividend_yield'] = y
 
@@ -328,14 +332,26 @@ class PriceService:
                     if updates:
                         rt_data[sym].update(updates)
 
-        # ⑧ 最终兜底：StockScreenerSnapshot DB 补全仍然缺失的估值字段
-        for sym, data in rt_data.items():
-            if data.get('pe', 0) > 0 and data.get('pb', 0) > 0 and data.get('dividend_yield', 0) > 0:
-                continue
+        # ⑧ 最终兜底：StockScreenerSnapshot DB 批量补全仍然缺失的估值字段
+        from .models import StockScreenerSnapshot
+        missing_syms = [
+            sym for sym, data in rt_data.items()
+            if not (data.get('pe', 0) > 0 and data.get('pb', 0) > 0 and data.get('dividend_yield', 0) > 0)
+        ]
+        if missing_syms:
             try:
-                from .models import StockScreenerSnapshot
-                snap = StockScreenerSnapshot.objects.filter(symbol=sym).order_by('-snapshot_date').first()
-                if snap:
+                # 批量查询每个 symbol 的最新快照（1 次查询代替 N 次）
+                latest_snaps = {}
+                for snap in StockScreenerSnapshot.objects.filter(
+                    symbol__in=missing_syms
+                ).order_by('symbol', '-snapshot_date'):
+                    latest_snaps.setdefault(snap.symbol, snap)
+
+                for sym in missing_syms:
+                    snap = latest_snaps.get(sym)
+                    if not snap:
+                        continue
+                    data = rt_data[sym]
                     if data.get('pe', 0) <= 0 and snap.pe > 0:
                         data['pe'] = snap.pe
                     if data.get('pb', 0) <= 0 and snap.pb > 0:
@@ -617,8 +633,8 @@ class PriceService:
                              price_list.extend(new_points)
                              # 更新缓存
                              cls._cache_set(raw_cache_key, price_list, 86400 * 7) # 存档 7 天
-                 except Exception:
-                     pass # 增量失败不影响，后续 fallback 或使用旧数据
+                 except Exception as e:
+                     logger.debug("Incremental fetch failed for %s: %s", fixed_symbol, e)
         
         # 如果缓存缺失，执行全量抓取
         if not price_list:
@@ -997,20 +1013,17 @@ class PriceService:
         if missing_symbols:
             logger.info(f"[get_intraday_data] need to fetch: {missing_symbols}")
 
-        for symbol in missing_symbols:
+        def _fetch_single_intraday(symbol):
+            """获取单只股票的分钟数据，返回 (symbol, history_or_none)"""
             s = symbol.lower()
             url = f"http://ifzq.gtimg.cn/appstock/app/minute/query?code={s}"
-
             try:
                 logger.info(f"[get_intraday_data] fetching {symbol} from Tencent: {url}")
                 resp = cls._session.get(url, timeout=(8, 15), proxies={"http": None, "https": None})
                 data = resp.json()
                 if data.get('code') != 0:
                     logger.warning(f"[get_intraday_data] Tencent returned code={data.get('code')} for {symbol}")
-                    stale = cls._get_intraday_stale(symbol)
-                    if stale:
-                        results[symbol] = stale
-                    continue
+                    return symbol, cls._get_intraday_stale(symbol)
 
                 stock_data = data.get('data', {}).get(s, {})
                 minutes = stock_data.get('data', {}).get('data', [])
@@ -1018,27 +1031,25 @@ class PriceService:
                 history = cls._parse_intraday_minutes(minutes)
                 if history:
                     logger.info(f"[get_intraday_data] parsed {len(history)} points for {symbol}")
-                    results[symbol] = history
-                    payload = {'points': history}
-                    cls._cache_set(cls._intraday_single_cache_key(symbol), payload, cls.INTRADAY_CACHE_TTL)
-                    cls._cache_set(cls._intraday_single_stale_cache_key(symbol), payload, cls.INTRADAY_STALE_CACHE_TTL)
-                else:
-                    logger.warning(f"[get_intraday_data] no valid minutes parsed for {symbol}")
-                    stale = cls._get_intraday_stale(symbol)
-                    if stale:
-                        results[symbol] = stale
+                    return symbol, history
+                logger.warning(f"[get_intraday_data] no valid minutes parsed for {symbol}")
+                return symbol, cls._get_intraday_stale(symbol)
             except Exception as e:
                 logger.warning(f"PriceService Tencent Intraday Error for {symbol}: {e}, trying Sina fallback")
                 history = cls._fetch_intraday_from_sina(symbol)
                 if history:
-                    results[symbol] = history
-                    payload = {'points': history}
-                    cls._cache_set(cls._intraday_single_cache_key(symbol), payload, cls.INTRADAY_CACHE_TTL)
-                    cls._cache_set(cls._intraday_single_stale_cache_key(symbol), payload, cls.INTRADAY_STALE_CACHE_TTL)
-                else:
-                    stale = cls._get_intraday_stale(symbol)
-                    if stale:
-                        results[symbol] = stale
+                    return symbol, history
+                return symbol, cls._get_intraday_stale(symbol)
+
+        if missing_symbols:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=min(len(missing_symbols), 8)) as pool:
+                for sym, history in pool.map(_fetch_single_intraday, missing_symbols):
+                    if history:
+                        results[sym] = history
+                        payload = {'points': history}
+                        cls._cache_set(cls._intraday_single_cache_key(sym), payload, cls.INTRADAY_CACHE_TTL)
+                        cls._cache_set(cls._intraday_single_stale_cache_key(sym), payload, cls.INTRADAY_STALE_CACHE_TTL)
         
         return cls._align_intraday(results)
 

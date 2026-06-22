@@ -106,8 +106,11 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
         avg_line = []
         top_items_map = {}
 
-        monitored_stock_names = set(Stock.objects.values_list('name', flat=True))
+        monitored_stock_ids = set(Stock.objects.values_list('id', flat=True))
 
+        # 预计算每日热度前3，收集所有需要查询的 sentiment_data ID
+        daily_top = {}
+        all_top_ids = []
         for idx, d in enumerate(date_list):
             records = daily_records.get(d, [])
             if not records:
@@ -119,46 +122,47 @@ class SentimentDataViewSet(viewsets.ReadOnlyModelViewSet):
             avg_line.append(round(sum(scores) / len(scores), 3))
 
             for r in records:
-                if r.stock.name in monitored_stock_names:
+                if r.stock_id in monitored_stock_ids:
                     stock_data[r.stock.name][idx] = r.sentiment_score
 
-            # 仅对每日热度前 3 的数据获取最新一条标题
             day_sentiments = sorted(records, key=lambda x: x.hot_score, reverse=True)[:3]
+            daily_top[d] = day_sentiments
+            all_top_ids.extend(s.id for s in day_sentiments)
+
+        # 批量预取 Report / Announcement / News（3 次查询代替 N×3 次）
+        report_map = {}
+        announcement_map = {}
+        news_map = {}
+        if all_top_ids:
+            for r in Report.objects.filter(sentiment_data_id__in=all_top_ids).order_by('sentiment_data_id', '-pub_date'):
+                report_map.setdefault(r.sentiment_data_id, r)
+            for a in Announcement.objects.filter(sentiment_data_id__in=all_top_ids).order_by('sentiment_data_id', '-pub_date'):
+                announcement_map.setdefault(a.sentiment_data_id, a)
+            for n in News.objects.filter(sentiment_data_id__in=all_top_ids).order_by('sentiment_data_id', '-pub_date'):
+                news_map.setdefault(n.sentiment_data_id, n)
+
+        for d in date_list:
+            day_sentiments = daily_top.get(d)
+            if not day_sentiments:
+                continue
             day_items = []
-            if day_sentiments:
-                top_ids = [s.id for s in day_sentiments]
-                all_reports = Report.objects.filter(sentiment_data_id__in=top_ids).order_by('sentiment_data_id', '-pub_date')
-                all_announcements = Announcement.objects.filter(sentiment_data_id__in=top_ids).order_by('sentiment_data_id', '-pub_date')
-                all_news = News.objects.filter(sentiment_data_id__in=top_ids).order_by('sentiment_data_id', '-pub_date')
-
-                def _first_per_sentiment(qs):
-                    result = {}
-                    for item in qs:
-                        if item.sentiment_data_id not in result:
-                            result[item.sentiment_data_id] = item
-                    return result
-
-                report_map = _first_per_sentiment(all_reports)
-                announcement_map = _first_per_sentiment(all_announcements)
-                news_map = _first_per_sentiment(all_news)
-
-                for s_data in day_sentiments:
-                    title = ""
-                    url = ""
-                    r = report_map.get(s_data.id)
-                    a = announcement_map.get(s_data.id)
-                    n = news_map.get(s_data.id)
-                    if r:
-                        title = f"[{s_data.stock.name}] {r.title}"
-                        url = r.url
-                    elif a:
-                        title = f"[{s_data.stock.name}] {a.title}"
-                        url = a.url
-                    elif n:
-                        title = f"[{s_data.stock.name}] {n.title}"
-                        url = n.url
-                    if title:
-                        day_items.append({'title': title, 'score': s_data.sentiment_score, 'url': url})
+            for s_data in day_sentiments:
+                title = ""
+                url = ""
+                r = report_map.get(s_data.id)
+                a = announcement_map.get(s_data.id)
+                n = news_map.get(s_data.id)
+                if r:
+                    title = f"[{s_data.stock.name}] {r.title}"
+                    url = r.url
+                elif a:
+                    title = f"[{s_data.stock.name}] {a.title}"
+                    url = a.url
+                elif n:
+                    title = f"[{s_data.stock.name}] {n.title}"
+                    url = n.url
+                if title:
+                    day_items.append({'title': title, 'score': s_data.sentiment_score, 'url': url})
             top_items_map[d.isoformat()] = day_items
 
         return Response({

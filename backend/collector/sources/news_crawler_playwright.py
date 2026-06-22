@@ -8,15 +8,24 @@ from typing import List, Dict
 
 
 def get_stock_name(symbol_code: str) -> str:
-    """根据股票代码获取名称"""
-    name_map = {
-        '600519': '贵州茅台',
-        '000423': '东阿阿胶',
-        '000651': '格力电器',
-        '002304': '洋河股份',
-        '000858': '五粮液'
-    }
-    return name_map.get(symbol_code, '')
+    """根据股票代码获取名称（优先从数据库查询，回退到 akshare）"""
+    try:
+        from api.models import Stock
+        stock = Stock.objects.filter(symbol__endswith=symbol_code).first()
+        if stock:
+            return stock.name
+    except Exception:
+        pass
+    # 回退：用 akshare 查名称
+    try:
+        import akshare as ak
+        df = ak.stock_info_a_code_name()
+        match = df[df['code'] == symbol_code]
+        if not match.empty:
+            return match.iloc[0]['name']
+    except Exception:
+        pass
+    return ''
 
 
 def get_news(symbol_code: str) -> List[Dict]:

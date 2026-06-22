@@ -105,6 +105,7 @@ class Command(BaseCommand):
 
             ok_count = 0
             fail_count = 0
+            consecutive_fail = 0
             for i, symbol in enumerate(monitored_symbols, 1):
                 try:
                     # 基本面 + 分红
@@ -120,10 +121,17 @@ class Command(BaseCommand):
                     # 历史回测
                     HistoryBacktestService.get_history_backtest(symbol)
                     ok_count += 1
+                    consecutive_fail = 0
                     self.stdout.write(f'  [{i}/{len(monitored_symbols)}] [OK] {symbol}')
                 except Exception as exc:
                     fail_count += 1
+                    consecutive_fail += 1
                     self.stderr.write(f'  [{i}/{len(monitored_symbols)}] [ERR] {symbol}: {exc}')
+                    if consecutive_fail >= 3:
+                        self.stderr.write(
+                            f'  连续失败 {consecutive_fail} 次，数据源可能不可用，跳过剩余标的'
+                        )
+                        break
 
             elapsed = _fmt_duration(time.time() - t)
             self.stdout.write(

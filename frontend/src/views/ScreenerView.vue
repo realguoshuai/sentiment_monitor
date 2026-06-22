@@ -237,7 +237,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { stockApi, type ScreenerMeta, type ScreenerResult } from '@/api'
@@ -518,7 +518,14 @@ const applyFilters = async (page = 1) => {
   await fetchResults(page)
 }
 
+let refreshAbortController: AbortController | null = null
+
 const refreshSnapshot = async () => {
+  // 取消之前的轮询（如果有）
+  refreshAbortController?.abort()
+  refreshAbortController = new AbortController()
+  const signal = refreshAbortController.signal
+
   refreshing.value = true
   errorMessage.value = ''
 
@@ -529,10 +536,11 @@ const refreshSnapshot = async () => {
     if (data.status === 'started' || data.status === 'refreshing') {
       // 异步刷新已启动，轮询等待完成
       errorMessage.value = ''
-      let done = false
       let consecutiveErrors = 0
       for (let i = 0; i < 120; i++) {
+        if (signal.aborted) return
         await new Promise(r => setTimeout(r, 3000))
+        if (signal.aborted) return
         try {
           const poll = await stockApi.pollScreenerRefresh()
           consecutiveErrors = 0
@@ -541,24 +549,22 @@ const refreshSnapshot = async () => {
             if (pollData.source !== 'upstream' && pollData.message) {
               errorMessage.value = pollData.message
             }
-            done = true
             break
           }
           if (pollData.status === 'error') {
             errorMessage.value = `快照刷新失败：${pollData.error || '未知错误'}`
-            done = true
             break
           }
           // status === 'refreshing' → 继续轮询
         } catch {
+          if (signal.aborted) return
           if (++consecutiveErrors >= 5) {
             errorMessage.value = '轮询连接中断，请稍后重试'
-            done = true
             break
           }
         }
       }
-      if (!done) {
+      if (!signal.aborted && refreshing.value) {
         errorMessage.value = '刷新超时（6 分钟），后台仍在执行，稍后可查看结果'
       }
     } else {
@@ -568,13 +574,14 @@ const refreshSnapshot = async () => {
       }
     }
 
-    await fetchResults(1)
+    if (!signal.aborted) await fetchResults(1)
   } catch (error: any) {
+    if (signal.aborted) return
     console.error('Failed to refresh screener snapshot:', error)
     const detail = error?.response?.data?.error || error?.response?.data?.message || error?.message || ''
     errorMessage.value = `快照刷新失败：${detail || '网络请求异常，请检查后端是否运行'}`
   } finally {
-    refreshing.value = false
+    if (!signal.aborted) refreshing.value = false
   }
 }
 
@@ -755,6 +762,10 @@ const getMetricTone = (metric: 'pb' | 'pe' | 'roe' | 'roi' | 'dividend' | 'net_c
 
 onMounted(() => {
   void fetchResults(1)
+})
+
+onUnmounted(() => {
+  refreshAbortController?.abort()
 })
 </script>
 

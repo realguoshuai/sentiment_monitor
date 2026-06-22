@@ -67,17 +67,20 @@ class CacheManager:
     def set_df(cls, key: str, df: pd.DataFrame, ttl: int = 43200) -> bool:
         """
         将 DataFrame 存入缓存。
-        使用 JSON 往返消除所有 Numpy/Pandas 特有二进制结构 (如 NaT, Timestamp)，
+        通过 to_dict 转换为纯 Python 对象，消除 Numpy/Pandas 特有二进制结构，
         确保跨环境、跨版本的 Pickle 稳定性。
         """
         if df is None or not isinstance(df, pd.DataFrame):
             return False
 
         try:
-            # 真・安全缓存机制：通过 JSON 序列化对 DataFrame 进行"脱水"
-            # date_format='iso' 会自动将 NaT 转换为 null
-            json_str = df.to_json(orient='records', date_format='iso')
-            data = json.loads(json_str)
+            data = df.to_dict(orient='records')
+            # 将 Timestamp/datetime 列转为 ISO 字符串，确保 JSON 安全
+            for row in data:
+                for col in cls.DATE_COLUMNS:
+                    val = row.get(col)
+                    if val is not None and hasattr(val, 'isoformat'):
+                        row[col] = val.isoformat()
             cache.set(key, data, ttl)
             return True
         except Exception as e:

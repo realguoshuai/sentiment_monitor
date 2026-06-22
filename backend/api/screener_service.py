@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 import logging
 from math import ceil
+import threading
 import os
 import time
 from typing import Dict, Iterable, List
@@ -17,7 +18,7 @@ from django.utils import timezone
 from .fundamental_service import FundamentalService
 from .models import Stock, StockScreenerSnapshot
 from .price_service import PriceService
-from .utils import format_symbol
+from .utils import format_symbol, safe_float
 
 logger = logging.getLogger(__name__)
 
@@ -52,12 +53,7 @@ class ScreenerService:
         for start in range(0, len(items), size):
             yield items[start:start + size]
 
-    @staticmethod
-    def _to_float(value) -> float:
-        numeric = pd.to_numeric(value, errors='coerce')
-        if pd.isna(numeric):
-            return 0.0
-        return float(numeric)
+    # _to_float 已统一为 utils.safe_float
 
     @staticmethod
     def _to_int(value, default: int) -> int:
@@ -145,8 +141,8 @@ class ScreenerService:
                     'roe_pct': round(cls._normalize_percent_value(row.get(roe_col)), 2),
                     'report_date': report_date,
                     'industry': industry,
-                    'cfo_per_share': cls._to_float(row.get(cfo_col)) if cfo_col else 0.0,
-                    'eps': cls._to_float(row.get(eps_col)) if eps_col else 0.0,
+                    'cfo_per_share': safe_float(row.get(cfo_col)) if cfo_col else 0.0,
+                    'eps': safe_float(row.get(eps_col)) if eps_col else 0.0,
                 }
 
         if roe_map:
@@ -327,9 +323,12 @@ class ScreenerService:
         if updated:
             os.environ['NO_PROXY'] = ','.join(current_hosts)
 
+    _proxy_lock = threading.Lock()  # 保护 proxy 环境变量的并发访问
+
     @classmethod
     def _bypass_proxy(cls):
-        """保存并清除代理环境变量，避免本地代理拦截东方财富等直连请求"""
+        """保存并清除代理环境变量，避免本地代理拦截东方财富等直连请求。
+        必须与 _restore_proxy 配对使用，且整个区间内持有 _proxy_lock。"""
         saved = {}
         for key in ('http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'all_proxy', 'ALL_PROXY'):
             if key in os.environ:
@@ -357,7 +356,8 @@ class ScreenerService:
             last_error = direct_err
 
         # 2) AkShare 东财接口（带自动分页，固定子域名 82）
-        saved_proxy = cls._bypass_proxy()
+        with cls._proxy_lock:
+            saved_proxy = cls._bypass_proxy()
         # 打包环境下关闭 SSL 验证
         import sys
         if getattr(sys, 'frozen', False):
@@ -375,13 +375,15 @@ class ScreenerService:
                     if attempt < cls.SNAPSHOT_FETCH_RETRIES - 1:
                         time.sleep(1.5 * (attempt + 1))
         finally:
-            cls._restore_proxy(saved_proxy)
+            with cls._proxy_lock:
+                cls._restore_proxy(saved_proxy)
 
         # 3) 新浪源（最后兜底）
         if last_error is not None:
             logger.warning("East Money upstreams all failed, trying Sina fallback: %s", last_error)
         try:
-            saved_proxy2 = cls._bypass_proxy()
+            with cls._proxy_lock:
+                saved_proxy2 = cls._bypass_proxy()
             try:
                 cls._ensure_no_proxy_hosts(['.sina.com.cn', 'vip.stock.finance.sina.com.cn'])
                 df = ak.stock_zh_a_spot()
@@ -390,7 +392,8 @@ class ScreenerService:
             except Exception as exc:
                 last_error = exc
             finally:
-                cls._restore_proxy(saved_proxy2)
+                with cls._proxy_lock:
+                    cls._restore_proxy(saved_proxy2)
         except Exception as exc:
             last_error = exc
 
@@ -607,29 +610,29 @@ class ScreenerService:
             code = symbol[2:] if len(symbol) >= 8 else str(row[code_col])[-6:]
             realtime = realtime_map.get(symbol, {})
 
-            price = cls._to_float(row[price_col]) if price_col else cls._to_float(realtime.get('price'))
+            price = safe_float(row[price_col]) if price_col else safe_float(realtime.get('price'))
             if price <= 0:
-                price = cls._to_float(realtime.get('price'))
+                price = safe_float(realtime.get('price'))
 
-            market_cap = cls._to_float(row[market_cap_col]) if market_cap_col else cls._to_float(realtime.get('market_cap'))
+            market_cap = safe_float(row[market_cap_col]) if market_cap_col else safe_float(realtime.get('market_cap'))
             if market_cap <= 0:
-                market_cap = cls._to_float(realtime.get('market_cap'))
+                market_cap = safe_float(realtime.get('market_cap'))
 
-            pe = cls._to_float(row[pe_col]) if pe_col else cls._to_float(realtime.get('pe'))
+            pe = safe_float(row[pe_col]) if pe_col else safe_float(realtime.get('pe'))
             if pe == 0:
-                pe = cls._to_float(realtime.get('pe'))
+                pe = safe_float(realtime.get('pe'))
 
-            pb = cls._to_float(row[pb_col]) if pb_col else cls._to_float(realtime.get('pb'))
+            pb = safe_float(row[pb_col]) if pb_col else safe_float(realtime.get('pb'))
             if pb == 0:
-                pb = cls._to_float(realtime.get('pb'))
+                pb = safe_float(realtime.get('pb'))
 
             dividend_payload = dividend_map.get(symbol, {})
-            dividend_cash_total = cls._to_float(dividend_payload.get('cash_div_total'))
+            dividend_cash_total = safe_float(dividend_payload.get('cash_div_total'))
             dividend_yield = 0.0
             if price > 0 and dividend_cash_total > 0:
                 dividend_yield = (dividend_cash_total / price) * 100
             elif dividend_payload:
-                dividend_yield = cls._to_float(dividend_payload.get('dividend_yield'))
+                dividend_yield = safe_float(dividend_payload.get('dividend_yield'))
             industry = ''
             if industry_col:
                 industry = str(row.get(industry_col) or '').strip()
@@ -643,9 +646,9 @@ class ScreenerService:
                 name = str(realtime.get('name') or symbol)
 
             roe_info = roe_map.get(symbol, {})
-            roe_pct = cls._to_float(roe_info.get('roe_pct'))
-            cfo_per_share = cls._to_float(roe_info.get('cfo_per_share'))
-            eps = cls._to_float(roe_info.get('eps'))
+            roe_pct = safe_float(roe_info.get('roe_pct'))
+            cfo_per_share = safe_float(roe_info.get('cfo_per_share'))
+            eps = safe_float(roe_info.get('eps'))
 
             net_cash_ratio = 0.0
             if eps > 0:
@@ -740,13 +743,6 @@ class ScreenerService:
             fields = match.group(2).split('~')
             if len(fields) < 47:
                 continue
-
-            def safe_float(v):
-                try:
-                    f = float(v)
-                    return f if f == f else 0.0
-                except (TypeError, ValueError):
-                    return 0.0
 
             code = match.group(1)  # sh600519
             code_6 = code[2:] if len(code) >= 8 else code
@@ -878,15 +874,6 @@ class ScreenerService:
 
         snapshot_date = timezone.localdate()
         rows = cls._build_snapshot_rows(df, snapshot_date)
-
-        # 去重：同一 symbol 只保留第一条
-        seen = set()
-        unique_rows = []
-        for r in rows:
-            if r.symbol not in seen:
-                seen.add(r.symbol)
-                unique_rows.append(r)
-        rows = unique_rows
 
         if not rows:
             retained = cls._build_retained_snapshot_response()

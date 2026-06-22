@@ -653,8 +653,9 @@ onMounted(async () => {
       await store.fetchLatestSentiment()
     }
 
-    if (store.backtestCache[symbol]) {
-      data.value = store.backtestCache[symbol]
+    const cachedBacktest = store.backtestCache[symbol]?.data
+    if (cachedBacktest) {
+      data.value = cachedBacktest
       loading.value = false
       await nextTick()
       renderBucketChart()

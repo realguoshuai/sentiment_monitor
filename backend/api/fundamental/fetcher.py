@@ -2,6 +2,7 @@ import akshare as ak
 import pandas as pd
 import logging
 import time
+import random
 import os
 import threading
 import requests
@@ -94,7 +95,7 @@ class FundamentalFetcher:
                     cls.AKSHARE_RETRY_ATTEMPTS,
                     exc,
                 )
-                time.sleep(cls.AKSHARE_RETRY_DELAY * attempt)
+                time.sleep(cls.AKSHARE_RETRY_DELAY * attempt + random.uniform(0, 1))
 
         raise last_error
 

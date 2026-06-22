@@ -12,8 +12,9 @@ def run_collector_job():
 def check_alerts_job():
     """定时检查告警规则（仅在交易日盘中时段执行实际检查）"""
     from datetime import datetime
-    now = datetime.now()
-    # 仅工作日 9:00-16:00 执行
+    from zoneinfo import ZoneInfo
+    now = datetime.now(ZoneInfo('Asia/Shanghai'))
+    # 仅工作日 9:00-16:00 执行（北京时间）
     if now.weekday() >= 5:
         return
     if now.hour < 9 or now.hour >= 16:
@@ -41,7 +42,8 @@ def start():
         scheduler.add_jobstore(DjangoJobStore(), "default")
 
         # 每 1 小时运行一次采集，显式设置下一次运行时间为 1 小时后，避免启动时由于历史错失（misfire）立即触发该重型任务
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone as tz
+        now = datetime.now(tz=tz.utc)
         scheduler.add_job(
             run_collector_job,
             trigger="interval",
@@ -52,7 +54,7 @@ def start():
             max_instances=1,
             coalesce=True,
             misfire_grace_time=15 * 60,
-            next_run_time=datetime.now() + timedelta(hours=1),
+            next_run_time=now + timedelta(hours=1),
         )
 
         # 每小时刷新东财快照缓存（热缓存 TTL=1h，冷缓存 TTL=24h，必须定期刷新）
@@ -66,7 +68,7 @@ def start():
             max_instances=1,
             coalesce=True,
             misfire_grace_time=10 * 60,
-            next_run_time=datetime.now() + timedelta(minutes=2),  # 启动 2 分钟后首次执行，等应用预热完成
+            next_run_time=now + timedelta(minutes=2),  # 启动 2 分钟后首次执行，等应用预热完成
         )
 
         # 每 30 分钟检查一次告警规则
@@ -80,7 +82,7 @@ def start():
             max_instances=1,
             coalesce=True,
             misfire_grace_time=10 * 60,
-            next_run_time=datetime.now() + timedelta(minutes=5),  # 启动 5 分钟后首次执行
+            next_run_time=now + timedelta(minutes=5),  # 启动 5 分钟后首次执行
         )
 
         register_events(scheduler)

@@ -17,13 +17,13 @@ logger = logging.getLogger(__name__)
 
 def check_alerts():
     """检查所有活跃的告警规则"""
-    rules = AlertRule.objects.filter(is_active=True).select_related('stock')
+    rules = list(AlertRule.objects.filter(is_active=True).select_related('stock'))
 
-    if not rules.exists():
+    if not rules:
         logger.info("没有活跃的告警规则")
         return 0
 
-    logger.info(f"检查 {rules.count()} 条告警规则...")
+    logger.info(f"检查 {len(rules)} 条告警规则...")
 
     # 获取最新情感数据
     today = date.today()
@@ -47,6 +47,11 @@ def _check_single_rule(rule: AlertRule) -> bool:
     """检查单条规则"""
     stock = rule.stock
     today = date.today()
+
+    # 早退：如果该规则今天已触发过，跳过昂贵的网络请求
+    if AlertLog.objects.filter(rule=rule, triggered_at__date=today).exists():
+        logger.debug(f"规则 {rule.id} 今天已触发过，跳过检查")
+        return False
 
     # 根据规则类型获取数据并检查
     if rule.rule_type in ('sentiment_low', 'sentiment_high'):

@@ -166,7 +166,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, defineAsyncComponent } from 'vue'
 import { useSentimentStore } from '@/stores/sentiment'
 import StockCard from '@/components/StockCard.vue'
 import DividendCalendar from '@/components/DividendCalendar.vue'
@@ -177,13 +177,13 @@ import WidgetDock from '@/components/WidgetDock.vue'
 import AlertPanel from '@/components/AlertPanel.vue'
 import ValuationThermometer from '@/components/ValuationThermometer.vue'
 import WidgetContainer from '@/components/WidgetContainer.vue'
-import PortfolioWidget from '@/components/widgets/PortfolioWidget.vue'
-import CompoundWidget from '@/components/widgets/CompoundWidget.vue'
-import MarginWidget from '@/components/widgets/MarginWidget.vue'
-import PositionWidget from '@/components/widgets/PositionWidget.vue'
-import DividendCalWidget from '@/components/widgets/DividendCalWidget.vue'
-import SwapWidget from '@/components/widgets/SwapWidget.vue'
-import KellyWidget from '@/components/widgets/KellyWidget.vue'
+const PortfolioWidget = defineAsyncComponent(() => import('@/components/widgets/PortfolioWidget.vue'))
+const CompoundWidget = defineAsyncComponent(() => import('@/components/widgets/CompoundWidget.vue'))
+const MarginWidget = defineAsyncComponent(() => import('@/components/widgets/MarginWidget.vue'))
+const PositionWidget = defineAsyncComponent(() => import('@/components/widgets/PositionWidget.vue'))
+const DividendCalWidget = defineAsyncComponent(() => import('@/components/widgets/DividendCalWidget.vue'))
+const SwapWidget = defineAsyncComponent(() => import('@/components/widgets/SwapWidget.vue'))
+const KellyWidget = defineAsyncComponent(() => import('@/components/widgets/KellyWidget.vue'))
 
 const store = useSentimentStore()
 const showManageModal = ref(false)
@@ -240,13 +240,35 @@ onMounted(async () => {
   // 分红日历耗时较长（需逐只调外部 API），异步加载不阻塞渲染
   store.fetchDividendCalendar().catch(() => {})
 
-  priceTimer = setInterval(() => {
-    store.fetchRealtimePrices()
-  }, 10000)
-})
+  // 标签页不可见时暂停轮询，节省网络资源
+  const startPolling = () => {
+    priceTimer = setInterval(() => {
+      store.fetchRealtimePrices()
+    }, 10000)
+  }
+  const stopPolling = () => {
+    if (priceTimer) {
+      clearInterval(priceTimer)
+      priceTimer = null
+    }
+  }
+  const handleVisibility = () => {
+    if (document.hidden) {
+      stopPolling()
+    } else {
+      stopPolling()
+      startPolling()
+      store.fetchRealtimePrices()  // 恢复时立即刷新
+    }
+  }
+  document.addEventListener('visibilitychange', handleVisibility)
+  startPolling()
 
-onUnmounted(() => {
-  if (priceTimer) clearInterval(priceTimer)
+  // 清理
+  onUnmounted(() => {
+    stopPolling()
+    document.removeEventListener('visibilitychange', handleVisibility)
+  })
 })
 </script>
 

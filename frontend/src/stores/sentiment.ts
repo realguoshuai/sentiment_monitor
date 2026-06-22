@@ -16,10 +16,25 @@ export const useSentimentStore = defineStore('sentiment', () => {
   const realtimePrices = ref<Record<string, RealtimePrice>>({})
   const backendStarting = ref(false)
   
-  // 新增：Session 级缓存，切换标的秒开
-  const analysisCache = ref<Record<string, any>>({})
-  const qualityCache = ref<Record<string, any>>({})
-  const backtestCache = ref<Record<string, any>>({})
+  // 新增：Session 级缓存，切换标的秒开（带 5 分钟 TTL）
+  const CACHE_TTL = 5 * 60 * 1000  // 5 minutes
+  interface CacheEntry<T = any> { data: T; timestamp: number }
+  const analysisCache = ref<Record<string, CacheEntry>>({})
+  const qualityCache = ref<Record<string, CacheEntry>>({})
+  const backtestCache = ref<Record<string, CacheEntry>>({})
+
+  function getCached<T>(cache: Record<string, CacheEntry<T>>, key: string): T | null {
+    const entry = cache[key]
+    if (!entry) return null
+    if (Date.now() - entry.timestamp > CACHE_TTL) {
+      delete cache[key]
+      return null
+    }
+    return entry.data
+  }
+  function setCached<T>(cache: Record<string, CacheEntry<T>>, key: string, data: T) {
+    cache[key] = { data, timestamp: Date.now() }
+  }
 
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -29,7 +44,7 @@ export const useSentimentStore = defineStore('sentiment', () => {
     return !e?.response || code === 'econnaborted' || message.includes('network error') || message.includes('timeout')
   }
 
-  async function retryDuringStartup<T>(request: () => Promise<T>, attempts = 15): Promise<T> {
+  async function retryDuringStartup<T>(request: () => Promise<T>, attempts = 5): Promise<T> {
     let lastError: any = null
 
     for (let i = 0; i < attempts; i += 1) {
@@ -124,17 +139,11 @@ export const useSentimentStore = defineStore('sentiment', () => {
   // Actions
   async function fetchStocks() {
     try {
-      const response = await stockApi.getStocks()
+      const response = await retryDuringStartup(() => stockApi.getStocks())
       stocks.value = response.data
     } catch (e) {
-      // 失败时降级到重试
-      try {
-        const response = await retryDuringStartup(() => stockApi.getStocks())
-        stocks.value = response.data
-      } catch (e2) {
-        console.error('Failed to fetch stocks:', e2)
-        error.value = '本地服务启动中，请稍候刷新'
-      }
+      console.error('Failed to fetch stocks:', e)
+      error.value = '本地服务启动中，请稍候刷新'
     }
   }
 
@@ -179,18 +188,11 @@ export const useSentimentStore = defineStore('sentiment', () => {
 
     try {
       // 使用 mini=1 模式，只获取基础统计数据，不获取新闻详情列表，大幅加速首页加载
-      const response = await stockApi.getLatestSentiment({ mini: '1' })
+      const response = await retryDuringStartup(() => stockApi.getLatestSentiment({ mini: '1' }))
       sentimentData.value = response.data
       lastUpdated.value = new Date()
     } catch (e: any) {
-      // 失败时降级到重试
-      try {
-        const response = await retryDuringStartup(() => stockApi.getLatestSentiment({ mini: '1' }))
-        sentimentData.value = response.data
-        lastUpdated.value = new Date()
-      } catch (e2: any) {
-        error.value = e2.response?.data?.message || '获取数据失败'
-      }
+      error.value = e.response?.data?.message || '获取数据失败'
     } finally {
       loading.value = false
     }
@@ -245,10 +247,13 @@ export const useSentimentStore = defineStore('sentiment', () => {
 
   // --- 新增：带缓存的获取方法 ---
   async function getAnalysis(symbol: string, force = false) {
-    if (!force && analysisCache.value[symbol]) return analysisCache.value[symbol]
+    if (!force) {
+      const cached = getCached(analysisCache.value, symbol)
+      if (cached) return cached
+    }
     try {
       const res = await stockApi.getAnalysis(symbol)
-      analysisCache.value[symbol] = res.data
+      setCached(analysisCache.value, symbol, res.data)
       return res.data
     } catch (e) {
       console.error(`Failed to fetch analysis for ${symbol}:`, e)
@@ -257,10 +262,13 @@ export const useSentimentStore = defineStore('sentiment', () => {
   }
 
   async function getQuality(symbol: string, force = false) {
-    if (!force && qualityCache.value[symbol]) return qualityCache.value[symbol]
+    if (!force) {
+      const cached = getCached(qualityCache.value, symbol)
+      if (cached) return cached
+    }
     try {
       const res = await stockApi.getQualityAnalysis(symbol)
-      qualityCache.value[symbol] = res.data
+      setCached(qualityCache.value, symbol, res.data)
       return res.data
     } catch (e) {
       console.error(`Failed to fetch quality for ${symbol}:`, e)
@@ -269,10 +277,13 @@ export const useSentimentStore = defineStore('sentiment', () => {
   }
 
   async function getBacktest(symbol: string, force = false) {
-    if (!force && backtestCache.value[symbol]) return backtestCache.value[symbol]
+    if (!force) {
+      const cached = getCached(backtestCache.value, symbol)
+      if (cached) return cached
+    }
     try {
       const res = await stockApi.getHistoryBacktest(symbol)
-      backtestCache.value[symbol] = res.data
+      setCached(backtestCache.value, symbol, res.data)
       return res.data
     } catch (e) {
       console.error(`Failed to fetch backtest for ${symbol}:`, e)
