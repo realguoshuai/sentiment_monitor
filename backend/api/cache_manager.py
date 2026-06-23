@@ -24,8 +24,8 @@ logger = logging.getLogger(__name__)
 class CacheManager:
     """统一缓存管理器"""
 
-    # 缓存版本号，升级时递增
-    CACHE_VERSION = "v1"
+    # 缓存版本号，升级时递增（v2: DataFrame 改用 JSON 序列化，解决 pickle 跨版本兼容性）
+    CACHE_VERSION = "v2"
 
     # 空结果标记
     EMPTY_MARKER = "__EMPTY__"
@@ -250,19 +250,30 @@ class CacheManager:
         jitter = int(ttl * 0.1)
         return ttl + random.randint(-jitter, jitter)
 
+    # DataFrame 序列化标记，避免 pickle 跨版本不兼容
+    _DF_MARKER = "__df_cache__"
+
     @classmethod
     def _cache_get(cls, key: str) -> Any:
-        """安全的缓存获取"""
+        """安全的缓存获取，自动还原 DataFrame"""
         try:
-            return cache.get(key)
+            data = cache.get(key)
+            # 检测 DataFrame 标记并还原
+            if isinstance(data, dict) and data.get(cls._DF_MARKER):
+                import pandas as pd
+                return pd.DataFrame(data["data"])
+            return data
         except Exception as e:
             logger.warning("Cache get failed for %s: %s", key, e)
             return None
 
     @classmethod
     def _cache_set(cls, key: str, value: Any, ttl: int) -> bool:
-        """安全的缓存设置"""
+        """安全的缓存设置，DataFrame 自动转 JSON-safe 格式"""
         try:
+            import pandas as pd
+            if isinstance(value, pd.DataFrame):
+                value = {cls._DF_MARKER: True, "data": value.to_dict(orient="records")}
             cache.set(key, value, ttl)
             return True
         except Exception as e:

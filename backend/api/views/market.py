@@ -205,22 +205,25 @@ def _build_dividend_calendar():
             future = executor.submit(FundamentalService.get_next_dividend, s['symbol'])
             future_map[future] = s
 
-        for future in as_completed(future_map, timeout=60):
-            stock_info = future_map[future]
-            try:
-                div_info = future.result(timeout=15)
-                if div_info.get('status') != 'none':
-                    results.append({
-                        'symbol': stock_info['symbol'],
-                        'name': stock_info['name'],
-                        'date': div_info.get('date'),
-                        'days_left': div_info.get('days_left'),
-                        'plan': div_info.get('plan'),
-                        'status': div_info.get('status'),
-                        'status_desc': div_info.get('status_desc'),
-                    })
-            except Exception as e:
-                logger.warning(f"Failed to get dividend for {stock_info['symbol']}: {e}")
+        try:
+            for future in as_completed(future_map, timeout=60):
+                stock_info = future_map[future]
+                try:
+                    div_info = future.result(timeout=15)
+                    if div_info.get('status') != 'none':
+                        results.append({
+                            'symbol': stock_info['symbol'],
+                            'name': stock_info['name'],
+                            'date': div_info.get('date'),
+                            'days_left': div_info.get('days_left'),
+                            'plan': div_info.get('plan'),
+                            'status': div_info.get('status'),
+                            'status_desc': div_info.get('status_desc'),
+                        })
+                except Exception as e:
+                    logger.warning(f"Failed to get dividend for {stock_info['symbol']}: {e}")
+        except TimeoutError:
+            logger.warning(f"Dividend calendar: {len(future_map) - len(results)} futures unfinished, returning partial results")
 
     results.sort(key=lambda x: x.get('days_left') if x.get('days_left') is not None else 9999)
     try:
@@ -255,15 +258,18 @@ def get_valuation_thermometer(request):
                 future = executor.submit(FundamentalService.get_pb_water_level, s['symbol'])
                 future_map[future] = s
 
-            for future in as_completed(future_map, timeout=60):
-                stock_info = future_map[future]
-                try:
-                    result = future.result(timeout=15)
-                    if result:
-                        result['name'] = stock_info['name']
-                        results.append(result)
-                except Exception:
-                    pass
+            try:
+                for future in as_completed(future_map, timeout=60):
+                    stock_info = future_map[future]
+                    try:
+                        result = future.result(timeout=15)
+                        if result:
+                            result['name'] = stock_info['name']
+                            results.append(result)
+                    except Exception:
+                        pass
+            except TimeoutError:
+                logger.warning(f"Valuation thermometer: {len(future_map) - len(results)} futures unfinished, returning partial results")
 
         results.sort(key=lambda x: x.get('percentile', 50))
         return Response({'stocks': results})

@@ -49,15 +49,21 @@ class ApiConfig(AppConfig):
 
     @staticmethod
     def _purge_incompatible_cache():
-        """清理可能因 numpy/pandas 版本不兼容而损坏的缓存条目"""
+        """清理因 pandas 版本不兼容而损坏的缓存条目
+
+        v2 起 DataFrame 使用 JSON 序列化（不再 pickle），此方法仅作兜底。
+        旧版本号的缓存因 key 不同会被自然跳过。
+        """
         from django.core.cache import cache
-        # 仅检查已知会存储 DataFrame 的 key 前缀
+        from api.cache_manager import CacheManager
         problematic_prefixes = ('fundamentals_v7_', 'cashflow_yearly_', 'cashflow_v7_')
         try:
-            # Django 的 file-based cache 支持 keys()，但 memory cache 不支持
             all_keys = list(cache.keys('*')) if hasattr(cache, 'keys') else []
             purged = 0
             for key in all_keys:
+                # 跳过当前版本的 key（已经是 JSON 序列化，不会出问题）
+                if f"_{CacheManager.CACHE_VERSION}" in key:
+                    continue
                 if any(key.startswith(p) for p in problematic_prefixes):
                     try:
                         cache.get(key)
@@ -67,7 +73,7 @@ class ApiConfig(AppConfig):
             if purged:
                 print(f"  Purged {purged} incompatible cache entries")
         except Exception:
-            pass  # 如果 cache 不支持 keys()，跳过
+            pass
 
     def warm_valuation_cache(self):
         """后台预热常用估值、深度分析与回测缓存，不阻塞服务启动
@@ -187,12 +193,20 @@ class ApiConfig(AppConfig):
                     print(f"  consecutive failures, skipping remaining Stage 2")
                     break
 
-        # Stage 3: 财务质量（连续失败 2 次则跳过剩余）
+        # Stage 3: 财务质量（有缓存跳过，只补缺失；连续失败 2 次则跳过剩余）
         print(f"[Cache Warming] Stage 3: Warming quality cache for {len(core_symbols)} stocks...")
         consecutive_fail = 0
+        warmed = 0
+        skipped = 0
         for i, symbol in enumerate(core_symbols, 1):
             try:
+                cached = FundamentalService._cache_get_value(f"quality_v12_{symbol}")
+                # 有缓存就跳过（修复后空 quality 不会缓存，所以有缓存 = 有效数据）
+                if cached and isinstance(cached, dict) and cached:
+                    skipped += 1
+                    continue
                 FundamentalService.get_quality_data(symbol, include_shareholder=True)
+                warmed += 1
                 print(f"  [{i}/{len(core_symbols)}] {symbol} quality OK")
                 consecutive_fail = 0
             except Exception as e:
@@ -201,5 +215,6 @@ class ApiConfig(AppConfig):
                 if consecutive_fail >= 2:
                     print(f"  consecutive failures, skipping remaining Stage 3")
                     break
+        print(f"  quality warmed: {warmed}, skipped (cached): {skipped}")
 
         print("[Cache Warming] Full pre-warming completed.")

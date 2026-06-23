@@ -497,19 +497,29 @@ class FundamentalService:
                     logger.warning(f"[Quality] {name} fetch failed for {symbol}: {e}")
                     return pd.DataFrame() if 'sheet' in name or 'cashflow' in name or 'dividend' in name else 0
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
                 future_p = executor.submit(_safe_fetch, cls._fetch_profit_sheet_by_report, 'profit_sheet', symbol)
                 future_b = executor.submit(_safe_fetch, cls._fetch_balance_sheet_by_report, 'balance_sheet', symbol)
                 future_c = executor.submit(_safe_fetch, cls.get_yearly_cashflow, 'cashflow', symbol)
                 future_d = executor.submit(_safe_fetch, cls.get_historical_dividends, 'dividends', symbol)
                 future_cap = executor.submit(_safe_fetch, cls._fetch_market_cap, 'market_cap', symbol)
 
-                # 等待所有结果（单源超时 15s，防止 AkShare 挂起导致无限等待）
-                df_p = future_p.result(timeout=15)
-                df_b = future_b.result(timeout=15)
-                df_c = future_c.result(timeout=15)
-                df_d = future_d.result(timeout=15)
-                m_cap = future_cap.result(timeout=15)
+                # 等待所有结果（单源超时 20s，超时返回默认值，不炸整个 symbol）
+                def _get(future, default, name):
+                    try:
+                        return future.result(timeout=20)
+                    except concurrent.futures.TimeoutError:
+                        logger.warning(f"[Quality] {name} timed out for {symbol}, using default")
+                        return default
+                    except Exception as e:
+                        logger.warning(f"[Quality] {name} error for {symbol}: {e}, using default")
+                        return default
+
+                df_p = _get(future_p, pd.DataFrame(), 'profit_sheet')
+                df_b = _get(future_b, pd.DataFrame(), 'balance_sheet')
+                df_c = _get(future_c, pd.DataFrame(), 'cashflow')
+                df_d = _get(future_d, pd.DataFrame(), 'dividends')
+                m_cap = _get(future_cap, 0, 'market_cap')
 
             logger.info(f"[Quality] Data fetched for {symbol}, calculating metrics...")
 
@@ -519,11 +529,13 @@ class FundamentalService:
                 df_d = df_d.dropna(subset=['ann_date'])
 
             payload = Calc.calculate_quality_metrics(df_p, df_b, df_c, df_d, m_cap)
-            
+
             if include_shareholder:
                 sh_data = cls.get_shareholder_structure_data(symbol)
-                payload.update(sh_data)
-            
+                # 只在 quality 数据有效时才合并股东数据，避免缓存空 quality + 股东的脏数据
+                if payload:
+                    payload.update(sh_data)
+
             if payload:
                 cls._cache_set_value(cache_key, payload, cls.CACHE_TTL)
                 cls._cache_set_value(stale_key, payload, cls.STALE_TTL)
