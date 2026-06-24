@@ -107,7 +107,7 @@ export interface Stock {
   name: string
   symbol: string
   keywords: string[]
-  extra_links: string
+  extra_links: string[]
   industry: string
   peer_symbols: string[]
 }
@@ -160,7 +160,7 @@ export interface SentimentData {
   news: News[]
   reports: Report[]
   announcements: Announcement[]
-  extra_links?: string
+  extra_links?: string[]
   is_pending?: boolean
 }
 

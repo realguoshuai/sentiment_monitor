@@ -64,7 +64,7 @@ def init_stocks():
                 name=name,
                 symbol=symbol
             )
-            stock.set_keywords(stock_data["keywords"])
+            stock.keywords = stock_data["keywords"]
             stock.save()
             print(f"  [ADDED] {name} ({symbol})")
             added_count += 1

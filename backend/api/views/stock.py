@@ -84,11 +84,11 @@ class StockViewSet(viewsets.ModelViewSet):
             keywords = self._coerce_list(data.get('keywords', []))
             if not keywords and fixed_symbol:
                 keywords = [fixed_symbol[2:]]
-            data['keywords'] = json.dumps(keywords, ensure_ascii=False)
+            data['keywords'] = keywords
 
         if not partial or 'peer_symbols' in data:
             peer_symbols = self._normalize_peer_symbols(data.get('peer_symbols', []), fixed_symbol)
-            data['peer_symbols'] = json.dumps(peer_symbols, ensure_ascii=False)
+            data['peer_symbols'] = peer_symbols
 
         if not partial or 'industry' in data:
             data['industry'] = str(data.get('industry', '') or '').strip()

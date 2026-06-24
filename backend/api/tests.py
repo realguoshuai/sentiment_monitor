@@ -165,8 +165,8 @@ class SentimentApiTests(APITestCase):
         self.assertEqual(create_response.data['peer_symbols'], ['SZ000858', 'SH603369'])
 
         created = Stock.objects.get(symbol='SH600519')
-        self.assertEqual(created.get_keywords(), ['茅台'])
-        self.assertEqual(created.get_peer_symbols(), ['SZ000858', 'SH603369'])
+        self.assertEqual(created.keywords, ['茅台'])
+        self.assertEqual(created.peer_symbols, ['SZ000858', 'SH603369'])
         mock_trigger.assert_called_once()
         self.assertEqual(mock_trigger.call_args[0][0].symbol, 'SH600519')
 
@@ -185,8 +185,8 @@ class SentimentApiTests(APITestCase):
 
         created.refresh_from_db()
         self.assertEqual(created.industry, '高端白酒')
-        self.assertEqual(created.get_keywords(), ['茅台'])
-        self.assertEqual(created.get_peer_symbols(), ['SZ000568'])
+        self.assertEqual(created.keywords, ['茅台'])
+        self.assertEqual(created.peer_symbols, ['SZ000568'])
         self.assertEqual(mock_trigger.call_count, 1)
 
     def test_search_stocks_matches_chinese_name_when_snapshot_code_is_numeric(self):
@@ -342,7 +342,7 @@ class SentimentApiTests(APITestCase):
         mock_get_forward_metrics,
     ):
         self.stock.industry = '银行'
-        self.stock.set_peer_symbols(['SH600036'])
+        self.stock.peer_symbols = ['SH600036']
         self.stock.save(update_fields=['industry', 'peer_symbols'])
         Stock.objects.create(
             name='Peer Bank',

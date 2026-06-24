@@ -1,5 +1,3 @@
-import json
-
 from rest_framework import serializers
 from .models import Stock, SentimentData, News, Report, Announcement
 
@@ -20,8 +18,6 @@ class ReportSerializer(serializers.ModelSerializer):
     class Meta:
         model = Report
         fields = ['title', 'pub_date', 'org', 'rating', 'url']
-        # Note: rating field may be empty for reports from stock_research_report_em
-        # industry info is available but not stored in current model
 
 
 class AnnouncementSerializer(serializers.ModelSerializer):
@@ -36,8 +32,8 @@ class SentimentDataSerializer(serializers.ModelSerializer):
     announcements = AnnouncementSerializer(many=True, read_only=True)
     stock_name = serializers.CharField(source='stock.name', read_only=True)
     stock_symbol = serializers.CharField(source='stock.symbol', read_only=True)
-    extra_links = serializers.CharField(source='stock.extra_links', read_only=True)
-    
+    extra_links = serializers.JSONField(source='stock.extra_links', read_only=True)
+
     class Meta:
         model = SentimentData
         fields = [
@@ -49,15 +45,10 @@ class SentimentDataSerializer(serializers.ModelSerializer):
 
 
 class StockSerializer(serializers.ModelSerializer):
+    keywords = serializers.JSONField(required=False)
+    extra_links = serializers.JSONField(required=False)
+    peer_symbols = serializers.JSONField(required=False)
+
     class Meta:
         model = Stock
         fields = ['id', 'name', 'symbol', 'keywords', 'extra_links', 'industry', 'peer_symbols']
-
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        for field in ['keywords', 'peer_symbols']:
-            try:
-                data[field] = json.loads(data.get(field) or '[]')
-            except (TypeError, ValueError):
-                data[field] = []
-        return data

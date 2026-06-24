@@ -206,13 +206,8 @@ const allExtraLinks = computed(() => {
     { name: '全网资讯', color: 'cyan', url: `https://so.eastmoney.com/news/s?keyword=${encodeURIComponent(stockData.value.stock_name)}` },
   ]
   
-  if (stockData.value.extra_links) {
-    try {
-      const extra = JSON.parse(stockData.value.extra_links)
-      return [...base, ...extra]
-    } catch (e) {
-      console.error('Failed to parse extra_links', e)
-    }
+  if (stockData.value.extra_links?.length) {
+    return [...base, ...stockData.value.extra_links]
   }
   return base
 })

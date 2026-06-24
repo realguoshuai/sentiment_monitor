@@ -1,58 +1,47 @@
-from django.db import models
 import json
+
+from django.db import models
+
+
+class JSONTextField(models.TextField):
+    """兼容旧版 SQLite（<3.38）的 JSON 字段，底层存 TEXT，Python 行为同 JSONField。"""
+
+    def from_db_value(self, value, expression, connection):
+        if value is None:
+            return None
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return [] if self.default == list else {} if self.default == dict else None
+
+    def get_prep_value(self, value):
+        if value is None:
+            return None
+        return json.dumps(value, ensure_ascii=False)
+
+    def value_to_string(self, obj):
+        value = self.value_from_object(obj)
+        return self.get_prep_value(value)
 
 
 class Stock(models.Model):
     """监控股票"""
     name = models.CharField(max_length=50, verbose_name='股票名称')
     symbol = models.CharField(max_length=20, unique=True, verbose_name='股票代码')
-    keywords = models.TextField(default='[]', verbose_name='关键词')
-    extra_links = models.TextField(default='[]', verbose_name='额外链接')
+    keywords = JSONTextField(default=list, verbose_name='关键词')
+    extra_links = JSONTextField(default=list, verbose_name='额外链接')
     industry = models.CharField(max_length=80, blank=True, default='', verbose_name='行业')
-    peer_symbols = models.TextField(default='[]', verbose_name='同行股票代码')
+    peer_symbols = JSONTextField(default=list, verbose_name='同行股票代码')
     created_at = models.DateTimeField(auto_now_add=True)
-    valuation_config = models.TextField(default='{}', verbose_name='估值配置')
-    
+    valuation_config = JSONTextField(default=dict, verbose_name='估值配置')
+
     class Meta:
         verbose_name = '监控股票'
         verbose_name_plural = '监控股票'
         ordering = ['symbol']
-    
+
     def __str__(self):
         return f"{self.name} ({self.symbol})"
-    
-    def get_keywords(self):
-        """获取关键词列表"""
-        try:
-            return json.loads(self.keywords)
-        except (json.JSONDecodeError, TypeError):
-            return []
-    
-    def set_keywords(self, keywords_list):
-        """设置关键词列表"""
-        self.keywords = json.dumps(keywords_list)
-
-    def get_peer_symbols(self):
-        """获取同行股票代码列表"""
-        try:
-            return json.loads(self.peer_symbols)
-        except (json.JSONDecodeError, TypeError):
-            return []
-
-    def set_peer_symbols(self, peer_symbols_list):
-        """设置同行股票代码列表"""
-        self.peer_symbols = json.dumps(peer_symbols_list)
-
-    def get_valuation_config(self):
-        """获取估值配置"""
-        try:
-            return json.loads(self.valuation_config)
-        except (json.JSONDecodeError, TypeError):
-            return {}
-
-    def set_valuation_config(self, config_dict):
-        """设置估值配置"""
-        self.valuation_config = json.dumps(config_dict)
 
 
 class SentimentData(models.Model):

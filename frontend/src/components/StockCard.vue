@@ -172,13 +172,8 @@ const allLinks = computed(() => {
     { name: '公众号', url: `https://weixin.sogou.com/weixin?type=2&query=${encodeURIComponent(props.data.stock_name)}` }
   ]
   
-  if (props.data.extra_links) {
-    try {
-      const extra = JSON.parse(props.data.extra_links)
-      return [...base, ...extra]
-    } catch (e) {
-      console.error('Failed to parse extra_links', e)
-    }
+  if (props.data.extra_links?.length) {
+    return [...base, ...props.data.extra_links]
   }
   return base
 })

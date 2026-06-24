@@ -177,7 +177,7 @@ class AnalysisService:
             )
 
         industry = (stock.industry or '').strip()
-        explicit_peers = stock.get_peer_symbols()
+        explicit_peers = stock.peer_symbols
         industry_peers = []
         if industry:
             industry_peers = list(

@@ -83,7 +83,7 @@ def get_valuation_config(symbol: str) -> dict:
     try:
         stock = Stock.objects.filter(symbol=clean_symbol).first()
         if stock:
-            config = stock.get_valuation_config()
+            config = stock.valuation_config
         else:
             config = {}
     except Exception:
