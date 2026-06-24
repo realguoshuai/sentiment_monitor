@@ -215,11 +215,15 @@ onMounted(async () => {
     if (sentimentStore.stocks.length === 0) {
       await sentimentStore.fetchStocks()
     }
-    
+
     // Default to the first stock if any exist
     if (sentimentStore.stocks.length > 0) {
       selectedSymbol.value = sentimentStore.stocks[0].symbol
       await fetchDiaryData(selectedSymbol.value)
+
+      // Silently pre-fetch remaining stocks in background
+      // 不带 force，后端走缓存（历史 24h / 分红 6h），仅增量更新今日数据
+      preloadRemainingStocks()
     }
   } catch (err: any) {
     error.value = err.message || '加载初始化数据失败'
@@ -228,12 +232,9 @@ onMounted(async () => {
   }
 })
 
-const handleResize = () => {
-  if (myChart) myChart.resize()
-}
-window.addEventListener('resize', handleResize)
-
+let _preloadAbort = false
 onUnmounted(() => {
+  _preloadAbort = true
   window.removeEventListener('resize', handleResize)
   if (myChart) {
     myChart.dispose()
@@ -241,6 +242,27 @@ onUnmounted(() => {
   }
   diaryCache.value = {}
 })
+
+const handleResize = () => {
+  if (myChart) myChart.resize()
+}
+window.addEventListener('resize', handleResize)
+
+const preloadRemainingStocks = async () => {
+  const remaining = sentimentStore.stocks.filter(s => s.symbol !== selectedSymbol.value)
+  if (remaining.length === 0) return
+
+  // 并发 4 个一批，不阻塞 UI
+  for (let i = 0; i < remaining.length; i += 4) {
+    if (_preloadAbort) return
+    const batch = remaining.slice(i, i + 4)
+    await Promise.all(batch.map(s =>
+      stockApi.getMarketDiary(s.symbol, false)
+        .then(res => { diaryCache.value[s.symbol] = res.data })
+        .catch(() => { /* 单个股票预加载失败不阻塞后续 */ })
+    ))
+  }
+}
 
 const onSymbolChange = async () => {
   if (!selectedSymbol.value) return

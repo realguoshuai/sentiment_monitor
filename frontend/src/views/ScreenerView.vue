@@ -7,6 +7,7 @@
         <h1>条件选股工作台</h1>
         <span class="status-dot" :class="{ ready: screenerMeta.ready }"></span>
         <span class="topbar-meta">{{ screenerMeta.count || 0 }} 只 / {{ screenerMeta.industry_count || 0 }} 行业</span>
+        <span v-if="screenerMeta.ready && screenerMeta.snapshot_date" class="snapshot-date-label">📸 {{ screenerMeta.snapshot_date }}</span>
       </div>
       <div class="topbar-actions">
         <button class="primary-btn" type="button" @click="refreshSnapshot" :disabled="refreshing">
@@ -829,6 +830,12 @@ onUnmounted(() => {
   font-size: 0.78rem;
   color: var(--muted);
   font-weight: 600;
+}
+
+.snapshot-date-label {
+  font-size: 0.78rem;
+  color: var(--primary, #0088ff);
+  font-weight: 500;
 }
 
 /* 横向筛选条 */
