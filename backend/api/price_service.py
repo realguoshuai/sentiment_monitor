@@ -199,6 +199,18 @@ class PriceService:
         cls._cache_set(cls.REALTIME_CACHE_KEY, cached, cls.REALTIME_CACHE_TTL)
 
     @classmethod
+    def remove_from_realtime_cache(cls, symbol: str):
+        """删除股票时同步清理实时行情缓存中的旧数据"""
+        fixed = cls._fix_symbol(symbol)
+        cached = cls._cache_get(cls.REALTIME_CACHE_KEY)
+        if isinstance(cached, dict) and fixed in cached:
+            del cached[fixed]
+            if cached:
+                cls._cache_set(cls.REALTIME_CACHE_KEY, cached, cls.REALTIME_CACHE_TTL)
+            else:
+                cache.delete(cls.REALTIME_CACHE_KEY)
+
+    @classmethod
     def _build_realtime_fallback(cls, symbols, spot_fallback=None):
         spot_fallback = spot_fallback or cls._get_spot_snapshot_map(symbols)
         last_success = cls._get_last_realtime_map(symbols)

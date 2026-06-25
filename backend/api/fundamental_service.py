@@ -50,21 +50,8 @@ class FundamentalService:
     def purge_data(cls, symbol):
         symbol = cls._fix_symbol(symbol)
         try:
-            keys = [
-                f"fundamentals_v7_{symbol}",
-                f"cashflow_v7_{symbol}",
-                f"xq_yield_v1_{symbol}",
-                f"dividends_v4_{symbol}",
-                f"quality_v12_{symbol}",
-                f"quality_core_v2_{symbol}",
-                f"shareholder_history_v1_{symbol}",
-                f"northbound_history_v1_{symbol}",
-                f"margin_history_v1_{symbol}",
-            ]
-            for k in keys:
-                cache.delete(k)
-                cache.delete(f"{k}_stale")
-                cache.delete(f"{k}_refreshing")
+            from .cache_manager import CacheManager
+            CacheManager.invalidate_by_symbol(symbol, domains=['fundamental'])
             
             from .models import FundamentalSnapshot
             FundamentalSnapshot.objects.filter(symbol=symbol.upper()).delete()

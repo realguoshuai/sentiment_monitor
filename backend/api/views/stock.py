@@ -153,7 +153,14 @@ class StockViewSet(viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         """删除股票"""
         instance = self.get_object()
+        symbol = instance.symbol
         self.perform_destroy(instance)
+        # 同时清理实时行情缓存中的旧数据
+        try:
+            from ..price_service import PriceService
+            PriceService.remove_from_realtime_cache(symbol)
+        except Exception:
+            pass
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

@@ -305,9 +305,102 @@ class CacheManager:
             for key in cls._stats:
                 cls._stats[key] = 0
 
+    # ── 统一缓存键注册表 ──────────────────────────────────────────────
+    # 所有缓存键集中管理，按领域分组。invalidate / purge 等方法统一从这里读取。
+    # 每项为一个 (key_template, has_stale) 元组：
+    #   - key_template: 字符串，{symbol} 会被替换为股票代码
+    #   - has_stale: True 表示该缓存有对应的 _stale 后缀缓存
+    CACHE_REGISTRY = {
+        'fundamental': {
+            'per_symbol': [
+                'fundamentals_v7_{symbol}',
+                'cashflow_v7_{symbol}',
+                'xq_yield_v1_{symbol}',
+                'xq_quote_metrics_v2_{symbol}',
+                'xq_f10_v1_{symbol}',
+                'dividends_v4_{symbol}',
+                'cashflow_yearly_v1_{symbol}',
+                'northbound_history_v1_{symbol}',
+                'quality_v12_{symbol}',
+                'quality_core_v2_{symbol}',
+                'shareholder_overlay_v3_{symbol}',
+                'shareholder_history_v1_{symbol}',
+                'margin_history_v1_{symbol}',
+                'f_score_v8_{symbol}',
+                'forward_metrics_v2_{symbol}',
+                'next_dividend_v1_{symbol}',
+            ],
+            'global': [],
+        },
+        'price': {
+            'per_symbol': [
+                'price_history_raw_{symbol}_day',
+                'price_history_raw_{symbol}_week',
+                'price_history_raw_{symbol}_month',
+                'price_history_raw_{symbol}_day_raw',
+                'price_history_raw_{symbol}_week_raw',
+                'price_history_raw_{symbol}_month_raw',
+            ],
+            'global': [
+                'realtime_prices_last_success_v1',
+                'a_share_spot_snapshot_for_valuation',
+                'a_share_spot_snapshot_stale',
+            ],
+        },
+        'market_diary': {
+            'per_symbol': [
+                'market_diary_hist_v1_{symbol}',
+                'market_diary_today_v1_{symbol}',
+                'market_diary_div_v1_{symbol}',
+            ],
+            'global': [
+                'dividend_calendar_v1',
+            ],
+        },
+        'screener': {
+            'per_symbol': [],
+            'global': [
+                'screener_latest_roe_map_v2',
+                'screener_latest_roe_map_v2_stale',
+                'screener_latest_dividend_yield_map_v3',
+                'screener_latest_dividend_yield_map_v3_stale',
+            ],
+        },
+        'other': {
+            'per_symbol': [
+                'valuation_config_{symbol}',
+            ],
+            'global': [
+                'stock_zh_a_snapshot_v2',
+                'manual_collection_lock',
+                'manual_collection_status',
+            ],
+        },
+    }
+
+    @classmethod
+    def _resolve_key(cls, template: str, symbol: str = '') -> str:
+        """将 key 模板解析为实际缓存键（不含版本号，版本号由 invalidate 方法追加）"""
+        return template.replace('{symbol}', symbol)
+
+    @classmethod
+    def _iter_domain_keys(cls, domain: str, symbol: str = ''):
+        """遍历某个领域的所有 key 模板，返回解析后的 key 列表"""
+        domain_cfg = cls.CACHE_REGISTRY.get(domain, {})
+        for template in domain_cfg.get('per_symbol', []):
+            yield cls._resolve_key(template, symbol)
+        for template in domain_cfg.get('global', []):
+            yield template
+
+    @classmethod
+    def _iter_all_keys(cls, symbol: str = ''):
+        """遍历注册表中所有 key"""
+        for domain in cls.CACHE_REGISTRY:
+            yield from cls._iter_domain_keys(domain, symbol)
+
     @classmethod
     def invalidate(cls, key: str):
-        """使缓存失效"""
+        """使单条缓存失效"""
         main_key = f"{key}_{cls.CACHE_VERSION}"
         cache.delete(main_key)
         cache.delete(f"{main_key}_stale")
@@ -315,23 +408,22 @@ class CacheManager:
         cache.delete(f"{main_key}_refreshing")
 
     @classmethod
-    def invalidate_all(cls, symbol: str):
-        """使某个股票的所有缓存失效"""
-        keys = [
-            f"fundamentals_v7_{symbol}",
-            f"cashflow_v7_{symbol}",
-            f"xq_yield_v1_{symbol}",
-            f"xq_f10_v1_{symbol}",
-            f"dividends_v4_{symbol}",
-            f"cashflow_yearly_v1_{symbol}",
-            f"northbound_history_v1_{symbol}",
-            f"quality_v12_{symbol}",
-            f"quality_core_v2_{symbol}",
-            f"f_score_v8_{symbol}",
-            f"forward_metrics_v2_{symbol}",
-        ]
-        for key in keys:
+    def invalidate_by_symbol(cls, symbol: str, domains: list = None):
+        """使某个股票在所有领域（或指定领域列表）的缓存失效"""
+        for domain in domains or list(cls.CACHE_REGISTRY.keys()):
+            for key in cls._iter_domain_keys(domain, symbol):
+                cls.invalidate(key)
+
+    @classmethod
+    def invalidate_domain(cls, domain: str, symbol: str = ''):
+        """使某个领域的所有缓存失效（可指定单个股票）"""
+        for key in cls._iter_domain_keys(domain, symbol):
             cls.invalidate(key)
+
+    @classmethod
+    def invalidate_all(cls, symbol: str):
+        """[向后兼容] 使某个股票的所有缓存失效"""
+        cls.invalidate_by_symbol(symbol)
 
     @classmethod
     def get_df(cls, key: str):

@@ -31,7 +31,16 @@ def get_market_diary(request):
     fixed_symbol = PriceService._fix_symbol(symbol)
 
     force = request.GET.get('force', '').lower() in ('true', '1', 'yes')
+    force_deep = request.GET.get('deep', '').lower() in ('true', '1', 'yes')
     MIN_HISTORY_DAYS = 100
+
+    # force 层级：force=true 清外层缓存，deep=true 额外清内层（PriceService/FundamentalService 缓存）
+    if force_deep:
+        try:
+            from ..cache_manager import CacheManager
+            CacheManager.invalidate_by_symbol(fixed_symbol, domains=['fundamental', 'price'])
+        except Exception:
+            pass
 
     # ---- 1. 历史 K 线（长缓存 24h，不含今天） ----
     history_cache_key = f"market_diary_hist_v1_{fixed_symbol}"
@@ -44,15 +53,10 @@ def get_market_diary(request):
     if not history:
         history = None
 
-    need_deep_refresh = False
+    need_deep_refresh = force or force_deep
     if force:
-        if history and len(history) >= MIN_HISTORY_DAYS:
-            cache.delete(history_cache_key)
-            history = None
-        else:
-            need_deep_refresh = True
-            cache.delete(history_cache_key)
-            history = None
+        cache.delete(history_cache_key)
+        history = None
 
     if history is None:
         try:
@@ -182,55 +186,92 @@ def get_market_diary(request):
     return Response(result)
 
 
-def _build_dividend_calendar():
-    """构建分红日历数据（可复用，供接口和缓存预热调用）"""
-    calendar_cache_key = "dividend_calendar_v1"
+DIVIDEND_CALENDAR_KEY = "dividend_calendar_v1"
+DIVIDEND_CALENDAR_STALE_KEY = "dividend_calendar_v1_stale"
+DIVIDEND_CALENDAR_LOCK_KEY = "dividend_calendar_v1_building"
 
+
+def _build_dividend_calendar():
+    """构建分红日历数据（带锁防穿透，TTL 6h + stale 24h）"""
+    # 1. 主缓存命中
     try:
-        cached_data = cache.get(calendar_cache_key)
+        cached_data = cache.get(DIVIDEND_CALENDAR_KEY)
     except Exception:
-        cache.delete(calendar_cache_key)
+        cache.delete(DIVIDEND_CALENDAR_KEY)
         cached_data = None
     if cached_data is not None:
         return cached_data
 
-    stocks = list(Stock.objects.all().values('symbol', 'name'))
-    if not stocks:
-        return []
-
-    results = []
-    with ThreadPoolExecutor(max_workers=min(len(stocks), 8)) as executor:
-        future_map = {}
-        for s in stocks:
-            future = executor.submit(FundamentalService.get_next_dividend, s['symbol'])
-            future_map[future] = s
-
-        try:
-            for future in as_completed(future_map, timeout=60):
-                stock_info = future_map[future]
-                try:
-                    div_info = future.result(timeout=15)
-                    if div_info.get('status') != 'none':
-                        results.append({
-                            'symbol': stock_info['symbol'],
-                            'name': stock_info['name'],
-                            'date': div_info.get('date'),
-                            'days_left': div_info.get('days_left'),
-                            'plan': div_info.get('plan'),
-                            'status': div_info.get('status'),
-                            'status_desc': div_info.get('status_desc'),
-                        })
-                except Exception as e:
-                    logger.warning(f"Failed to get dividend for {stock_info['symbol']}: {e}")
-        except TimeoutError:
-            logger.warning(f"Dividend calendar: {len(future_map) - len(results)} futures unfinished, returning partial results")
-
-    results.sort(key=lambda x: x.get('days_left') if x.get('days_left') is not None else 9999)
+    # 2. 尝试 stale 兜底（如果主缓存过期但 stale 还在）
     try:
-        cache.set(calendar_cache_key, results, 3600)
-    except Exception as e:
-        logger.warning(f"Failed to cache dividend calendar: {e}")
-    return results
+        stale = cache.get(DIVIDEND_CALENDAR_STALE_KEY)
+    except Exception:
+        stale = None
+
+    # 3. 分布式锁：防止并发穿透
+    if cache.add(DIVIDEND_CALENDAR_LOCK_KEY, True, 120):
+        try:
+            # 双检：等锁期间可能已有别的进程写好了
+            try:
+                cached_data = cache.get(DIVIDEND_CALENDAR_KEY)
+            except Exception:
+                cached_data = None
+            if cached_data is not None:
+                return cached_data
+
+            stocks = list(Stock.objects.all().values('symbol', 'name'))
+            if not stocks:
+                cache.set(DIVIDEND_CALENDAR_KEY, [], 6 * 3600)
+                cache.set(DIVIDEND_CALENDAR_STALE_KEY, [], 24 * 3600)
+                return []
+
+            results = []
+            with ThreadPoolExecutor(max_workers=min(len(stocks), 8)) as executor:
+                future_map = {}
+                for s in stocks:
+                    future = executor.submit(FundamentalService.get_next_dividend, s['symbol'])
+                    future_map[future] = s
+
+                try:
+                    for future in as_completed(future_map, timeout=60):
+                        stock_info = future_map[future]
+                        try:
+                            div_info = future.result(timeout=15)
+                            if div_info.get('status') != 'none':
+                                results.append({
+                                    'symbol': stock_info['symbol'],
+                                    'name': stock_info['name'],
+                                    'date': div_info.get('date'),
+                                    'days_left': div_info.get('days_left'),
+                                    'plan': div_info.get('plan'),
+                                    'status': div_info.get('status'),
+                                    'status_desc': div_info.get('status_desc'),
+                                })
+                        except Exception as e:
+                            logger.warning(f"Failed to get dividend for {stock_info['symbol']}: {e}")
+                except TimeoutError:
+                    logger.warning(f"Dividend calendar: {len(future_map) - len(results)} futures unfinished, returning partial results")
+
+            results.sort(key=lambda x: x.get('days_left') if x.get('days_left') is not None else 9999)
+            try:
+                cache.set(DIVIDEND_CALENDAR_KEY, results, 6 * 3600)
+                cache.set(DIVIDEND_CALENDAR_STALE_KEY, results, 24 * 3600)
+            except Exception as e:
+                logger.warning(f"Failed to cache dividend calendar: {e}")
+            return results
+        finally:
+            cache.delete(DIVIDEND_CALENDAR_LOCK_KEY)
+    else:
+        # 没拿到锁：有 stale 就用 stale，没有就等一会儿重试
+        if stale is not None:
+            return stale
+        import time
+        time.sleep(2)
+        try:
+            cached_data = cache.get(DIVIDEND_CALENDAR_KEY)
+        except Exception:
+            cached_data = None
+        return cached_data if cached_data is not None else []
 
 
 @api_view(['GET'])
