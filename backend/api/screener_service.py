@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 import logging
 from math import ceil
@@ -108,17 +109,28 @@ class ScreenerService:
         except Exception:
             stale = None
 
-        roe_map: Dict[str, dict] = {}
-        for report_date in cls._annual_report_dates():
+        from .fundamental.fetcher import FundamentalFetcher as Fetcher
+
+        # 并行抓取各报告期 ROE 数据，墙钟从串行 ~3s 降到 ~1s
+        def _fetch_roe(report_date: str):
             try:
-                from .fundamental.fetcher import FundamentalFetcher as Fetcher
                 df = Fetcher.call_akshare(ak.stock_yjbb_em, date=report_date, use_no_proxy=True)
+                return report_date, df
             except Exception as exc:
                 logger.warning("Screener ROE fetch failed for report date %s: %s", report_date, exc)
-                continue
+                return report_date, None
 
-            if df is None or df.empty:
-                continue
+        date_dfs: Dict[str, pd.DataFrame] = {}
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = [pool.submit(_fetch_roe, rd) for rd in cls._annual_report_dates()]
+            for future in as_completed(futures):
+                rd, df = future.result()
+                if df is not None and not df.empty:
+                    date_dfs[rd] = df
+
+        roe_map: Dict[str, dict] = {}
+        for report_date in sorted(date_dfs.keys(), reverse=True):
+            df = date_dfs[report_date]
 
             code_col = cls._first_existing_column(df, ['股票代码', '代码'])
             roe_col = cls._first_existing_column(df, ['净资产收益率'])
@@ -184,22 +196,32 @@ class ScreenerService:
         except Exception:
             stale = None
 
+        from .fundamental.fetcher import FundamentalFetcher as Fetcher
+
+        # 并行抓取各报告期分红数据（8 期串行 ≈ 16s → 并行 ≈ 3s）
+        def _fetch_dividend(report_date_str: str):
+            try:
+                df = Fetcher.call_akshare(ak.stock_fhps_em, date=report_date_str, use_no_proxy=True)
+                return report_date_str, df
+            except Exception as exc:
+                logger.warning("Screener dividend fetch failed for report date %s: %s", report_date_str, exc)
+                return report_date_str, None
+
+        date_dfs: Dict[str, pd.DataFrame] = {}
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = [pool.submit(_fetch_dividend, rds) for rds in cls._recent_report_dates()]
+            for future in as_completed(futures):
+                rds, df = future.result()
+                if df is not None and not df.empty:
+                    date_dfs[rds] = df
+
         payout_yearly_cash: Dict[str, Dict[int, float]] = {}
         latest_event_dates: Dict[str, pd.Timestamp] = {}
         today = timezone.localdate()
 
-        for report_date_str in cls._recent_report_dates():
+        for report_date_str in sorted(date_dfs.keys(), reverse=True):
+            df = date_dfs[report_date_str]
             report_year = int(report_date_str[:4])
-            try:
-                from .fundamental.fetcher import FundamentalFetcher as Fetcher
-                df = Fetcher.call_akshare(ak.stock_fhps_em, date=report_date_str, use_no_proxy=True)
-            except Exception as exc:
-                logger.warning("Screener dividend fetch failed for report date %s: %s", report_date_str, exc)
-                continue
-
-            if df is None or df.empty:
-                continue
-
             code_col = cls._first_existing_column(df, ['代码', '股票代码'])
             cash_col = cls._first_existing_column(df, ['现金分红-现金分红比例'])
             if not code_col or not cash_col:
@@ -563,6 +585,7 @@ class ScreenerService:
         pe_col = cls._first_existing_column(frame, ['市盈率-动态', '市盈率'])
         pb_col = cls._first_existing_column(frame, ['市净率'])
         industry_col = cls._first_existing_column(frame, ['所处行业', '行业'])
+        dividend_yield_col = cls._first_existing_column(frame, ['股息率', '股息率(%)', 'dividend_yield'])
 
         if not code_col:
             raise KeyError('A 股快照缺少代码字段，无法生成选股快照。')
@@ -626,13 +649,22 @@ class ScreenerService:
             if pb == 0:
                 pb = safe_float(realtime.get('pb'))
 
-            dividend_payload = dividend_map.get(symbol, {})
-            dividend_cash_total = safe_float(dividend_payload.get('cash_div_total'))
-            dividend_yield = 0.0
-            if price > 0 and dividend_cash_total > 0:
-                dividend_yield = (dividend_cash_total / price) * 100
-            elif dividend_payload:
-                dividend_yield = safe_float(dividend_payload.get('dividend_yield'))
+            # 股息率来源优先级：上游实时（腾讯 field 49）> 实时行情（雪球）> 历史分红估算
+            upstream_dy = safe_float(row.get(dividend_yield_col)) if dividend_yield_col else 0.0
+            realtime_dy = safe_float(realtime.get('dividend_yield'))
+            if upstream_dy > 0:
+                dividend_yield = upstream_dy
+            elif realtime_dy > 0:
+                dividend_yield = realtime_dy
+            else:
+                dividend_payload = dividend_map.get(symbol, {})
+                dividend_cash_total = safe_float(dividend_payload.get('cash_div_total'))
+                if price > 0 and dividend_cash_total > 0:
+                    dividend_yield = (dividend_cash_total / price) * 100
+                elif dividend_payload:
+                    dividend_yield = safe_float(dividend_payload.get('dividend_yield'))
+                else:
+                    dividend_yield = 0.0
             industry = ''
             if industry_col:
                 industry = str(row.get(industry_col) or '').strip()
@@ -747,10 +779,14 @@ class ScreenerService:
             code = match.group(1)  # sh600519
             code_6 = code[2:] if len(code) >= 8 else code
 
+            if len(fields) < 50:
+                continue
+
             price = safe_float(fields[3])
             pe = safe_float(fields[39])
             pb = safe_float(fields[46])
             market_cap = safe_float(fields[45]) * 1e8
+            dividend_yield = safe_float(fields[49])
 
             if price <= 0:
                 continue
@@ -767,6 +803,7 @@ class ScreenerService:
                 '总市值': market_cap,
                 '市盈率-动态': pe,
                 '市净率': pb,
+                '股息率': dividend_yield,
             })
         return results
 
@@ -844,15 +881,8 @@ class ScreenerService:
 
     @classmethod
     def refresh_snapshot(cls) -> dict:
-        # 清除 ROE 和分红缓存，确保使用最新年报数据
-        try:
-            cache.delete(cls.ROE_CACHE_KEY)
-            cache.delete(cls.ROE_STALE_KEY)
-            cache.delete(cls.DIVIDEND_CACHE_KEY)
-            cache.delete(cls.DIVIDEND_STALE_KEY)
-            logger.info("Cleared ROE and dividend caches before refresh")
-        except Exception as e:
-            logger.warning("Failed to clear caches: %s", e)
+        # 不清除 ROE/分红缓存，利用 12h TTL + stale 兜底机制避免重复抓取。
+        # 如需强制刷新数据，清除 ROE_CACHE_KEY / DIVIDEND_CACHE_KEY 即可。
 
         # 1. 腾讯 API 全量快照（Baostock 列表 + 腾讯批量查询，约 1-2 秒）
         df = cls._fetch_tencent_snapshot()

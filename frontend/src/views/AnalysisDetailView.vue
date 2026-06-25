@@ -270,13 +270,11 @@ const goDashboard = () => {
 };
 
 onMounted(async () => {
-  if (sentimentStore.stocks.length === 0) {
-    await sentimentStore.fetchStocks();
-  }
-  if (sentimentStore.sentimentData.length === 0) {
-    await sentimentStore.fetchLatestSentiment();
-  }
-  await fetchMainData();
+  await Promise.all([
+    sentimentStore.stocks.length === 0 ? sentimentStore.fetchStocks() : Promise.resolve(),
+    sentimentStore.sentimentData.length === 0 ? sentimentStore.fetchLatestSentiment() : Promise.resolve(),
+    fetchMainData(),
+  ]);
 });
 
 const fetchMainData = async () => {

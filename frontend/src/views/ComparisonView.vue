@@ -772,7 +772,7 @@ function toggleStock(symbol: string) {
     if (selectedSymbols.value.length >= 2) {
       selectedSymbols.value = [selectedSymbols.value[1], fixed]
     } else {
-      selectedSymbols.value.push(fixed)
+      selectedSymbols.value = [...selectedSymbols.value, fixed]
     }
   }
 }
@@ -1530,9 +1530,12 @@ const handleResize = () => {
 }
 
 onMounted(async () => {
-  if (!store.stocks.length) await store.fetchStocks()
-  if (!store.sentimentData.length) await store.fetchLatestSentiment()
-  // 确保 store 有实时价格数据（兜底用）
+  // 并行加载 store 数据，不阻塞
+  await Promise.all([
+    store.stocks.length ? Promise.resolve() : store.fetchStocks(),
+    store.sentimentData.length ? Promise.resolve() : store.fetchLatestSentiment(),
+  ])
+  // 实时价格不阻塞（兜底用，没有也不影响核心功能）
   if (!Object.keys(store.realtimePrices).length) {
     store.fetchRealtimePrices().catch(() => {})
   }
@@ -1550,7 +1553,7 @@ onUnmounted(() => {
 
 watch([selectedSymbols, currentTimeScale], () => {
   fetchComparisonData()
-}, { deep: true, immediate: true })
+}, { immediate: true })
 
 watch([currentMetricMode, currentCalcMode], () => {
   remapComparisonData()

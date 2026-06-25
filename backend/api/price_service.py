@@ -3,6 +3,7 @@ from requests.adapters import HTTPAdapter
 import re
 import logging
 import threading
+import time
 import pandas as pd
 from datetime import datetime
 from django.utils import timezone
@@ -965,13 +966,18 @@ class PriceService:
                 single_cache_key = cls._historical_single_cache_key(orig_sym, requested_period, period, limit, normalize=normalize)
                 single_stale_cache_key = cls._historical_single_stale_cache_key(orig_sym, requested_period, period, limit, normalize=normalize)
                 try:
+                    _t0 = time.time()
                     hist = cls._build_single_historical_data(
                         sym, requested_period, period, limit, rt_data, spot_fallback, normalize=normalize, skip_cache=skip_cache
                     )
+                    elapsed = time.time() - _t0
+                    if elapsed > 2:
+                        logger.warning("Slow historical build for %s: %.1fs", sym, elapsed)
                     if hist:
-                        s_ttl = 3600 * 2 if period == 'day' else 3600 * 12
+                        s_ttl = 3600 * 12
                         cls._cache_set(single_cache_key, hist, s_ttl)
                         cls._cache_set(single_stale_cache_key, hist, 7 * 24 * 3600)
+                        logger.debug("Built historical data for %s (%d pts, %s)", sym, len(hist), requested_period)
                     return sym, hist
                 except Exception as e:
                     logger.error(f"PriceService Task Error for {sym}: {e}")
@@ -991,8 +997,6 @@ class PriceService:
                 if stale_data is not None:
                     return stale_data
             ttl = 3600 * 12
-            if period == 'day':
-                ttl = 3600 * 2
             cls._cache_set(cache_key, results, ttl)
             cls._cache_set(stale_cache_key, results, 7 * 24 * 3600)
         else:

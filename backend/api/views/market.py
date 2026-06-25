@@ -4,6 +4,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime as _dt
 
+import time
 from django.core.cache import cache
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -13,6 +14,7 @@ from ..price_service import PriceService
 from ..fundamental_service import FundamentalService
 
 logger = logging.getLogger(__name__)
+_diary_timer = logging.getLogger('api.diary_timing')
 
 
 @api_view(['GET'])
@@ -29,12 +31,11 @@ def get_market_diary(request):
         return Response({'error': 'No symbol provided'}, status=400)
 
     fixed_symbol = PriceService._fix_symbol(symbol)
+    _t0 = time.time()
 
     force = request.GET.get('force', '').lower() in ('true', '1', 'yes')
     force_deep = request.GET.get('deep', '').lower() in ('true', '1', 'yes')
-    MIN_HISTORY_DAYS = 100
 
-    # force 层级：force=true 清外层缓存，deep=true 额外清内层（PriceService/FundamentalService 缓存）
     if force_deep:
         try:
             from ..cache_manager import CacheManager
@@ -42,104 +43,96 @@ def get_market_diary(request):
         except Exception:
             pass
 
-    # ---- 1. 历史 K 线（长缓存 24h，不含今天） ----
+    # ---- 统一缓存键 ----
     history_cache_key = f"market_diary_hist_v1_{fixed_symbol}"
-    try:
-        history = cache.get(history_cache_key)
-    except Exception:
-        cache.delete(history_cache_key)
-        history = None
+    today_cache_key = f"market_diary_today_v1_{fixed_symbol}"
+    div_cache_key = f"market_diary_div_v1_{fixed_symbol}"
 
-    if not history:
-        history = None
-
-    need_deep_refresh = force or force_deep
+    # ---- 先检查所有缓存（无网络开销） ----
     if force:
-        cache.delete(history_cache_key)
-        history = None
+        for k in (history_cache_key, today_cache_key, div_cache_key):
+            try:
+                cache.delete(k)
+            except Exception:
+                pass
+        history = today_data = next_dividend = None
+    else:
+        history = cache.get(history_cache_key)
+        today_data = cache.get(today_cache_key)
+        next_dividend = cache.get(div_cache_key)
 
-    if history is None:
-        try:
-            history_dict = PriceService.get_historical_data(
-                [fixed_symbol], limit=250, period='day', normalize=False,
-                skip_cache=need_deep_refresh,
-            )
-            history = history_dict.get(fixed_symbol, [])
-            if history:
-                from datetime import date as _date
-                today_str = _date.today().isoformat()
-                if history[-1].get('date', '')[:10] == today_str:
-                    history = history[:-1]
-                cache.set(history_cache_key, history, 24 * 3600)
-        except Exception as e:
-            logger.error(f"Failed to fetch historical data for {fixed_symbol}: {e}")
-            history = []
-
-    if not history:
-        history = []
-
-    # ---- 2. 当日实时数据（短缓存） ----
     now = _dt.now()
     is_trading_hour = (now.weekday() < 5 and (
-        (_dt.strptime('09:30', '%H:%M').time() <= now.time() <= _dt.strptime('15:00', '%H:%M').time())
+        _dt.strptime('09:30', '%H:%M').time() <= now.time() <= _dt.strptime('15:00', '%H:%M').time()
     ))
     today_cache_ttl = 30 if is_trading_hour else 3600
 
-    today_cache_key = f"market_diary_today_v1_{fixed_symbol}"
-    if force:
-        cache.delete(today_cache_key)
-        today_data = None
-    else:
-        try:
-            today_data = cache.get(today_cache_key)
-        except Exception:
-            cache.delete(today_cache_key)
-            today_data = None
+    # ---- 并行获取缺失数据（Wall-time ≈ max(slowest call)） ----
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {}
 
-    if today_data is None:
-        today_data = {}
-        try:
-            today_dict = PriceService.get_historical_data([fixed_symbol], limit=1, period='day', normalize=False)
-            today_list = today_dict.get(fixed_symbol, [])
-            if today_list:
-                today_data = dict(today_list[-1])
-        except Exception:
-            pass
+        if history is None:
+            futures['hist'] = pool.submit(
+                PriceService.get_historical_data,
+                [fixed_symbol], 250, 'day', False, force or force_deep,
+            )
 
-        try:
-            rt = PriceService.get_realtime_price([fixed_symbol], fetch_fundamentals=False)
-            rt_data = rt.get(fixed_symbol, {})
-            today_data['pe'] = rt_data.get('pe', 0.0)
-            today_data['pb'] = rt_data.get('pb', 0.0)
-        except Exception:
-            today_data.setdefault('pe', 0.0)
-            today_data.setdefault('pb', 0.0)
+        if today_data is None:
+            futures['today_kline'] = pool.submit(
+                PriceService.get_historical_data,
+                [fixed_symbol], 1, 'day', False, False,
+            )
+            futures['today_rt'] = pool.submit(
+                PriceService.get_realtime_price,
+                [fixed_symbol], False,
+            )
 
-        try:
-            dy = FundamentalService.get_xueqiu_dividend_yield(fixed_symbol)
-            today_data['dividend_yield'] = dy if dy > 0 else 0.0
-        except Exception:
-            today_data.setdefault('dividend_yield', 0.0)
+        if next_dividend is None:
+            futures['div'] = pool.submit(
+                FundamentalService.get_next_dividend,
+                fixed_symbol,
+            )
 
-        cache.set(today_cache_key, today_data, today_cache_ttl)
+        # 收集结果
+        if 'hist' in futures:
+            try:
+                hist_res = futures['hist'].result()
+                history = hist_res.get(fixed_symbol, [])
+                if history:
+                    from datetime import date as _date
+                    today_str = _date.today().isoformat()
+                    if history[-1].get('date', '')[:10] == today_str:
+                        history = history[:-1]
+                    cache.set(history_cache_key, history, 24 * 3600)
+            except Exception as e:
+                logger.error(f"Failed to fetch historical data for {fixed_symbol}: {e}")
+                history = []
+        if not history:
+            history = []
 
-    # ---- 3. 分红倒计时（中缓存 6h） ----
-    div_cache_key = f"market_diary_div_v1_{fixed_symbol}"
-    if force:
-        cache.delete(div_cache_key)
-        next_dividend = None
-    else:
-        try:
-            next_dividend = cache.get(div_cache_key)
-        except Exception:
-            cache.delete(div_cache_key)
-            next_dividend = None
+        if 'today_kline' in futures:
+            try:
+                today_kline = futures['today_kline'].result().get(fixed_symbol, [])
+                today_rt = futures['today_rt'].result().get(fixed_symbol, {})
+                today_data = dict(today_kline[-1]) if today_kline else {}
+                today_data['pe'] = today_rt.get('pe', 0.0)
+                today_data['pb'] = today_rt.get('pb', 0.0)
+                today_data['dividend_yield'] = today_rt.get('dividend_yield', 0.0)
+                cache.set(today_cache_key, today_data, today_cache_ttl)
+            except Exception as e:
+                logger.warning(f"Failed to fetch today data for {fixed_symbol}: {e}")
+                today_data = {}
+        if not today_data:
+            today_data = {}
 
-    if next_dividend is None:
-        try:
-            next_dividend = FundamentalService.get_next_dividend(fixed_symbol)
-            cache.set(div_cache_key, next_dividend, 6 * 3600)
-        except Exception:
+        if 'div' in futures:
+            try:
+                next_dividend = futures['div'].result()
+                cache.set(div_cache_key, next_dividend, 6 * 3600)
+            except Exception as e:
+                logger.warning(f"Failed to fetch next dividend for {fixed_symbol}: {e}")
+                next_dividend = {}
+        if not next_dividend:
             next_dividend = {}
 
     # ---- 4. 拼接历史 + 今天，计算 MA20 ----
@@ -183,6 +176,9 @@ def get_market_diary(request):
         'next_dividend': next_dividend,
         'history': history_with_ma,
     }
+    elapsed = time.time() - _t0
+    if elapsed > 1:
+        _diary_timer.warning("Slow market diary for %s: %.1fs", fixed_symbol, elapsed)
     return Response(result)
 
 
@@ -265,7 +261,6 @@ def _build_dividend_calendar():
         # 没拿到锁：有 stale 就用 stale，没有就等一会儿重试
         if stale is not None:
             return stale
-        import time
         time.sleep(2)
         try:
             cached_data = cache.get(DIVIDEND_CALENDAR_KEY)

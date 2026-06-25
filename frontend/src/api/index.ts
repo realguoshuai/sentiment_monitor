@@ -250,7 +250,7 @@ export const stockApi = {
   getComparisonHistorical: (symbols: string[], limit: number = 30, period: string = 'day') =>
     api.get<Record<string, any[]>>(
       `/sentiment/comparison_historical/?symbols=${symbols.join(',')}&limit=${limit}&period=${period}`,
-      { timeout: 60000 },
+      { timeout: 30000 },
     ),
   searchStocks: (q: string) => api.get<any[]>('/sentiment/search/', { params: { q } }),
   getAnalysis: (symbol: string) => api.get<any>('/sentiment/analysis/', { params: { symbol }, timeout: 60000 }),
