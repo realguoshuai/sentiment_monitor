@@ -57,9 +57,30 @@ def get_market_diary(request):
                 pass
         history = today_data = next_dividend = None
     else:
-        history = cache.get(history_cache_key)
-        today_data = cache.get(today_cache_key)
-        next_dividend = cache.get(div_cache_key)
+        try:
+            history = cache.get(history_cache_key)
+        except Exception:
+            try:
+                cache.delete(history_cache_key)
+            except Exception:
+                pass
+            history = None
+        try:
+            today_data = cache.get(today_cache_key)
+        except Exception:
+            try:
+                cache.delete(today_cache_key)
+            except Exception:
+                pass
+            today_data = None
+        try:
+            next_dividend = cache.get(div_cache_key)
+        except Exception:
+            try:
+                cache.delete(div_cache_key)
+            except Exception:
+                pass
+            next_dividend = None
 
     now = _dt.now()
     is_trading_hour = (now.weekday() < 5 and (
@@ -113,17 +134,23 @@ def get_market_diary(request):
         if 'today_kline' in futures:
             try:
                 today_kline = futures['today_kline'].result().get(fixed_symbol, [])
-                today_rt = futures['today_rt'].result().get(fixed_symbol, {})
                 today_data = dict(today_kline[-1]) if today_kline else {}
-                today_data['pe'] = today_rt.get('pe', 0.0)
-                today_data['pb'] = today_rt.get('pb', 0.0)
-                today_data['dividend_yield'] = today_rt.get('dividend_yield', 0.0)
-                cache.set(today_cache_key, today_data, today_cache_ttl)
             except Exception as e:
-                logger.warning(f"Failed to fetch today data for {fixed_symbol}: {e}")
+                logger.warning(f"Failed to fetch today kline for {fixed_symbol}: {e}")
                 today_data = {}
-        if not today_data:
-            today_data = {}
+
+        if 'today_rt' in futures:
+            try:
+                today_rt = futures['today_rt'].result().get(fixed_symbol, {})
+                today_data.setdefault('pe', today_rt.get('pe', 0.0))
+                today_data.setdefault('pb', today_rt.get('pb', 0.0))
+                today_data.setdefault('dividend_yield', today_rt.get('dividend_yield', 0.0))
+            except Exception as e:
+                logger.warning(f"Failed to fetch realtime data for {fixed_symbol}: {e}")
+
+        if 'today_kline' in futures or 'today_rt' in futures:
+            if today_data:
+                cache.set(today_cache_key, today_data, today_cache_ttl)
 
         if 'div' in futures:
             try:
