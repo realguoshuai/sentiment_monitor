@@ -954,7 +954,7 @@ async function fetchComparisonData(force = false) {
         else if (scale === '1y_week') { limit = 52; period = '1y_week' }
         else if (scale === '5y') { limit = 60; period = 'month' }
         else if (scale === '10y') { limit = 120; period = 'month' }
-        histPromise = stockApi.getComparisonHistorical([ ...symbols ], limit, period)
+        histPromise = stockApi.getComparisonHistorical([ ...symbols ], limit, period, force)
       }
 
       const [rtLastResp, histResp] = await Promise.allSettled([

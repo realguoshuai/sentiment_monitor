@@ -51,8 +51,10 @@ def comparison_historical(request):
     allowed_periods = ('day', 'week', 'month', 'year', '1d', '30d', '1y_week', '5y', '10y', 'annual')
     if period not in allowed_periods:
         return Response({'error': f'period 参数无效，允许值: {", ".join(allowed_periods)}'}, status=400)
+    skip_cache = request.GET.get('skip_cache', '').lower() in ('1', 'true', 'yes')
+    logger.info(f"[comparison_historical] symbols={symbols}, limit={limit}, period={period}, skip_cache={skip_cache}")
     try:
-        data = PriceService.get_historical_data(symbols, limit, period)
+        data = PriceService.get_historical_data(symbols, limit, period, skip_cache=skip_cache)
         return Response(data)
     except Exception as e:
         logger.error(f"comparison_historical error: {e}")

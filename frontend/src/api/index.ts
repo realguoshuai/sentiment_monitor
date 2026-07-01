@@ -247,10 +247,10 @@ export const stockApi = {
       `/sentiment/comparison_realtime/?symbols=${symbols.join(',')}&type=${type}${force ? '&force=1' : ''}`,
       { timeout: type === 'minute' ? 30000 : 15000 },
     ),
-  getComparisonHistorical: (symbols: string[], limit: number = 30, period: string = 'day') =>
+  getComparisonHistorical: (symbols: string[], limit: number = 30, period: string = 'day', force: boolean = false) =>
     api.get<Record<string, any[]>>(
-      `/sentiment/comparison_historical/?symbols=${symbols.join(',')}&limit=${limit}&period=${period}`,
-      { timeout: 30000 },
+      `/sentiment/comparison_historical/?symbols=${symbols.join(',')}&limit=${limit}&period=${period}${force ? '&skip_cache=1' : ''}`,
+      { timeout: 60000 },
     ),
   searchStocks: (q: string) => api.get<any[]>('/sentiment/search/', { params: { q } }),
   getAnalysis: (symbol: string) => api.get<any>('/sentiment/analysis/', { params: { symbol }, timeout: 60000 }),

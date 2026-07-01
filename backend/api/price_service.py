@@ -441,7 +441,7 @@ class PriceService:
     def _historical_single_cache_key(cls, symbol, requested_period, period, limit, normalize=True):
         fixed_symbol = cls._fix_symbol(symbol)
         suffix = '' if normalize else '_raw'
-        return f"hist_single_v8_{fixed_symbol}_{requested_period}_{period}_{limit}{suffix}"
+        return f"hist_single_v9_qfq_{fixed_symbol}_{requested_period}_{period}_{limit}{suffix}"
 
     @classmethod
     def _historical_single_stale_cache_key(cls, symbol, requested_period, period, limit, normalize=True):
@@ -623,13 +623,13 @@ class PriceService:
         fetch_limit = limit * 12 if period == 'year' else limit
         lower_symbol = fixed_symbol.lower()
         
-        # [物理对齐策略] 使用不复权 (none) 序列，确保跨标的比值的物理真实性
-        # 我们手动将其放缩到今日价格，以实现类似前复权的平滑效果
-        url_none = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={lower_symbol},{fetch_period},,,{fetch_limit},none"
+        # [前复权策略] 使用 qfq（前复权）序列，分红/送转已自动修正历史价格
+        # 确保跨标的比值的可比性，消除分红造成的价格跳空
+        url_kline = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={lower_symbol},{fetch_period},,,{fetch_limit},qfq"
         
         # --- [增量缓存加速核心逻辑] ---
         # 缓存键包含周期，但不包含 limit (因为我们总是缓存全量并按需裁剪)
-        raw_cache_key = f"price_history_raw_{fixed_symbol}_{fetch_period}" + ('' if normalize else '_raw')
+        raw_cache_key = f"price_history_raw_qfq_{fixed_symbol}_{fetch_period}" + ('' if normalize else '_raw')
         cached_raw = None if skip_cache else cls._cache_get(raw_cache_key)
 
         price_list = []
@@ -647,10 +647,11 @@ class PriceService:
                  pass # 已是最新的
             else:
                  # 增量抓取：只需抓取极少量数据进行补齐 (腾讯接口 limit 设置小一点)
-                 incremental_url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={lower_symbol},{fetch_period},,,5,none"
+                 incremental_url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={lower_symbol},{fetch_period},,,5,qfq"
                  try:
                      resp = cls._session.get(incremental_url, timeout=(8, 15), proxies={"http": None, "https": None})
-                     inc_data = resp.json().get('data', {}).get(lower_symbol, {}).get(fetch_period) or []
+                     inc_data = resp.json().get('data', {}).get(lower_symbol, {}).get('qfqday') or \
+                               resp.json().get('data', {}).get(lower_symbol, {}).get('day') or []
                      if inc_data:
                          new_points = []
                          for day in inc_data:
@@ -672,10 +673,11 @@ class PriceService:
         # 如果缓存缺失，执行全量抓取
         if not price_list:
             try:
-                resp = cls._session.get(url_none, timeout=8, proxies={"http": None, "https": None})
+                resp = cls._session.get(url_kline, timeout=8, proxies={"http": None, "https": None})
                 data_json = resp.json()
                 data_res = data_json.get('data', {}).get(lower_symbol, {})
-                days = data_res.get(fetch_period) or []
+                # 前复权 (qfq) 数据在 qfqday 键下；none/bfq 在 day 键下
+                days = data_res.get('qfqday') or data_res.get('day') or []
                 for day in days:
                     if len(day) < 3: continue
                     volume = safe_float(day[5]) if len(day) >= 6 else 0.0
@@ -929,7 +931,7 @@ class PriceService:
 
         norm_symbols = [cls._fix_symbol(s) for s in symbols]
         suffix = '' if normalize else '_raw'
-        cache_key = f"hist_v17_{'_'.join(sorted(norm_symbols))}_{requested_period}_{period}_{limit}{suffix}"
+        cache_key = f"hist_v18_qfq_{'_'.join(sorted(norm_symbols))}_{requested_period}_{period}_{limit}{suffix}"
         stale_cache_key = f"{cache_key}_stale"
         if not skip_cache:
             cached_data = cls._cache_get(cache_key)
