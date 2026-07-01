@@ -85,7 +85,7 @@ class BaostockProvider:
                 start_date=start_date,
                 end_date=end_date,
                 frequency="d",
-                adjustflag="3",  # 不复权
+                adjustflag="2",  # 前复权 (qfq) — 与腾讯数据源保持一致
             )
             if result.error_code != '0':
                 logger.warning("Baostock kline error for %s: %s", symbol, result.error_msg)

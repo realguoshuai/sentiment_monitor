@@ -793,6 +793,9 @@ class FundamentalCalculator:
         df_fund['NOTICE_DATE'] = pd.to_datetime(df_fund['NOTICE_DATE'], errors='coerce')
         df_fund = df_fund.dropna(subset=['NOTICE_DATE']).sort_values('NOTICE_DATE')
         df_prices = df_prices.sort_values('date_dt')
+        # 统一 datetime 精度，避免 merge_asof 因 dtype 不一致报错
+        df_prices['date_dt'] = df_prices['date_dt'].astype('datetime64[ns]')
+        df_fund['NOTICE_DATE'] = df_fund['NOTICE_DATE'].astype('datetime64[ns]')
         df_merged = pd.merge_asof(df_prices, df_fund, left_on='date_dt', right_on='NOTICE_DATE', direction='backward')
         df_merged['ttm_profit'] = df_merged['ttm_profit'].fillna(0)
         df_merged['TOTAL_PARENT_EQUITY'] = df_merged['TOTAL_PARENT_EQUITY'].fillna(0)

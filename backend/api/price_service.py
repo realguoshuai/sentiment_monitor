@@ -441,7 +441,7 @@ class PriceService:
     def _historical_single_cache_key(cls, symbol, requested_period, period, limit, normalize=True):
         fixed_symbol = cls._fix_symbol(symbol)
         suffix = '' if normalize else '_raw'
-        return f"hist_single_v9_qfq_{fixed_symbol}_{requested_period}_{period}_{limit}{suffix}"
+        return f"hist_single_v10_qfq_{fixed_symbol}_{requested_period}_{period}_{limit}{suffix}"
 
     @classmethod
     def _historical_single_stale_cache_key(cls, symbol, requested_period, period, limit, normalize=True):
@@ -711,18 +711,11 @@ class PriceService:
         # 截断到请求的 limit
         price_list = price_list[-fetch_limit:]
 
-        # [锚定归一化算法] 强制锚定当前价（仅对冲对比页需要，盯盘日记用原始收盘价）
-        if normalize:
-            rt = rt_data.get(fixed_symbol, {})
-            fallback = spot_fallback.get(fixed_symbol, {})
-            curr_price = rt.get('price', 0) or fallback.get('price', 0)
+        # [前复权数据无需锚定归一化]
+        # qfq 已经自动修正了所有分红/送转的历史价格，序列内部一致。
+        # 不再用实时价等比缩放整个序列——这会扭曲历史价格。
+        # 实时价已在 currentDiff / spread 中独立展示，不影响历史走势。
 
-            if curr_price > 0 and price_list:
-                last_hist_price = price_list[-1]['price']
-                scale_factor = curr_price / last_hist_price
-                for item in price_list:
-                    item['price'] = round(item['price'] * scale_factor, 4)
-        
         df_prices = pd.DataFrame(price_list)
         try:
             df_fund = FundamentalService.get_ttm_fundamentals(fixed_symbol)
@@ -931,7 +924,7 @@ class PriceService:
 
         norm_symbols = [cls._fix_symbol(s) for s in symbols]
         suffix = '' if normalize else '_raw'
-        cache_key = f"hist_v18_qfq_{'_'.join(sorted(norm_symbols))}_{requested_period}_{period}_{limit}{suffix}"
+        cache_key = f"hist_v19_qfq_{'_'.join(sorted(norm_symbols))}_{requested_period}_{period}_{limit}{suffix}"
         stale_cache_key = f"{cache_key}_stale"
         if not skip_cache:
             cached_data = cls._cache_get(cache_key)
