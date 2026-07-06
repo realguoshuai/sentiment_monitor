@@ -438,14 +438,13 @@ class PriceService:
         return format_symbol(s)
 
     @classmethod
-    def _historical_single_cache_key(cls, symbol, requested_period, period, limit, normalize=True):
+    def _historical_single_cache_key(cls, symbol, requested_period, period, limit):
         fixed_symbol = cls._fix_symbol(symbol)
-        suffix = '' if normalize else '_raw'
-        return f"hist_single_v10_qfq_{fixed_symbol}_{requested_period}_{period}_{limit}{suffix}"
+        return f"hist_single_v10_qfq_{fixed_symbol}_{requested_period}_{period}_{limit}"
 
     @classmethod
-    def _historical_single_stale_cache_key(cls, symbol, requested_period, period, limit, normalize=True):
-        return f"{cls._historical_single_cache_key(symbol, requested_period, period, limit, normalize=normalize)}_stale"
+    def _historical_single_stale_cache_key(cls, symbol, requested_period, period, limit):
+        return f"{cls._historical_single_cache_key(symbol, requested_period, period, limit)}_stale"
 
     @classmethod
     def _intraday_single_cache_key(cls, symbol):
@@ -615,7 +614,7 @@ class PriceService:
         return price_list
 
     @classmethod
-    def _build_single_historical_data(cls, symbol, requested_period, period, limit, rt_data, spot_fallback, normalize=True, skip_cache=False):
+    def _build_single_historical_data(cls, symbol, requested_period, period, limit, rt_data, spot_fallback, skip_cache=False):
         fixed_symbol = cls._fix_symbol(symbol)
         
         # 映射周期: Tencent 使用 day, week, month
@@ -629,7 +628,7 @@ class PriceService:
         
         # --- [增量缓存加速核心逻辑] ---
         # 缓存键包含周期，但不包含 limit (因为我们总是缓存全量并按需裁剪)
-        raw_cache_key = f"price_history_raw_qfq_{fixed_symbol}_{fetch_period}" + ('' if normalize else '_raw')
+        raw_cache_key = f"price_history_raw_qfq_{fixed_symbol}_{fetch_period}"
         cached_raw = None if skip_cache else cls._cache_get(raw_cache_key)
 
         price_list = []
@@ -902,7 +901,7 @@ class PriceService:
         return history
 
     @classmethod
-    def get_historical_data(cls, symbols, limit=30, period='day', normalize=True, skip_cache=False):
+    def get_historical_data(cls, symbols, limit=30, period='day', skip_cache=False):
         """获取历史 K 线并对齐真实财报指标 (TTM) - 带缓存"""
         requested_period = period
 
@@ -922,9 +921,8 @@ class PriceService:
             period = p_type
             limit = p_limit
 
-        norm_symbols = [cls._fix_symbol(s) for s in symbols]
-        suffix = '' if normalize else '_raw'
-        cache_key = f"hist_v19_qfq_{'_'.join(sorted(norm_symbols))}_{requested_period}_{period}_{limit}{suffix}"
+        fixed_symbols = [cls._fix_symbol(s) for s in symbols]
+        cache_key = f"hist_v19_qfq_{'_'.join(sorted(fixed_symbols))}_{requested_period}_{period}_{limit}"
         stale_cache_key = f"{cache_key}_stale"
         if not skip_cache:
             cached_data = cls._cache_get(cache_key)
@@ -937,7 +935,7 @@ class PriceService:
         for orig_symbol in symbols:
             symbol = cls._fix_symbol(orig_symbol)
             if not skip_cache:
-                single_cache_key = cls._historical_single_cache_key(orig_symbol, requested_period, period, limit, normalize=normalize)
+                single_cache_key = cls._historical_single_cache_key(orig_symbol, requested_period, period, limit)
                 cached_history = cls._cache_get(single_cache_key)
                 if cached_history is not None:
                     cached_history = cls._normalize_historical_cache_value(cached_history)
@@ -958,12 +956,12 @@ class PriceService:
             
             def _build_task(orig_sym):
                 sym = cls._fix_symbol(orig_sym)
-                single_cache_key = cls._historical_single_cache_key(orig_sym, requested_period, period, limit, normalize=normalize)
-                single_stale_cache_key = cls._historical_single_stale_cache_key(orig_sym, requested_period, period, limit, normalize=normalize)
+                single_cache_key = cls._historical_single_cache_key(orig_sym, requested_period, period, limit)
+                single_stale_cache_key = cls._historical_single_stale_cache_key(orig_sym, requested_period, period, limit)
                 try:
                     _t0 = time.time()
                     hist = cls._build_single_historical_data(
-                        sym, requested_period, period, limit, rt_data, spot_fallback, normalize=normalize, skip_cache=skip_cache
+                        sym, requested_period, period, limit, rt_data, spot_fallback, skip_cache=skip_cache
                     )
                     elapsed = time.time() - _t0
                     if elapsed > 2:

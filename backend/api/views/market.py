@@ -95,13 +95,13 @@ def get_market_diary(request):
         if history is None:
             futures['hist'] = pool.submit(
                 PriceService.get_historical_data,
-                [fixed_symbol], 250, 'day', False, force or force_deep,
+                [fixed_symbol], 250, 'day', force or force_deep,
             )
 
         if today_data is None:
             futures['today_kline'] = pool.submit(
                 PriceService.get_historical_data,
-                [fixed_symbol], 1, 'day', False, False,
+                [fixed_symbol], 1, 'day', False,
             )
             futures['today_rt'] = pool.submit(
                 PriceService.get_realtime_price,
