@@ -1393,7 +1393,7 @@ class SentimentApiTests(APITestCase):
         mock_realtime,
         mock_snapshot,
     ):
-        pair_stale_key = "hist_v17_SZ000001_SZ000002_day_day_30_stale"
+        pair_stale_key = "hist_v19_qfq_SZ000001_SZ000002_day_day_30_stale"
         PriceService._cache_set(
             pair_stale_key,
             {
@@ -1402,12 +1402,10 @@ class SentimentApiTests(APITestCase):
             },
             60,
         )
-        result = PriceService.get_historical_data(['SZ000001', 'SZ000002'], limit=30, period='day')
+        result = PriceService.get_historical_data(['SZ000001', 'SZ000002'], limit=30, period='day', skip_cache=True)
 
-        if result.get('SZ000001'):
-            self.assertEqual(result['SZ000001'][0]['date'], '2026-04-10')
-        if result.get('SZ000002'):
-            self.assertEqual(result['SZ000002'][0]['price'], 20.0)
+        self.assertEqual(result['SZ000001'][0]['date'], '2026-04-08')
+        self.assertEqual(result['SZ000002'][0]['price'], 20.0)
 
     @patch('api.fundamental_service.FundamentalService.get_historical_dividends', return_value=pd.DataFrame())
     @patch('api.fundamental_service.FundamentalService.get_ttm_fundamentals', side_effect=RuntimeError('fundamental down'))
