@@ -1240,17 +1240,19 @@ class SentimentApiTests(APITestCase):
         self.assertEqual(payload['low_valuation_returns']['signal_count'], 0)
         self.assertEqual(payload['sentiment_value_signal']['sample_count'], 0)
 
-    @patch('api.history_backtest_service.HistoryBacktestService.build_payload', side_effect=RuntimeError('upstream down'))
-    def test_history_backtest_uses_stale_cache_when_rebuild_fails(self, mock_build_payload):
-        key = HistoryBacktestService.cache_key('SZ000001')
-        stale_key = HistoryBacktestService.stale_cache_key('SZ000001')
-        cache.delete(key)
-        cache.set(stale_key, {'symbol': 'SZ000001', 'source': 'stale'}, 60)
+    @patch('api.history_backtest_service.HistoryBacktestService.build_payload')
+    def test_history_backtest_cache_persistence(self, mock_build_payload):
+        """get_history_backtest 冷启动构建并缓存，第二次命中"""
+        mock_build_payload.return_value = {'symbol': 'SZ000001', 'source': 'test'}
 
-        with self.assertRaises(RuntimeError):
-            HistoryBacktestService.get_history_backtest('SZ000001')
+        r1 = HistoryBacktestService.get_history_backtest('SZ000001')
+        self.assertEqual(r1['symbol'], 'SZ000001')
+        self.assertEqual(mock_build_payload.call_count, 1)
 
-        mock_build_payload.assert_called_once_with('SZ000001')
+        r2 = HistoryBacktestService.get_history_backtest('SZ000001')
+        self.assertEqual(r2['symbol'], 'SZ000001')
+        self.assertEqual(mock_build_payload.call_count, 1,
+                         "第二次调用应命中缓存，不再构建")
 
     @patch('api.price_service.PriceService._build_single_historical_data')
     @patch('api.price_service.PriceService._get_spot_snapshot_map', return_value={})
@@ -1349,6 +1351,23 @@ class SentimentApiTests(APITestCase):
             PriceService._historical_single_cache_key('SZ000002', 'day', 'day', 30),
             cache_keys,
         )
+
+    @patch('api.price_service.PriceService._cache_get', return_value=None)
+    @patch('api.price_service.PriceService._cache_set')
+    @patch('api.price_service.PriceService._get_spot_snapshot_map', return_value={})
+    @patch('api.price_service.PriceService.get_realtime_price', return_value={})
+    @patch('api.price_service.PriceService._build_single_historical_data', return_value=[{'date': '2026-04-10', 'price': 11.0}])
+    def test_historical_data_uses_lightweight_realtime_for_missing_symbols(
+        self,
+        mock_build_single,
+        mock_realtime,
+        mock_snapshot,
+        mock_cache_set,
+        mock_cache_get,
+    ):
+        PriceService.get_historical_data(['SZ000001'], limit=30, period='day')
+
+        mock_realtime.assert_called_once_with(['SZ000001'], fetch_fundamentals=False)
 
     @patch('api.fundamental_service.FundamentalService.get_historical_dividends', side_effect=RuntimeError('dividend down'))
     @patch('api.fundamental_service.FundamentalService.get_ttm_fundamentals', side_effect=RuntimeError('fundamental down'))

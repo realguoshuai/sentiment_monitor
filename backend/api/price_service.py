@@ -849,29 +849,27 @@ class PriceService:
         # ROE = PB / PE * 100（仅当 PE > 0 时有效，亏损公司使用 quality_history 中的真实 ROE）
         df['calc_roe'] = (df['pb'] / df['pe'].replace(0, np.nan) * 100).fillna(0)
 
-        # 对亏损公司（PE <= 0），尝试使用 quality_history 中的真实 ROE
-        try:
-            quality_data = FundamentalService.get_quality_data(symbol, include_shareholder=False)
-            quality_history = quality_data.get('quality_history', [])
-            if quality_history:
-                # 构建年份到 ROE 的映射
-                roe_by_year = {}
-                for item in quality_history:
-                    year = str(item.get('year', ''))[:4]
-                    roe_val = item.get('roe')
-                    if year and roe_val is not None:
-                        roe_by_year[year] = float(roe_val)
+        # 对亏损公司（PE <= 0），才拉取 quality_history 作为 ROE 兜底。
+        mask_pe_negative = df['pe'] <= 0
+        if mask_pe_negative.any():
+            try:
+                quality_data = FundamentalService.get_quality_data(symbol, include_shareholder=False)
+                quality_history = quality_data.get('quality_history', [])
+                if quality_history:
+                    roe_by_year = {}
+                    for item in quality_history:
+                        year = str(item.get('year', ''))[:4]
+                        roe_val = item.get('roe')
+                        if year and roe_val is not None:
+                            roe_by_year[year] = float(roe_val)
 
-                # 对 PE <= 0 的行，使用真实 ROE
-                mask_pe_negative = df['pe'] <= 0
-                if mask_pe_negative.any():
                     for idx in df[mask_pe_negative].index:
                         year = str(df.loc[idx, 'date'])[:4]
                         if year in roe_by_year:
                             df.loc[idx, 'calc_roe'] = roe_by_year[year]
                     logger.debug("Used quality_history ROE for %d negative-PE rows", mask_pe_negative.sum())
-        except Exception as e:
-            logger.debug("Failed to fetch quality ROE for %s: %s", symbol, e)
+            except Exception as e:
+                logger.debug("Failed to fetch quality ROE for %s: %s", symbol, e)
 
         # 应用动态估值配置 (如 ROE 地板)
         roe_floor = val_config.get('roe_floor')
@@ -947,7 +945,7 @@ class PriceService:
         spot_fallback = {}
         if missing_symbols:
             fixed_missing_symbols = [cls._fix_symbol(symbol) for symbol in missing_symbols]
-            rt_data = cls.get_realtime_price(fixed_missing_symbols)
+            rt_data = cls.get_realtime_price(fixed_missing_symbols, fetch_fundamentals=False)
             spot_fallback = cls._get_spot_snapshot_map(fixed_missing_symbols)
 
         # [性能优化] 并发构建缺失标的的历时数据

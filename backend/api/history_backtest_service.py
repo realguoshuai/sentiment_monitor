@@ -2,14 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-import threading
 from typing import Dict, List, Optional
 from django.utils import timezone
 from django.db.models import Q
 import pandas as pd
-from django.core.cache import cache
 
 from .analysis_service import AnalysisService
+from .cache_manager import CacheManager
 from .models import SentimentData
 from .price_service import PriceService
 
@@ -44,96 +43,45 @@ class HistoryBacktestService:
         return f'history_backtest_{cls.CACHE_VERSION}_{fixed_symbol}'
 
     @classmethod
-    def stale_cache_key(cls, symbol: str) -> str:
-        return f'{cls.cache_key(symbol)}_stale'
-
-    @classmethod
-    def _cache_get(cls, key: str):
-        try:
-            return cache.get(key)
-        except Exception as exc:
-            logger.warning("History backtest cache read failed for %s: %s", key, exc)
-            try:
-                cache.delete(key)
-            except Exception:
-                pass
-            return None
-
-    @classmethod
-    def _cache_set(cls, key: str, payload: dict, ttl: int) -> bool:
-        try:
-            cache.set(key, payload, ttl)
-            return True
-        except Exception as exc:
-            logger.warning("History backtest cache write failed for %s: %s", key, exc)
-            return False
-
-    @classmethod
     def get_backtest_response(cls, symbol: str) -> dict:
-        key = cls.cache_key(symbol)
-        cached = cls._cache_get(key)
-        
-        if cached is not None:
-            return {
-                **cached,
-                'cache_status': 'fresh',
-                'background_refreshing': False
-            }
+        """获取历史回测数据（含缓存状态标记）"""
+        fixed = PriceService._fix_symbol(symbol)
+        cache_key = f"history_backtest_{cls.CACHE_VERSION}_{fixed}"
 
-        stale_key = cls.stale_cache_key(symbol)
-        stale = cls._cache_get(stale_key)
-        
-        if stale is not None:
-            refresh_key = f"{key}_refreshing"
-            background_refreshing = bool(cache.get(refresh_key))
-            if not background_refreshing:
-                background_refreshing = cls._schedule_background_refresh(symbol)
-                
-            return {
-                **stale,
-                'cache_status': 'stale',
-                'background_refreshing': background_refreshing
-            }
+        def _fetch():
+            return cls.build_payload(symbol)
 
-        # 无缓存，同步构建
-        payload = cls.get_history_backtest(symbol)
-        return {
-            **payload,
-            'cache_status': 'fresh',
-            'background_refreshing': False
-        }
+        data, status = CacheManager.get_or_fetch(
+            key=cache_key,
+            fetcher=_fetch,
+            ttl=cls.CACHE_TTL,
+            stale_ttl=cls.STALE_CACHE_TTL,
+            use_lock=True,
+        )
+
+        payload = data if data is not None else {}
+        response_status = 'fresh' if status == 'computed' else status
+        payload['cache_status'] = response_status
+        payload['background_refreshing'] = (status == 'stale')
+        return payload
 
     @classmethod
     def get_history_backtest(cls, symbol: str) -> dict:
-        key = cls.cache_key(symbol)
-        stale_key = cls.stale_cache_key(symbol)
-        
-        try:
-            payload = cls.build_payload(symbol)
-            cls._cache_set(key, payload, cls.CACHE_TTL)
-            cls._cache_set(stale_key, payload, cls.STALE_CACHE_TTL)
-            return payload
-        except Exception as exc:
-            logger.error("History backtest build failed for %s: %s", symbol, exc)
-            raise
+        """强制构建回测数据（供预热/同步脚本调用）"""
+        fixed = PriceService._fix_symbol(symbol)
+        cache_key = f"history_backtest_{cls.CACHE_VERSION}_{fixed}"
 
-    @classmethod
-    def _schedule_background_refresh(cls, symbol: str) -> bool:
-        refresh_key = f"{cls.cache_key(symbol)}_refreshing"
-        if not cache.add(refresh_key, True, 600):
-            return False
+        def _fetch():
+            return cls.build_payload(symbol)
 
-        def task():
-            try:
-                cls.get_history_backtest(symbol)
-            except Exception as exc:
-                logger.error("History backtest background refresh failed for %s: %s", symbol, exc)
-            finally:
-                cache.delete(refresh_key)
-
-        thread = threading.Thread(target=task, daemon=True)
-        thread.start()
-        return True
+        data, _status = CacheManager.get_or_fetch(
+            key=cache_key,
+            fetcher=_fetch,
+            ttl=cls.CACHE_TTL,
+            stale_ttl=cls.STALE_CACHE_TTL,
+            use_lock=True,
+        )
+        return data if data is not None else {}
 
     @classmethod
     def build_payload(cls, symbol: str) -> dict:

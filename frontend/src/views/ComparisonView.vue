@@ -1042,7 +1042,6 @@ function remapComparisonData() {
 
   const s1 = getSeriesForSymbol(data, symbols[0])
   const s2 = getSeriesForSymbol(data, symbols[1])
-  console.log('[Remap] data keys:', Object.keys(data || {}), 's0:', symbols[0], 's1:', symbols[1], 's1.len:', s1.length, 's2.len:', s2.length)
 
   if (!s1.length || !s2.length) {
     const fallbackSeries = scale === 'minute' ? buildRealtimeFallbackSeries(symbols) : []
@@ -1094,7 +1093,6 @@ function remapComparisonData() {
         }
     }
   }).filter(Boolean)
-  console.log('[Remap] after map+filter:', comparisonData.value.length, 'pts, sample:', comparisonData.value[0])
 
   if (!comparisonData.value.length) {
     restoreLastGoodData('当前指标没有可绘制的数据，已保留上一轮有效走势。')
