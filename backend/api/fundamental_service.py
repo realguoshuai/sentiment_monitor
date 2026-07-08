@@ -374,107 +374,35 @@ class FundamentalService:
 
     @classmethod
     def get_quality_response(cls, symbol, include_shareholder=True):
-        symbol = cls._fix_symbol(symbol)
-        cache_key = f"quality_v12_{symbol}" if include_shareholder else f"quality_core_v2_{symbol}"
-        stale_key = f"{cache_key}_stale"
-        
-        cached = cls._cache_get_value(cache_key)
-        # 增加校验：如果缓存内容不符合预期（如缺少核心历史数据），视为失效
-        if cached and isinstance(cached, dict) and cached.get('quality_history'):
-            logger.info(f"[Quality] Cache HIT for {symbol} (include_sh={include_shareholder})")
-            if cached.get('cache_status') == 'stale':
-                logger.info(f"[Quality] Cache is STALE for {symbol}, triggering background refresh")
-                cls._schedule_quality_refresh(symbol, include_shareholder)
-            return cached
-            
-        logger.info(f"[Quality] Cache MISS or INVALID for {symbol}, fetching fresh data...")
-        stale = cls._cache_get_value(stale_key)
-        if stale and isinstance(stale, dict) and stale.get('quality_history'):
-            logger.info(f"[Quality] Found STALE fallback for {symbol}")
-            ref_key = f"{cache_key}_refreshing"
-            bg = bool(cache.get(ref_key))
-            if not bg: bg = cls._schedule_quality_refresh(symbol, include_shareholder)
-            return {**stale, 'cache_status': 'stale', 'background_refreshing': bg}
-            
-        fresh_data = cls.get_quality_data(symbol, include_shareholder=include_shareholder)
-        return {**fresh_data, 'cache_status': 'fresh', 'background_refreshing': False}
+        return cls.get_quality_data(symbol, include_shareholder=include_shareholder)
 
     @classmethod
     def get_shareholder_structure_data(cls, symbol):
         symbol = cls._fix_symbol(symbol)
         cache_key = f"shareholder_overlay_v3_{symbol}"
-        cached = cls._cache_get_value(cache_key)
-        if cached is not None:
-            return cached
 
-        stale = cls._cache_get_value(f"{cache_key}_stale")
-        if stale is not None:
-            ref_key = f"{cache_key}_refreshing"
-            bg = bool(cache.get(ref_key))
-            if not bg:
-                bg = cache.add(ref_key, True, 600)
-                if bg:
-                    def _refresh_shareholder():
-                        try:
-                            cls._build_shareholder_data(symbol)
-                        except Exception as e:
-                            logger.error(f"Background shareholder refresh failed for {symbol}: {e}")
-                        finally:
-                            cache.delete(ref_key)
-                    threading.Thread(target=_refresh_shareholder, daemon=True).start()
-            return stale
+        def _fetch():
+            df = cls.get_shareholder_history(symbol)
+            if df is None or df.empty:
+                return None
+            return Calc.calculate_shareholder_structure(df)
 
-        return cls._build_shareholder_data(symbol)
+        data, _status = CacheManager.get_or_fetch(
+            key=cache_key,
+            fetcher=_fetch,
+            ttl=3 * 24 * 3600,
+            stale_ttl=90 * 24 * 3600,
+            use_lock=False,
+        )
 
-    @classmethod
-    def _build_shareholder_data(cls, symbol):
-        cache_key = f"shareholder_overlay_v3_{symbol}"
-        df = cls.get_shareholder_history(symbol)
-        if df is None or df.empty: return {'shareholder_history': [], 'shareholder_summary': {}}
-        
-        payload = Calc.calculate_shareholder_structure(df)
-        cls._cache_set_value(cache_key, payload, 3 * 24 * 3600)
-        cls._cache_set_value(f"{cache_key}_stale", payload, 90 * 24 * 3600)
-        return payload
-
-    @classmethod
-    def _schedule_quality_refresh(cls, symbol, include_sh):
-        key = f"quality_v12_{symbol}_refreshing"
-        if not cache.add(key, True, 600): return False
-        def _refresh_quality():
-            try:
-                cls.get_quality_data(symbol, include_shareholder=include_sh)
-            except Exception as e:
-                logger.error(f"Background quality refresh failed for {symbol}: {e}")
-            finally:
-                cache.delete(key)
-        threading.Thread(target=_refresh_quality, daemon=True).start()
-        return True
+        return data if data is not None else {'shareholder_history': [], 'shareholder_summary': {}}
 
     @classmethod
     def get_quality_data(cls, symbol, include_shareholder=True):
         symbol = cls._fix_symbol(symbol)
         cache_key = f"quality_v12_{symbol}" if include_shareholder else f"quality_core_v2_{symbol}"
-        stale_key = f"{cache_key}_stale"
-        lock_key = f"{cache_key}_fetching"
-        got_lock = False
-        try:
-            # 缓存锁：如果另一个线程正在抓取，等待其完成后直接读缓存
-            for _attempt in range(30):  # 最多等 30s
-                if not cache.get(lock_key):
-                    break
-                import time
-                time.sleep(1)
-                cached = cls._cache_get_value(cache_key)
-                if cached and isinstance(cached, dict) and cached.get('quality_history'):
-                    logger.info(f"[Quality] Cache filled by concurrent fetch for {symbol}")
-                    return cached
 
-            # 尝试获取锁（原子操作）
-            got_lock = cache.add(lock_key, True, 120)
-            logger.info(f"[Quality] Start fetching full quality data for {symbol} (lock={got_lock})")
-
-            # 3 个并发请求，平衡速度和稳定性
+        def _fetch():
             import concurrent.futures
 
             def _safe_fetch(fetcher, name, *args, **kwargs):
@@ -491,7 +419,6 @@ class FundamentalService:
                 future_d = executor.submit(_safe_fetch, cls.get_historical_dividends, 'dividends', symbol)
                 future_cap = executor.submit(_safe_fetch, cls._fetch_market_cap, 'market_cap', symbol)
 
-                # 等待所有结果（单源超时 20s，超时返回默认值，不炸整个 symbol）
                 def _get(future, default, name):
                     try:
                         return future.result(timeout=20)
@@ -510,7 +437,6 @@ class FundamentalService:
 
             logger.info(f"[Quality] Data fetched for {symbol}, calculating metrics...")
 
-            # 确保 ann_date 是 datetime 类型
             if isinstance(df_d, pd.DataFrame) and not df_d.empty and 'ann_date' in df_d.columns:
                 df_d['ann_date'] = pd.to_datetime(df_d['ann_date'], errors='coerce')
                 df_d = df_d.dropna(subset=['ann_date'])
@@ -519,38 +445,40 @@ class FundamentalService:
 
             if include_shareholder:
                 sh_data = cls.get_shareholder_structure_data(symbol)
-                # 只在 quality 数据有效时才合并股东数据，避免缓存空 quality + 股东的脏数据
                 if payload:
                     payload.update(sh_data)
 
-            if payload:
-                cls._cache_set_value(cache_key, payload, cls.CACHE_TTL)
-                cls._cache_set_value(stale_key, payload, cls.STALE_TTL)
-                # 预热含股东结构时，额外存一份不含股东的 key 给前端首次请求用
-                if include_shareholder:
-                    core_key = f"quality_core_v2_{symbol}"
-                    core_stale = f"{core_key}_stale"
-                    core_payload = {k: v for k, v in payload.items() if k not in ('shareholder_history', 'shareholder_summary')}
-                    cls._cache_set_value(core_key, core_payload, cls.CACHE_TTL)
-                    cls._cache_set_value(core_stale, core_payload, cls.STALE_TTL)
-            
+            # 预热 core key（不含股东结构），走版本化 key 与 CacheManager 一致
+            if include_shareholder and payload:
+                core_key_with_v = f"quality_core_v2_{symbol}_{CacheManager.CACHE_VERSION}"
+                core_payload = {k: v for k, v in payload.items() if k not in ('shareholder_history', 'shareholder_summary')}
+                CacheManager._cache_set(core_key_with_v, core_payload, cls.CACHE_TTL)
+                CacheManager._cache_set(f"{core_key_with_v}_stale", core_payload, cls.STALE_TTL)
+
             logger.info(f"[Quality] Successfully completed quality calculation for {symbol}")
             return payload
+
+        try:
+            data, _status = CacheManager.get_or_fetch(
+                key=cache_key,
+                fetcher=_fetch,
+                ttl=cls.CACHE_TTL,
+                stale_ttl=cls.STALE_TTL,
+                use_lock=True,
+            )
+            return data if data is not None else {}
         except Exception as e:
             logger.error(f"Quality error {symbol}: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return {}
-        finally:
-            if got_lock:
-                cache.delete(lock_key)
 
     @classmethod
     def get_shareholder_history(cls, symbol):
         symbol = cls._fix_symbol(symbol)
         cache_key = f"shareholder_history_v1_{symbol}"
-        cached = cls._cache_get(cache_key)
-        
+        cached = CacheManager._cache_get(cache_key)
+
         try:
             df_new = Fetcher.fetch_shareholder_history(symbol)
             if cached is not None and not df_new.empty:
@@ -561,15 +489,15 @@ class FundamentalService:
                     cached_df = cached
                 else:
                     cached_df = pd.DataFrame(cached)
-                
+
                 df_combined = pd.concat([cached_df, df_new]).drop_duplicates(subset=['end_date'], keep='last').sort_values('end_date')
-                cls._cache_set(cache_key, df_combined, 3 * 24 * 3600)
+                CacheManager._cache_set(cache_key, df_combined, 3 * 24 * 3600)
                 return df_combined
-            
+
             if not df_new.empty:
-                cls._cache_set(cache_key, df_new, 3 * 24 * 3600)
+                CacheManager._cache_set(cache_key, df_new, 3 * 24 * 3600)
                 return df_new
-            
+
             # 返回值类型防御
             if cached is not None:
                 return pd.DataFrame(cached) if isinstance(cached, list) else cached
@@ -788,9 +716,6 @@ class FundamentalService:
         """获取单只股票的下一次分红信息（含三级回退：确认/预案/历史估算）"""
         symbol = cls._fix_symbol(symbol)
         cache_key = f"next_dividend_v1_{symbol}"
-        cached = cls._cache_get_value(cache_key)
-        if cached is not None:
-            return cached
 
         none_result = {
             'symbol': symbol, 'date': None, 'days_left': None,
@@ -798,144 +723,142 @@ class FundamentalService:
             'status_desc': '暂无分红数据', 'progress': '无'
         }
 
-        try:
-            df_div_raw = Fetcher.fetch_dividend_detail(symbol)
-        except Exception as e:
-            logger.warning(f"Failed to fetch dividend detail for {symbol}: {e}")
-            return none_result
+        def _fetch():
+            try:
+                df_div_raw = Fetcher.fetch_dividend_detail(symbol)
+            except Exception as e:
+                logger.warning(f"Failed to fetch dividend detail for {symbol}: {e}")
+                return none_result
 
-        if df_div_raw is None or df_div_raw.empty:
-            return none_result
+            if df_div_raw is None or df_div_raw.empty:
+                return none_result
 
-        cols = list(df_div_raw.columns)
-        ann_col = next((c for c in cols if '公告' in c), cols[0] if len(cols) > 0 else None)
-        ex_col = next((c for c in cols if '除权' in c or '除息' in c), None)
-        progress_col = next((c for c in cols if '进度' in c), None)
-        bonus_col = next((c for c in cols if '送股' in c or '送' in c), None)
-        transfer_col = next((c for c in cols if '转增' in c or '转' in c), None)
-        cash_col = next((c for c in cols if '派息' in c or '派' in c), None)
+            cols = list(df_div_raw.columns)
+            ann_col = next((c for c in cols if '公告' in c), cols[0] if len(cols) > 0 else None)
+            ex_col = next((c for c in cols if '除权' in c or '除息' in c), None)
+            progress_col = next((c for c in cols if '进度' in c), None)
+            bonus_col = next((c for c in cols if '送股' in c or '送' in c), None)
+            transfer_col = next((c for c in cols if '转增' in c or '转' in c), None)
+            cash_col = next((c for c in cols if '派息' in c or '派' in c), None)
 
-        def _build_plan(row):
-            parts = []
-            if bonus_col and safe_float(row.get(bonus_col)) > 0:
-                parts.append(f"送{safe_float(row[bonus_col]):.2f}")
-            if transfer_col and safe_float(row.get(transfer_col)) > 0:
-                parts.append(f"转{safe_float(row[transfer_col]):.2f}")
-            if cash_col and safe_float(row.get(cash_col)) > 0:
-                parts.append(f"派{safe_float(row[cash_col]):.2f}元")
-            return ' '.join(parts) if parts else '暂无方案'
+            def _build_plan(row):
+                parts = []
+                if bonus_col and safe_float(row.get(bonus_col)) > 0:
+                    parts.append(f"送{safe_float(row[bonus_col]):.2f}")
+                if transfer_col and safe_float(row.get(transfer_col)) > 0:
+                    parts.append(f"转{safe_float(row[transfer_col]):.2f}")
+                if cash_col and safe_float(row.get(cash_col)) > 0:
+                    parts.append(f"派{safe_float(row[cash_col]):.2f}元")
+                return ' '.join(parts) if parts else '暂无方案'
 
-        df_parsed = []
-        for idx, row in df_div_raw.iterrows():
-            df_parsed.append({
-                'ann_date': pd.to_datetime(row[ann_col] if ann_col else None, errors='coerce'),
-                'ex_date': pd.to_datetime(row[ex_col] if ex_col else None, errors='coerce'),
-                'plan_str': _build_plan(row),
-                'progress': str(row[progress_col] if progress_col else "")
-            })
+            df_parsed = []
+            for idx, row in df_div_raw.iterrows():
+                df_parsed.append({
+                    'ann_date': pd.to_datetime(row[ann_col] if ann_col else None, errors='coerce'),
+                    'ex_date': pd.to_datetime(row[ex_col] if ex_col else None, errors='coerce'),
+                    'plan_str': _build_plan(row),
+                    'progress': str(row[progress_col] if progress_col else "")
+                })
 
-        df_p = pd.DataFrame(df_parsed).dropna(subset=['ann_date']).sort_values('ann_date', ascending=False)
-        today = pd.Timestamp(timezone.now().date())
+            df_p = pd.DataFrame(df_parsed).dropna(subset=['ann_date']).sort_values('ann_date', ascending=False)
+            today = pd.Timestamp(timezone.now().date())
 
-        # A. 已宣告但未除权的未来分红
-        confirmed_row = None
-        for _, r in df_p.iterrows():
-            if pd.notna(r['ex_date']) and r['ex_date'] >= today:
-                if confirmed_row is None or r['ex_date'] < confirmed_row['ex_date']:
-                    confirmed_row = r
+            # A. 已宣告但未除权的未来分红
+            confirmed_row = None
+            for _, r in df_p.iterrows():
+                if pd.notna(r['ex_date']) and r['ex_date'] >= today:
+                    if confirmed_row is None or r['ex_date'] < confirmed_row['ex_date']:
+                        confirmed_row = r
 
-        if confirmed_row is not None:
-            result = {
-                'symbol': symbol,
-                'date': confirmed_row['ex_date'].strftime('%Y-%m-%d'),
-                'days_left': int((confirmed_row['ex_date'] - today).days),
-                'plan': confirmed_row['plan_str'],
-                'status': 'confirmed',
-                'status_desc': '已确立',
-                'progress': confirmed_row['progress'] or '实施'
-            }
-            cls._cache_set_value(cache_key, result, 12 * 3600)
-            return result
+            if confirmed_row is not None:
+                return {
+                    'symbol': symbol,
+                    'date': confirmed_row['ex_date'].strftime('%Y-%m-%d'),
+                    'days_left': int((confirmed_row['ex_date'] - today).days),
+                    'plan': confirmed_row['plan_str'],
+                    'status': 'confirmed',
+                    'status_desc': '已确立',
+                    'progress': confirmed_row['progress'] or '实施'
+                }
 
-        # B. 预案
-        for _, r in df_p.iterrows():
-            prog = r['progress']
-            is_proposal = ('预案' in prog or '大会' in prog or '通过' in prog or '董事会' in prog) and ('实施' not in prog)
-            if is_proposal and (pd.isna(r['ex_date']) or r['ex_date'] >= today):
-                interval_days = 60
-                for _, r2 in df_p.iterrows():
-                    if pd.notna(r2['ex_date']) and r2['ex_date'] < today and pd.notna(r2['ann_date']):
-                        diff = int((r2['ex_date'] - r2['ann_date']).days)
-                        if diff > 0:
-                            interval_days = diff
-                            break
-                est = r['ann_date'] + pd.Timedelta(days=interval_days)
-                if est < today:
-                    est = r['ann_date'] + pd.Timedelta(days=max(60, interval_days))
-                if est < today:
-                    est = today + pd.Timedelta(days=14)
-                result = {
+            # B. 预案
+            for _, r in df_p.iterrows():
+                prog = r['progress']
+                is_proposal = ('预案' in prog or '大会' in prog or '通过' in prog or '董事会' in prog) and ('实施' not in prog)
+                if is_proposal and (pd.isna(r['ex_date']) or r['ex_date'] >= today):
+                    interval_days = 60
+                    for _, r2 in df_p.iterrows():
+                        if pd.notna(r2['ex_date']) and r2['ex_date'] < today and pd.notna(r2['ann_date']):
+                            diff = int((r2['ex_date'] - r2['ann_date']).days)
+                            if diff > 0:
+                                interval_days = diff
+                                break
+                    est = r['ann_date'] + pd.Timedelta(days=interval_days)
+                    if est < today:
+                        est = r['ann_date'] + pd.Timedelta(days=max(60, interval_days))
+                    if est < today:
+                        est = today + pd.Timedelta(days=14)
+                    return {
+                        'symbol': symbol,
+                        'date': est.strftime('%Y-%m-%d'),
+                        'days_left': max(0, int((est - today).days)),
+                        'plan': r['plan_str'],
+                        'status': 'proposal',
+                        'status_desc': '预案中',
+                        'progress': r['progress'] or '董事会预案'
+                    }
+
+            # C. 历史估算（按去年分红次序预估，已发的跳过）
+            past_ex_dates = sorted(
+                [r['ex_date'] for _, r in df_p.iterrows()
+                 if pd.notna(r['ex_date']) and r['ex_date'] < today],
+                reverse=True
+            )
+
+            if past_ex_dates:
+                this_year = today.year
+                last_year = this_year - 1
+                last_year_ex = sorted([d for d in past_ex_dates if d.year == last_year])
+                this_year_count = len([d for d in past_ex_dates if d.year == this_year])
+
+                candidates = []
+                if last_year_ex:
+                    remaining = last_year_ex[this_year_count:]
+                    for d in remaining:
+                        est = d.replace(year=this_year)
+                        if est >= today:
+                            candidates.append(est)
+                        else:
+                            candidates.append(d.replace(year=this_year + 1))
+                else:
+                    candidates.append(past_ex_dates[0] + pd.Timedelta(days=365))
+
+                if candidates:
+                    candidates.sort()
+                    est = candidates[0]
+                    ref_idx = min(this_year_count, len(last_year_ex) - 1) if last_year_ex else 0
+                    ref_row = df_p[df_p['ex_date'] == last_year_ex[ref_idx]].iloc[0] if last_year_ex else df_p[df_p['ex_date'] == past_ex_dates[0]].iloc[0]
+                else:
+                    est = last_year_ex[0].replace(year=this_year + 1) if last_year_ex else past_ex_dates[0] + pd.Timedelta(days=365)
+                    ref_row = df_p[df_p['ex_date'] == last_year_ex[0]].iloc[0] if last_year_ex else df_p[df_p['ex_date'] == past_ex_dates[0]].iloc[0]
+
+                freq_label = f'{len(last_year_ex)}次/年' if last_year_ex else '年度'
+                return {
                     'symbol': symbol,
                     'date': est.strftime('%Y-%m-%d'),
                     'days_left': max(0, int((est - today).days)),
-                    'plan': r['plan_str'],
-                    'status': 'proposal',
-                    'status_desc': '预案中',
-                    'progress': r['progress'] or '董事会预案'
+                    'plan': ref_row['plan_str'],
+                    'status': 'estimated',
+                    'status_desc': f'历史估算（{freq_label}）',
+                    'progress': '历史估算'
                 }
-                cls._cache_set_value(cache_key, result, 12 * 3600)
-                return result
 
-        # C. 历史估算（按去年分红次序预估，已发的跳过）
-        past_ex_dates = sorted(
-            [r['ex_date'] for _, r in df_p.iterrows()
-             if pd.notna(r['ex_date']) and r['ex_date'] < today],
-            reverse=True
+            return none_result
+
+        data, _status = CacheManager.get_or_fetch(
+            key=cache_key,
+            fetcher=_fetch,
+            ttl=12 * 3600,
+            use_lock=False,
         )
-
-        if past_ex_dates:
-            this_year = today.year
-            last_year = this_year - 1
-            # 去年的分红按时间排序（第1次、第2次、...）
-            last_year_ex = sorted([d for d in past_ex_dates if d.year == last_year])
-            # 今年已发的分红数量
-            this_year_count = len([d for d in past_ex_dates if d.year == this_year])
-
-            candidates = []
-            if last_year_ex:
-                # 跳过今年已发过的次数，取下一个
-                remaining = last_year_ex[this_year_count:]
-                for d in remaining:
-                    est = d.replace(year=this_year)
-                    if est >= today:
-                        candidates.append(est)
-                    else:
-                        # 已过期但还没发过（今年提前了），推到明年
-                        candidates.append(d.replace(year=this_year + 1))
-            else:
-                candidates.append(past_ex_dates[0] + pd.Timedelta(days=365))
-
-            if candidates:
-                candidates.sort()
-                est = candidates[0]
-                # 用去年同次序的分红方案作为参考
-                ref_idx = min(this_year_count, len(last_year_ex) - 1) if last_year_ex else 0
-                ref_row = df_p[df_p['ex_date'] == last_year_ex[ref_idx]].iloc[0] if last_year_ex else df_p[df_p['ex_date'] == past_ex_dates[0]].iloc[0]
-            else:
-                est = last_year_ex[0].replace(year=this_year + 1) if last_year_ex else past_ex_dates[0] + pd.Timedelta(days=365)
-                ref_row = df_p[df_p['ex_date'] == last_year_ex[0]].iloc[0] if last_year_ex else df_p[df_p['ex_date'] == past_ex_dates[0]].iloc[0]
-
-            freq_label = f'{len(last_year_ex)}次/年' if last_year_ex else '年度'
-            result = {
-                'symbol': symbol,
-                'date': est.strftime('%Y-%m-%d'),
-                'days_left': max(0, int((est - today).days)),
-                'plan': ref_row['plan_str'],
-                'status': 'estimated',
-                'status_desc': f'历史估算（{freq_label}）',
-                'progress': '历史估算'
-            }
-            cls._cache_set_value(cache_key, result, 12 * 3600)
-            return result
-
-        return none_result
+        return data if data is not None else none_result
