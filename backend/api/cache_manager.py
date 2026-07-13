@@ -52,6 +52,7 @@ class CacheManager:
         empty_ttl: int = 3600,
         error_ttl: int = 300,
         use_lock: bool = True,
+        cache_empty: bool = True,
     ) -> Tuple[Any, str]:
         """
         获取缓存，支持 stale 和后台刷新
@@ -98,9 +99,9 @@ class CacheManager:
 
         # 3. 计算新数据
         if use_lock:
-            data, status = cls._fetch_with_lock(main_key, stale_key, fetcher, ttl, stale_ttl, empty_ttl, error_ttl)
+            data, status = cls._fetch_with_lock(main_key, stale_key, fetcher, ttl, stale_ttl, empty_ttl, error_ttl, cache_empty)
         else:
-            data, status = cls._fetch_without_lock(main_key, stale_key, fetcher, ttl, stale_ttl, empty_ttl, error_ttl)
+            data, status = cls._fetch_without_lock(main_key, stale_key, fetcher, ttl, stale_ttl, empty_ttl, error_ttl, cache_empty)
 
         return data, status
 
@@ -114,6 +115,7 @@ class CacheManager:
         stale_ttl: Optional[int],
         empty_ttl: int,
         error_ttl: int,
+        cache_empty: bool,
     ) -> Tuple[Any, str]:
         """带分布式锁的获取"""
         lock_key = f"{main_key}_lock"
@@ -122,7 +124,7 @@ class CacheManager:
         if cache.add(lock_key, True, 60):
             try:
                 # 获取锁成功，执行计算
-                return cls._do_fetch(main_key, stale_key, fetcher, ttl, stale_ttl, empty_ttl, error_ttl)
+                return cls._do_fetch(main_key, stale_key, fetcher, ttl, stale_ttl, empty_ttl, error_ttl, cache_empty)
             finally:
                 cache.delete(lock_key)
         else:
@@ -140,7 +142,7 @@ class CacheManager:
 
             # 超时，强制计算
             logger.warning("Lock timeout for %s, force fetching", main_key)
-            return cls._do_fetch(main_key, stale_key, fetcher, ttl, stale_ttl, empty_ttl, error_ttl)
+            return cls._do_fetch(main_key, stale_key, fetcher, ttl, stale_ttl, empty_ttl, error_ttl, cache_empty)
 
     @classmethod
     def _fetch_without_lock(
@@ -152,9 +154,10 @@ class CacheManager:
         stale_ttl: Optional[int],
         empty_ttl: int,
         error_ttl: int,
+        cache_empty: bool = True,
     ) -> Tuple[Any, str]:
         """不带锁的获取"""
-        return cls._do_fetch(main_key, stale_key, fetcher, ttl, stale_ttl, empty_ttl, error_ttl)
+        return cls._do_fetch(main_key, stale_key, fetcher, ttl, stale_ttl, empty_ttl, error_ttl, cache_empty)
 
     @classmethod
     def _do_fetch(
@@ -166,6 +169,7 @@ class CacheManager:
         stale_ttl: Optional[int],
         empty_ttl: int,
         error_ttl: int,
+        cache_empty: bool = True,
     ) -> Tuple[Any, str]:
         """执行数据获取"""
         cls._update_stats('miss')
@@ -184,8 +188,9 @@ class CacheManager:
                 is_empty = True
 
             if is_empty:
-                # 缓存空结果，避免穿透
-                cls._cache_set(main_key, cls.EMPTY_MARKER, empty_ttl)
+                if cache_empty:
+                    # 缓存空结果，避免穿透
+                    cls._cache_set(main_key, cls.EMPTY_MARKER, empty_ttl)
                 return None, 'empty'
 
             # 缓存正常数据

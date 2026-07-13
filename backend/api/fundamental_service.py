@@ -374,7 +374,17 @@ class FundamentalService:
 
     @classmethod
     def get_quality_response(cls, symbol, include_shareholder=True):
-        return cls.get_quality_data(symbol, include_shareholder=include_shareholder)
+        payload, status = cls.get_quality_data(
+            symbol,
+            include_shareholder=include_shareholder,
+            return_status=True,
+        )
+        response_status = 'fresh' if status == 'computed' else status
+        return {
+            **(payload or {}),
+            'cache_status': response_status,
+            'background_refreshing': status == 'stale',
+        }
 
     @classmethod
     def get_shareholder_structure_data(cls, symbol):
@@ -398,7 +408,7 @@ class FundamentalService:
         return data if data is not None else {'shareholder_history': [], 'shareholder_summary': {}}
 
     @classmethod
-    def get_quality_data(cls, symbol, include_shareholder=True):
+    def get_quality_data(cls, symbol, include_shareholder=True, return_status=False):
         symbol = cls._fix_symbol(symbol)
         cache_key = f"quality_v12_{symbol}" if include_shareholder else f"quality_core_v2_{symbol}"
 
@@ -442,11 +452,12 @@ class FundamentalService:
                 df_d = df_d.dropna(subset=['ann_date'])
 
             payload = Calc.calculate_quality_metrics(df_p, df_b, df_c, df_d, m_cap)
+            if not payload:
+                return None
 
             if include_shareholder:
                 sh_data = cls.get_shareholder_structure_data(symbol)
-                if payload:
-                    payload.update(sh_data)
+                payload.update(sh_data)
 
             # 预热 core key（不含股东结构），走版本化 key 与 CacheManager 一致
             if include_shareholder and payload:
@@ -459,18 +470,23 @@ class FundamentalService:
             return payload
 
         try:
-            data, _status = CacheManager.get_or_fetch(
+            data, status = CacheManager.get_or_fetch(
                 key=cache_key,
                 fetcher=_fetch,
                 ttl=cls.CACHE_TTL,
                 stale_ttl=cls.STALE_TTL,
                 use_lock=True,
             )
-            return data if data is not None else {}
+            payload = data if data is not None else {}
+            if return_status:
+                return payload, status
+            return payload
         except Exception as e:
             logger.error(f"Quality error {symbol}: {e}")
             import traceback
             logger.error(traceback.format_exc())
+            if return_status:
+                return {}, 'error'
             return {}
 
     @classmethod
@@ -728,10 +744,10 @@ class FundamentalService:
                 df_div_raw = Fetcher.fetch_dividend_detail(symbol)
             except Exception as e:
                 logger.warning(f"Failed to fetch dividend detail for {symbol}: {e}")
-                return none_result
+                return None
 
             if df_div_raw is None or df_div_raw.empty:
-                return none_result
+                return None
 
             cols = list(df_div_raw.columns)
             ann_col = next((c for c in cols if '公告' in c), cols[0] if len(cols) > 0 else None)
@@ -853,7 +869,7 @@ class FundamentalService:
                     'progress': '历史估算'
                 }
 
-            return none_result
+            return None
 
         data, _status = CacheManager.get_or_fetch(
             key=cache_key,

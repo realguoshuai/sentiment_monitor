@@ -982,14 +982,16 @@ class PriceService:
                     results[sym] = hist
 
         if results and len(results) == len(symbols):
-            # skip_cache 时如果结果有空数据，回退到 stale 缓存
-            if skip_cache and any(not v for v in results.values()):
+            # 有标的返回空数据时，不缓存（防缓存中毒），回退到 stale
+            if any(not v for v in results.values()):
                 stale_data = cls._cache_get(stale_cache_key)
                 if stale_data is not None:
                     return stale_data
-            ttl = 3600 * 12
-            cls._cache_set(cache_key, results, ttl)
-            cls._cache_set(stale_cache_key, results, 7 * 24 * 3600)
+            else:
+                # 所有数据有效才写入缓存
+                ttl = 3600 * 12
+                cls._cache_set(cache_key, results, ttl)
+                cls._cache_set(stale_cache_key, results, 7 * 24 * 3600)
         else:
             stale_data = cls._cache_get(stale_cache_key)
             if stale_data is not None:
