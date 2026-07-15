@@ -190,6 +190,10 @@ sentiment_monitor/
 
 ## 最近更新
 
+- 估值温度计修复：腾讯历史 K 线接口月线数据读取键从固定的 `qfqday` 改为按周期映射（`qfqmonth`/`qfqweek`/`qfqday`），修复非日线周期下数据被静默丢弃导致估值温度计仅显示贵州茅台的问题。
+- 历史 K 线缓存中毒防护：`get_historical_data` 组合缓存写入前检查是否有标的返回空结果，有则跳过缓存写入并回退到 stale 缓存，防止外部数据源临时异常污染缓存。
+- CacheManager `cache_empty` 参数完整穿透：新增参数完整传递到 `_do_fetch`，空结果时按参数决定是否写 `EMPTY_MARKER`；修复 `_fetch_without_lock` 和 `_do_fetch` 签名缺失导致的 TypeError。
+- quality 接口缓存状态：`get_quality_response` 返回 `cache_status`/`background_refreshing` 字段，与 `get_ttm_fundamentals_response` 对齐。
 - 性能优化：全部页面冷启动速度大幅提升。盯盘日记 5 个串行接口改为 ThreadPoolExecutor 并行获取，墙钟从 ~5s 降到 ~1s；条件选股快照刷新去掉每次删 ROE/分红缓存的逻辑，ROE 数据 3 年报期并行抓取、分红数据 8 报告期并行抓取（冷启动 ~20s → ~4s）；分析页 onMounted stocks/sentiment/analysis 改为 Promise.all 并行加载。
 - 股息率来源调整：条件选股快照的股息率改为优先使用腾讯实时行情（field 49），其次雪球实时数据，最后回退到历史分红估算，不再自己算。
 - 股息率计算优化：从"近1年补值"改为按价格比例推算全历史（`雪球值 × 当前价 / 历史价`），分红金额不变、收益率随价格波动，图表更准确。

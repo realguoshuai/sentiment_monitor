@@ -649,8 +649,13 @@ class PriceService:
                  incremental_url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={lower_symbol},{fetch_period},,,5,qfq"
                  try:
                      resp = cls._session.get(incremental_url, timeout=(8, 15), proxies={"http": None, "https": None})
-                     inc_data = resp.json().get('data', {}).get(lower_symbol, {}).get('qfqday') or \
-                               resp.json().get('data', {}).get(lower_symbol, {}).get('day') or []
+                     inc_data_resp = resp.json().get('data', {}).get(lower_symbol, {})
+                     period_key = {
+                         'day': ('qfqday', 'day'),
+                         'week': ('qfqweek', 'week'),
+                         'month': ('qfqmonth', 'month'),
+                     }.get(fetch_period, ('qfqday', 'day'))
+                     inc_data = inc_data_resp.get(period_key[0]) or inc_data_resp.get(period_key[1]) or []
                      if inc_data:
                          new_points = []
                          for day in inc_data:
@@ -675,8 +680,13 @@ class PriceService:
                 resp = cls._session.get(url_kline, timeout=8, proxies={"http": None, "https": None})
                 data_json = resp.json()
                 data_res = data_json.get('data', {}).get(lower_symbol, {})
-                # 前复权 (qfq) 数据在 qfqday 键下；none/bfq 在 day 键下
-                days = data_res.get('qfqday') or data_res.get('day') or []
+                # 前复权 (qfq) 数据在 qfqday/qfqweek/qfqmonth 键下；不复权在 day/week/month 键下
+                period_key = {
+                    'day': ('qfqday', 'day'),
+                    'week': ('qfqweek', 'week'),
+                    'month': ('qfqmonth', 'month'),
+                }.get(fetch_period, ('qfqday', 'day'))
+                days = data_res.get(period_key[0]) or data_res.get(period_key[1]) or []
                 for day in days:
                     if len(day) < 3: continue
                     volume = safe_float(day[5]) if len(day) >= 6 else 0.0

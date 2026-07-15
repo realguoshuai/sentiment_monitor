@@ -727,10 +727,13 @@ class SentimentApiTests(APITestCase):
 
     @patch('api.fundamental_service.FundamentalService.get_quality_data')
     def test_quality_endpoint_returns_cashflow_summary(self, mock_get_quality_data):
-        mock_get_quality_data.return_value = {
-            'quality_history': [{'year': 2025, 'cfo': 100, 'fcf': 70}],
-            'cashflow_summary': {'latest_fcf_yield_pct': 5.2, 'cashflow_quality_label': 'strong'},
-        }
+        mock_get_quality_data.side_effect = lambda symbol, include_shareholder=True, return_status=False: (
+            {
+                'quality_history': [{'year': 2025, 'cfo': 100, 'fcf': 70}],
+                'cashflow_summary': {'latest_fcf_yield_pct': 5.2, 'cashflow_quality_label': 'strong'},
+            },
+            'computed',
+        )
 
         response = self.client.get('/api/sentiment/quality/?symbol=SZ000001')
 
@@ -740,11 +743,14 @@ class SentimentApiTests(APITestCase):
 
     @patch('api.fundamental_service.FundamentalService.get_quality_data')
     def test_quality_endpoint_returns_capital_allocation_summary(self, mock_get_quality_data):
-        mock_get_quality_data.return_value = {
-            'quality_history': [{'year': 2025, 'roic_proxy_pct': 12.4}],
-            'cashflow_summary': {},
-            'capital_allocation_summary': {'latest_roic_proxy_pct': 12.4, 'capital_allocation_label': 'balanced'},
-        }
+        mock_get_quality_data.side_effect = lambda symbol, include_shareholder=True, return_status=False: (
+            {
+                'quality_history': [{'year': 2025, 'roic_proxy_pct': 12.4}],
+                'cashflow_summary': {},
+                'capital_allocation_summary': {'latest_roic_proxy_pct': 12.4, 'capital_allocation_label': 'balanced'},
+            },
+            'computed',
+        )
 
         response = self.client.get('/api/sentiment/quality/?symbol=SZ000001')
 
@@ -754,12 +760,15 @@ class SentimentApiTests(APITestCase):
 
     @patch('api.fundamental_service.FundamentalService.get_quality_data')
     def test_quality_endpoint_returns_stability_summary(self, mock_get_quality_data):
-        mock_get_quality_data.return_value = {
-            'quality_history': [{'year': 2025, 'revenue_growth_pct': -12.4}],
-            'cashflow_summary': {},
-            'capital_allocation_summary': {},
-            'stability_summary': {'cyclical_label': 'strong_cycle', 'operating_stability_label': 'volatile'},
-        }
+        mock_get_quality_data.side_effect = lambda symbol, include_shareholder=True, return_status=False: (
+            {
+                'quality_history': [{'year': 2025, 'revenue_growth_pct': -12.4}],
+                'cashflow_summary': {},
+                'capital_allocation_summary': {},
+                'stability_summary': {'cyclical_label': 'strong_cycle', 'operating_stability_label': 'volatile'},
+            },
+            'computed',
+        )
 
         response = self.client.get('/api/sentiment/quality/?symbol=SZ000001')
 
@@ -769,13 +778,16 @@ class SentimentApiTests(APITestCase):
 
     @patch('api.fundamental_service.FundamentalService.get_quality_data')
     def test_quality_endpoint_returns_balance_sheet_summary(self, mock_get_quality_data):
-        mock_get_quality_data.return_value = {
-            'quality_history': [{'year': 2025, 'debt_to_equity_pct': 42.0}],
-            'cashflow_summary': {},
-            'capital_allocation_summary': {},
-            'stability_summary': {},
-            'balance_sheet_summary': {'balance_sheet_label': '中风险', 'latest_debt_to_equity_pct': 42.0},
-        }
+        mock_get_quality_data.side_effect = lambda symbol, include_shareholder=True, return_status=False: (
+            {
+                'quality_history': [{'year': 2025, 'debt_to_equity_pct': 42.0}],
+                'cashflow_summary': {},
+                'capital_allocation_summary': {},
+                'stability_summary': {},
+                'balance_sheet_summary': {'balance_sheet_label': '中风险', 'latest_debt_to_equity_pct': 42.0},
+            },
+            'computed',
+        )
 
         response = self.client.get('/api/sentiment/quality/?symbol=SZ000001')
 
@@ -785,24 +797,27 @@ class SentimentApiTests(APITestCase):
 
     @patch('api.fundamental_service.FundamentalService.get_quality_data')
     def test_quality_endpoint_returns_shareholder_history(self, mock_get_quality_data):
-        mock_get_quality_data.return_value = {
-            'quality_history': [],
-            'cashflow_summary': {},
-            'capital_allocation_summary': {},
-            'stability_summary': {},
-            'shareholder_history': [{
-                'date': '2025-12-31',
-                'price': 12.3,
-                'holder_count': 100000,
-                'notice_date': '2026-01-20',
-            }],
-            'shareholder_summary': {
-                'latest_holder_count': 100000,
-                'latest_price': 12.3,
-                'latest_stat_date': '2025-12-31',
-                'holder_trend_label': '筹码集中',
+        mock_get_quality_data.side_effect = lambda symbol, include_shareholder=True, return_status=False: (
+            {
+                'quality_history': [],
+                'cashflow_summary': {},
+                'capital_allocation_summary': {},
+                'stability_summary': {},
+                'shareholder_history': [{
+                    'date': '2025-12-31',
+                    'price': 12.3,
+                    'holder_count': 100000,
+                    'notice_date': '2026-01-20',
+                }],
+                'shareholder_summary': {
+                    'latest_holder_count': 100000,
+                    'latest_price': 12.3,
+                    'latest_stat_date': '2025-12-31',
+                    'holder_trend_label': '筹码集中',
+                },
             },
-        }
+            'computed',
+        )
 
         response = self.client.get('/api/sentiment/quality/?symbol=SZ000001')
 
@@ -814,19 +829,22 @@ class SentimentApiTests(APITestCase):
 
     @patch('api.fundamental_service.FundamentalService.get_quality_data')
     def test_quality_endpoint_can_skip_shareholder_structure(self, mock_get_quality_data):
-        mock_get_quality_data.return_value = {
-            'quality_history': [{'year': 2025, 'cfo': 100}],
-            'cashflow_summary': {'cashflow_quality_label': 'strong'},
-            'capital_allocation_summary': {},
-            'stability_summary': {},
-            'shareholder_history': [],
-            'shareholder_summary': {},
-        }
+        mock_get_quality_data.side_effect = lambda symbol, include_shareholder=True, return_status=False: (
+            {
+                'quality_history': [{'year': 2025, 'cfo': 100}],
+                'cashflow_summary': {'cashflow_quality_label': 'strong'},
+                'capital_allocation_summary': {},
+                'stability_summary': {},
+                'shareholder_history': [],
+                'shareholder_summary': {},
+            },
+            'computed',
+        )
 
         response = self.client.get('/api/sentiment/quality/?symbol=SZ000001&include_shareholder=0')
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        mock_get_quality_data.assert_called_once_with('SZ000001', include_shareholder=False)
+        mock_get_quality_data.assert_called_once_with('SZ000001', include_shareholder=False, return_status=True)
 
     # ── Screener 快照刷新测试（适配 Tencent 优先逻辑） ──────────────
 
@@ -1162,18 +1180,20 @@ class SentimentApiTests(APITestCase):
         self.assertEqual(response.data['shareholder_history'][0]['price'], 12.3)
         self.assertEqual(response.data['shareholder_summary']['latest_price'], 12.3)
 
-    @patch('api.history_backtest_service.HistoryBacktestService.get_history_backtest')
-    def test_history_backtest_endpoint(self, mock_history_backtest):
-        mock_history_backtest.return_value = {
+    @patch('api.history_backtest_service.HistoryBacktestService.get_backtest_response')
+    def test_history_backtest_endpoint(self, mock_get_backtest_response):
+        mock_get_backtest_response.return_value = {
             'symbol': 'SZ000001',
             'sample_summary': {'monthly_points': 120, 'daily_points': 250},
+            'cache_status': 'fresh',
+            'background_refreshing': False,
         }
 
         response = self.client.get('/api/sentiment/history-backtest/?symbol=SZ000001')
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['symbol'], 'SZ000001')
-        mock_history_backtest.assert_called_once_with('SZ000001')
+        mock_get_backtest_response.assert_called_once_with('SZ000001')
 
     @patch('api.history_backtest_service.PriceService.get_historical_data')
     @patch('api.history_backtest_service.AnalysisService.get_analysis')
