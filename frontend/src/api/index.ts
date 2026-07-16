@@ -185,6 +185,7 @@ export interface ScreenerResult {
   roi_pct: number
   net_cash_ratio: number
   cfo_yield: number
+  fcf_yield: number
   is_monitored: boolean
 }
 

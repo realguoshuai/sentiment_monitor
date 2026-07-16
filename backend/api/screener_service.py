@@ -468,23 +468,18 @@ class ScreenerService:
                 per_page = len(first_rows)
                 total_pages = ceil(total / per_page) if per_page > 0 else 1
 
+                # 后续分页：跳过失败页面，不重试（保证速度）
                 for page in range(2, total_pages + 1):
-                    page_params = {**params, 'pn': str(page)}
-                    for retry in range(2):
-                        try:
-                            r2 = session.get(url, params=page_params, headers=headers, timeout=(10, 20))
-                            if r2.status_code == 200:
-                                page_data = r2.json()
-                                page_rows = page_data.get('data', {}).get('diff', [])
-                                if page_rows:
-                                    all_rows.extend(page_rows)
-                                break
-                        except Exception as page_err:
-                            logger.warning(f"Page fetch failed (page {page}, retry {retry}): {page_err}")
-                            if retry < 1:
-                                _time.sleep(0.5)
-                            else:
-                                break
+                    try:
+                        page_params = {**params, 'pn': str(page)}
+                        r2 = session.get(url, params=page_params, headers=headers, timeout=(8, 12))
+                        if r2.status_code == 200:
+                            page_data = r2.json()
+                            page_rows = page_data.get('data', {}).get('diff', [])
+                            if page_rows:
+                                all_rows.extend(page_rows)
+                    except Exception as page_err:
+                        logger.debug("Page %d fetch skipped: %s", page, page_err)
 
                 return all_rows, total, None
             except Exception as exc:
@@ -497,18 +492,18 @@ class ScreenerService:
 
                 # 先用 pz=5000 尝试
                 rows, total, err = _try_fetch(url, 5000)
-                if rows and len(rows) >= total * 0.8:
+                if rows and len(rows) >= total * 0.6:
                     df = pd.DataFrame(rows)
                     df = cls._rename_em_fields(df)
                     if not df.empty:
                         logger.info("East Money direct fetch (pz=5000): total=%d, fetched=%d rows", total, len(df))
                         return df, None
 
-                # pz=5000 不完整，降级到 pz=100 逐页拉
+                # pz=5000 不完整，降级到 pz=100 逐页拉（跳过失败页）
                 if total > 0:
                     logger.info("pz=5000 got %d/%d rows, retrying with pz=100", len(rows), total)
                     rows2, total2, err2 = _try_fetch(url, 100)
-                    if rows2 and len(rows2) >= total2 * 0.8:
+                    if rows2 and len(rows2) >= 1000:
                         df = pd.DataFrame(rows2)
                         df = cls._rename_em_fields(df)
                         if not df.empty:
@@ -523,7 +518,7 @@ class ScreenerService:
                             return df, None
 
                 last_error = err
-                if rows:
+                if rows and len(rows) >= 100:
                     # 即使不完整也返回，总比空好
                     df = pd.DataFrame(rows)
                     df = cls._rename_em_fields(df)
@@ -707,6 +702,72 @@ class ScreenerService:
                 )
             )
 
+        # --- 第二阶段：对现金流充沛的标的补充 FCF 收益率 ---
+        # 真实数据来源（优先级）：①年度现金流水表 CFO-CapEx → ②get_quality_data 缓存
+        # 所有数据源均不可用时 fcf_yield 保持 0，不做估算
+        from .fundamental_service import FundamentalService as FS
+        candidate_symbols = [
+            r.symbol for r in rows
+            if r.cfo_yield >= 15
+        ]
+        if candidate_symbols:
+            logger.info(
+                "FCF phase: fetching FCF yield for %d candidates (cfo_yield>=15%%)...",
+                len(candidate_symbols),
+            )
+            fcf_map: dict[str, float] = {}
+            _sym_mc = {r.symbol: r.market_cap for r in rows}
+
+            def _fetch_fcf(sym: str) -> tuple[str, float]:
+                mc = _sym_mc.get(sym, 0)
+                try:
+                    # ① 年度现金流水表 CFO - CapEx = FCF（单次调用，最新年份）
+                    df_cf = FS.get_yearly_cashflow(sym)
+                    if isinstance(df_cf, pd.DataFrame) and not df_cf.empty:
+                        cfo_col = next((c for c in ['NETCASH_OPERATE', '经营活动产生的现金流量净额'] if c in df_cf.columns), None)
+                        capex_col = next((c for c in ['CONSTRUCT_LONG_ASSET', 'FIXED_ASSET_OTHER_LONG_ASSET_PAY', 'PURCHASE_FIX_INTAN_OTHER_LONG_ASSET', '购建固定资产、无形资产和其他长期资产支付的现金'] if c in df_cf.columns), None)
+                        if cfo_col:
+                            cfo_val = float(pd.to_numeric(df_cf[cfo_col].iloc[-1], errors='coerce') or 0)
+                            capex_val = abs(float(pd.to_numeric(df_cf[capex_col].iloc[-1], errors='coerce') or 0)) if capex_col else 0
+                            fcf = cfo_val - capex_val
+                            if mc > 0 and fcf > 0:
+                                return sym, (fcf / mc) * 100
+
+                    # ② 兜底：已缓存的质量数据
+                    data = FS.get_quality_data(sym, include_shareholder=False)
+                    if isinstance(data, dict):
+                        summary = data.get('cashflow_summary') or {}
+                        yield_val = float(summary.get('latest_fcf_yield_pct', 0) or 0)
+                        if yield_val > 0:
+                            return sym, yield_val
+                except Exception as exc:
+                    logger.debug("FCF fetch failed for %s: %s", sym, exc)
+                return sym, 0.0
+
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                futures = {pool.submit(_fetch_fcf, sym): sym for sym in candidate_symbols}
+                for future in as_completed(futures):
+                    sym, val = future.result()
+                    if val > 0:
+                        fcf_map[sym] = round(val, 2)
+
+            if fcf_map:
+                symbol_to_row = {r.symbol: r for r in rows}
+                for sym, val in fcf_map.items():
+                    row = symbol_to_row.get(sym)
+                    if row is not None:
+                        row.fcf_yield = val
+                logger.info("FCF phase: enriched %d stocks with FCF yield", len(fcf_map))
+
+            if fcf_map:
+                # 回写 snapshot row
+                symbol_to_row = {r.symbol: r for r in rows}
+                for sym, val in fcf_map.items():
+                    row = symbol_to_row.get(sym)
+                    if row is not None:
+                        row.fcf_yield = val
+                logger.info("FCF phase: enriched %d stocks with FCF yield", len(fcf_map))
+
         return rows
 
     @classmethod
@@ -714,23 +775,70 @@ class ScreenerService:
         """腾讯 API 全量快照：批量查询 5000+ 只股票约 1 秒"""
         try:
             import requests as req
-            import baostock as bs
 
-            # 1. 从 Baostock 获取全量 A 股代码列表（TCP 协议，不受网络限制）
-            lr = bs.login()
-            if lr.error_code != '0':
-                logger.warning("Baostock login failed for snapshot: %s", lr.error_msg)
-                return pd.DataFrame()
-
-            rs = bs.query_stock_basic()
+            # 1. 获取全量 A 股代码列表
             all_codes = []
-            while rs.next():
-                row = rs.get_row_data()
-                if row[4] == '1' and row[5] == '1':  # type=股票, status=上市
-                    all_codes.append(row[0])  # sh.600519
-            bs.logout()
+            try:
+                import baostock as bs
+                lr = bs.login()
+                if lr.error_code == '0':
+                    rs = bs.query_stock_basic()
+                    while rs.next():
+                        row = rs.get_row_data()
+                        if row[4] == '1' and row[5] == '1':
+                            all_codes.append(row[0])
+                    bs.logout()
+                else:
+                    logger.warning("Baostock login failed: %s", lr.error_msg)
+            except Exception as bs_err:
+                logger.warning("Baostock unavailable: %s", bs_err)
+
+            # Baostock 不可用时，从数据库已有快照或 AkShare 补代码列表
+            if not all_codes:
+                # 先试数据库已有快照（最快）
+                latest_snap_date = (
+                    StockScreenerSnapshot.objects.order_by('-snapshot_date')
+                    .values_list('snapshot_date', flat=True).first()
+                )
+                if latest_snap_date:
+                    db_codes = list(
+                        StockScreenerSnapshot.objects.filter(
+                            snapshot_date=latest_snap_date
+                        ).values_list('symbol', flat=True)
+                    )
+                    all_codes = [
+                        f"{s[:2].lower()}.{s[2:]}" for s in db_codes
+                        if len(s) >= 8
+                    ]
+                    logger.info(
+                        "Tencent snapshot: using %d codes from database snapshot %s",
+                        len(all_codes), latest_snap_date,
+                    )
+
+            # 数据库也没有 → 从 AkShare 东财快照取代码列表
+            if not all_codes:
+                try:
+                    df_em = ak.stock_zh_a_spot_em()
+                    if df_em is not None and not df_em.empty:
+                        code_col = next(
+                            (c for c in ['代码', '股票代码'] if c in df_em.columns),
+                            None,
+                        )
+                        if code_col:
+                            raw_codes = df_em[code_col].astype(str).str.strip().str.upper().tolist()
+                            all_codes = [
+                                f"{'sh' if c.startswith('6') else 'sz'}.{c}"
+                                for c in raw_codes if c and len(c) == 6
+                            ]
+                            logger.info(
+                                "Tencent snapshot: using %d codes from East Money spot",
+                                len(all_codes),
+                            )
+                except Exception as em_err:
+                    logger.warning("East Money spot code list failed: %s", em_err)
 
             if not all_codes:
+                logger.warning("Tencent snapshot: no stock codes available")
                 return pd.DataFrame()
 
             # 2. 转换为腾讯格式并批量查询
@@ -1357,6 +1465,8 @@ class ScreenerService:
             ('net_cash_ratio_max', 'net_cash_ratio__lte'),
             ('cfo_yield_min', 'cfo_yield__gte'),
             ('cfo_yield_max', 'cfo_yield__lte'),
+            ('fcf_yield_min', 'fcf_yield__gte'),
+            ('fcf_yield_max', 'fcf_yield__lte'),
         ]
         for raw_key, orm_key in numeric_filters:
             raw_value = filters.get(raw_key)
@@ -1380,6 +1490,7 @@ class ScreenerService:
             'symbol': 'symbol',
             'net_cash_ratio': 'net_cash_ratio',
             'cfo_yield': 'cfo_yield',
+            'fcf_yield': 'fcf_yield',
         }
         order_field = sort_mapping.get(sort_by, 'pb')
         if sort_order == 'desc':
@@ -1410,6 +1521,7 @@ class ScreenerService:
                 'roi_pct': round(float(getattr(row, 'roi_pct', 0.0) or 0.0), 2),
                 'net_cash_ratio': row.net_cash_ratio,
                 'cfo_yield': row.cfo_yield,
+                'fcf_yield': row.fcf_yield,
                 'is_monitored': row.symbol in monitored_symbols,
             }
             for row in rows

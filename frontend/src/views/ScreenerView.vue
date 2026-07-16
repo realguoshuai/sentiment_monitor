@@ -29,6 +29,7 @@
           <label><span>市值 ≥</span><input v-model.number="filters.market_cap_min_100m" type="number" step="1" placeholder="--" /><span class="unit">亿</span></label>
           <label><span>净现比 ≥</span><input v-model.number="filters.net_cash_ratio_min" type="number" step="0.1" placeholder="--" /></label>
           <label><span>现金流收益 ≥</span><input v-model.number="filters.cfo_yield_min" type="number" step="0.5" placeholder="--" /><span class="unit">%</span></label>
+          <label><span>FCF 收益 ≥</span><input v-model.number="filters.fcf_yield_min" type="number" step="0.5" placeholder="--" /><span class="unit">%</span></label>
         </div>
 
         <div class="filter-actions">
@@ -64,6 +65,7 @@
             <option value="price">价格</option>
             <option value="net_cash_ratio">净现比</option>
             <option value="cfo_yield">现金流收益率</option>
+            <option value="fcf_yield">FCF 收益率</option>
           </select>
           <button class="sort-dir-btn" type="button" @click="filters.sort_order = filters.sort_order === 'asc' ? 'desc' : 'asc'; applyFilters(1)">
             {{ filters.sort_order === 'asc' ? '↑ 升序' : '↓ 降序' }}
@@ -120,6 +122,9 @@
             <span>高 ROE</span><strong>{{ valuationBuckets.highRoe }}</strong>
           </div>
           <div class="stat-item">
+            <span>高 FCF</span><strong>{{ valuationBuckets.highFcf }}</strong>
+          </div>
+          <div class="stat-item">
             <span>已监控</span><strong>{{ monitoredCount }}</strong>
           </div>
           <div class="stat-item">
@@ -142,6 +147,7 @@
                 <th><button class="sort-header" type="button" @click="toggleSort('dividend_yield')">股息率 <span :class="{ active: filters.sort_by === 'dividend_yield' }">{{ getSortIndicator('dividend_yield') }}</span></button></th>
                 <th><button class="sort-header" type="button" @click="toggleSort('net_cash_ratio')">净现比 <span :class="{ active: filters.sort_by === 'net_cash_ratio' }">{{ getSortIndicator('net_cash_ratio') }}</span></button></th>
                 <th><button class="sort-header" type="button" @click="toggleSort('cfo_yield')">现金流收益 <span :class="{ active: filters.sort_by === 'cfo_yield' }">{{ getSortIndicator('cfo_yield') }}</span></button></th>
+                <th><button class="sort-header" type="button" @click="toggleSort('fcf_yield')">FCF 收益率 <span :class="{ active: filters.sort_by === 'fcf_yield' }">{{ getSortIndicator('fcf_yield') }}</span></button></th>
               </tr>
             </thead>
             <tbody>
@@ -177,6 +183,7 @@
                 <td><span class="metric-pill" :class="getMetricTone('dividend', row.dividend_yield)">{{ formatPct(row.dividend_yield) }}</span></td>
                 <td><span class="metric-pill" :class="getMetricTone('net_cash_ratio', row.net_cash_ratio)">{{ formatNumber(row.net_cash_ratio) }}</span></td>
                 <td><span class="metric-pill" :class="getMetricTone('cfo_yield', row.cfo_yield)">{{ formatPct(row.cfo_yield) }}</span></td>
+                <td><span class="metric-pill" :class="getMetricTone('fcf_yield', row.fcf_yield)">{{ formatPct(row.fcf_yield) }}</span></td>
               </tr>
             </tbody>
           </table>
@@ -243,8 +250,8 @@ import { useRouter } from 'vue-router'
 
 import { stockApi, type ScreenerMeta, type ScreenerResult } from '@/api'
 
-type ScreenerPreset = 'dividend_value' | 'quality_value' | 'cash_cow'
-type SortableField = 'price' | 'pe' | 'pb' | 'roe' | 'roi' | 'dividend_yield' | 'market_cap' | 'net_cash_ratio' | 'cfo_yield'
+type ScreenerPreset = 'dividend_value' | 'quality_value' | 'cash_cow' | 'ten_year_payback'
+type SortableField = 'price' | 'pe' | 'pb' | 'roe' | 'roi' | 'dividend_yield' | 'market_cap' | 'net_cash_ratio' | 'cfo_yield' | 'fcf_yield'
 
 const router = useRouter()
 
@@ -278,6 +285,7 @@ const filters = reactive({
   market_cap_min_100m: null as number | null,
   net_cash_ratio_min: null as number | null,
   cfo_yield_min: null as number | null,
+  fcf_yield_min: null as number | null,
   include_anomalies: false,
   sort_by: 'pb',
   sort_order: 'asc',
@@ -315,6 +323,14 @@ const presetCards: Array<{
     metrics: ['ROE ≥ 12%', '净现比 ≥ 1.0', '现金流收益率 ≥ 6%'],
     tone: 'steady',
   },
+  {
+    key: 'ten_year_payback',
+    title: '十年回本',
+    tagline: 'Preset 04',
+    description: '自由现金流 FCF 收益率 ≥ 10%，近似十年回本。',
+    metrics: ['FCF 收益率 ≥ 10%', '净现比 ≥ 1.0'],
+    tone: 'steady',
+  },
 ]
 
 const sortLabelMap: Record<string, string> = {
@@ -327,6 +343,7 @@ const sortLabelMap: Record<string, string> = {
   price: '价格',
   net_cash_ratio: '净现比',
   cfo_yield: '现金流收益率',
+  fcf_yield: 'FCF 收益率',
 }
 
 const defaultSortOrderMap: Record<SortableField, 'asc' | 'desc'> = {
@@ -339,6 +356,7 @@ const defaultSortOrderMap: Record<SortableField, 'asc' | 'desc'> = {
   market_cap: 'desc',
   net_cash_ratio: 'desc',
   cfo_yield: 'desc',
+  fcf_yield: 'desc',
 }
 
 const activeFilterCount = computed(() => {
@@ -351,6 +369,7 @@ const activeFilterCount = computed(() => {
   if (filters.market_cap_min_100m !== null) count += 1
   if (filters.net_cash_ratio_min !== null) count += 1
   if (filters.cfo_yield_min !== null) count += 1
+  if (filters.fcf_yield_min !== null) count += 1
   if (filters.include_anomalies) count += 1
   return count
 })
@@ -378,6 +397,7 @@ const activeFilterTags = computed(() => {
   if (filters.market_cap_min_100m !== null) tags.push(`市值 ≥ ${filters.market_cap_min_100m} 亿`)
   if (filters.net_cash_ratio_min !== null) tags.push(`净现比 ≥ ${filters.net_cash_ratio_min}`)
   if (filters.cfo_yield_min !== null) tags.push(`现金流收益率 ≥ ${filters.cfo_yield_min}%`)
+  if (filters.fcf_yield_min !== null) tags.push(`FCF 收益率 ≥ ${filters.fcf_yield_min}%`)
   if (filters.include_anomalies) tags.push('包含异常样本')
   return tags
 })
@@ -388,6 +408,7 @@ const valuationBuckets = computed(() => ({
   lowPb: results.value.filter((item) => Number(item.pb) > 0 && Number(item.pb) <= 1.5).length,
   highDividend: results.value.filter((item) => Number(item.dividend_yield) >= 5).length,
   highRoe: results.value.filter((item) => Number(item.roe_pct) >= 15).length,
+  highFcf: results.value.filter((item) => Number(item.fcf_yield) >= 10).length,
 }))
 
 const industryHighlights = computed(() => {
@@ -419,6 +440,14 @@ const topIdeas = computed(() => {
     const roe = Number(row.roe_pct)
     const dividend = Number(row.dividend_yield)
     const roi = Number(row.roi_pct)
+    const fcf = Number(row.fcf_yield)
+
+    if (!Number.isNaN(fcf) && fcf >= 10) {
+      score += 25
+      reasons.push(`FCF 收益率 ${fcf.toFixed(1)}%`)
+    } else if (!Number.isNaN(fcf) && fcf >= 5) {
+      score += 10
+    }
 
     if (!Number.isNaN(pb) && pb > 0) {
       if (pb <= 1.5) {
@@ -487,6 +516,7 @@ const buildParams = (page = 1) => ({
   market_cap_min: filters.market_cap_min_100m ? filters.market_cap_min_100m * 1e8 : undefined,
   net_cash_ratio_min: filters.net_cash_ratio_min ?? undefined,
   cfo_yield_min: filters.cfo_yield_min ?? undefined,
+  fcf_yield_min: filters.fcf_yield_min ?? undefined,
   include_anomalies: filters.include_anomalies ? 1 : undefined,
   sort_by: filters.sort_by,
   sort_order: filters.sort_order,
@@ -595,6 +625,7 @@ const resetFilters = () => {
   filters.market_cap_min_100m = null
   filters.net_cash_ratio_min = null
   filters.cfo_yield_min = null
+  filters.fcf_yield_min = null
   filters.include_anomalies = false
   filters.sort_by = 'pb'
   filters.sort_order = 'asc'
@@ -610,9 +641,17 @@ const applyPreset = (preset: ScreenerPreset) => {
   filters.market_cap_min_100m = null
   filters.net_cash_ratio_min = null
   filters.cfo_yield_min = null
+  filters.fcf_yield_min = null
   filters.include_anomalies = false
   filters.sort_by = 'pb'
   filters.sort_order = 'asc'
+
+  if (preset === 'ten_year_payback') {
+    filters.fcf_yield_min = 10
+    filters.net_cash_ratio_min = 1.0
+    filters.sort_by = 'fcf_yield'
+    filters.sort_order = 'desc'
+  }
 
   if (preset === 'dividend_value') {
     filters.pb_max = 1.5
@@ -714,7 +753,7 @@ const getSortIndicator = (field: SortableField) => {
   return filters.sort_order === 'asc' ? '↑' : '↓'
 }
 
-const getMetricTone = (metric: 'pb' | 'pe' | 'roe' | 'roi' | 'dividend' | 'net_cash_ratio' | 'cfo_yield', value?: number | null) => {
+const getMetricTone = (metric: 'pb' | 'pe' | 'roe' | 'roi' | 'dividend' | 'net_cash_ratio' | 'cfo_yield' | 'fcf_yield', value?: number | null) => {
   if (value === undefined || value === null || Number.isNaN(Number(value))) return 'tone-muted'
   const numeric = Number(value)
 
@@ -751,6 +790,13 @@ const getMetricTone = (metric: 'pb' | 'pe' | 'roe' | 'roi' | 'dividend' | 'net_c
 
   if (metric === 'cfo_yield') {
     if (numeric >= 8) return 'tone-strong'
+    if (numeric >= 5) return 'tone-quality'
+    if (numeric <= 2) return 'tone-muted'
+    return 'tone-neutral'
+  }
+
+  if (metric === 'fcf_yield') {
+    if (numeric >= 10) return 'tone-strong'
     if (numeric >= 5) return 'tone-quality'
     if (numeric <= 2) return 'tone-muted'
     return 'tone-neutral'
