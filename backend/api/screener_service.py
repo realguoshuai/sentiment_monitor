@@ -759,15 +759,6 @@ class ScreenerService:
                         row.fcf_yield = val
                 logger.info("FCF phase: enriched %d stocks with FCF yield", len(fcf_map))
 
-            if fcf_map:
-                # 回写 snapshot row
-                symbol_to_row = {r.symbol: r for r in rows}
-                for sym, val in fcf_map.items():
-                    row = symbol_to_row.get(sym)
-                    if row is not None:
-                        row.fcf_yield = val
-                logger.info("FCF phase: enriched %d stocks with FCF yield", len(fcf_map))
-
         return rows
 
     @classmethod
