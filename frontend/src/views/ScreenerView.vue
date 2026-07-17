@@ -568,7 +568,7 @@ const refreshSnapshot = async () => {
       // 异步刷新已启动，轮询等待完成
       errorMessage.value = ''
       let consecutiveErrors = 0
-      for (let i = 0; i < 120; i++) {
+      for (let i = 0; i < 200; i++) {
         if (signal.aborted) return
         await new Promise(r => setTimeout(r, 3000))
         if (signal.aborted) return

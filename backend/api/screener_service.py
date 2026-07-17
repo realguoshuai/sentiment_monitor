@@ -702,64 +702,87 @@ class ScreenerService:
                 )
             )
 
-        # --- 第二阶段：对现金流充沛的标的补充 FCF 收益率 ---
-        # 真实数据来源（优先级）：①年度现金流水表 CFO-CapEx → ②get_quality_data 缓存
-        # 所有数据源均不可用时 fcf_yield 保持 0，不做估算
+        return rows
+
+    @classmethod
+    def _enrich_fcf_yield(cls, rows: List[StockScreenerSnapshot]) -> None:
+        """对快照行批量补充 FCF 收益率（数据库已写入后调用，超时 120s）"""
+        candidate_symbols = [r.symbol for r in rows if r.cfo_yield >= 15]
+        if not candidate_symbols:
+            return
+
+        logger.info(
+            "FCF enrich: fetching FCF yield for %d candidates (cfo_yield>=15%%)...",
+            len(candidate_symbols),
+        )
         from .fundamental_service import FundamentalService as FS
-        candidate_symbols = [
-            r.symbol for r in rows
-            if r.cfo_yield >= 15
-        ]
-        if candidate_symbols:
-            logger.info(
-                "FCF phase: fetching FCF yield for %d candidates (cfo_yield>=15%%)...",
-                len(candidate_symbols),
-            )
-            fcf_map: dict[str, float] = {}
-            _sym_mc = {r.symbol: r.market_cap for r in rows}
+        from concurrent.futures import wait as cf_wait, FIRST_COMPLETED
 
-            def _fetch_fcf(sym: str) -> tuple[str, float]:
-                mc = _sym_mc.get(sym, 0)
-                try:
-                    # ① 年度现金流水表 CFO - CapEx = FCF（单次调用，最新年份）
-                    df_cf = FS.get_yearly_cashflow(sym)
-                    if isinstance(df_cf, pd.DataFrame) and not df_cf.empty:
-                        cfo_col = next((c for c in ['NETCASH_OPERATE', '经营活动产生的现金流量净额'] if c in df_cf.columns), None)
-                        capex_col = next((c for c in ['CONSTRUCT_LONG_ASSET', 'FIXED_ASSET_OTHER_LONG_ASSET_PAY', 'PURCHASE_FIX_INTAN_OTHER_LONG_ASSET', '购建固定资产、无形资产和其他长期资产支付的现金'] if c in df_cf.columns), None)
-                        if cfo_col:
-                            cfo_val = float(pd.to_numeric(df_cf[cfo_col].iloc[-1], errors='coerce') or 0)
-                            capex_val = abs(float(pd.to_numeric(df_cf[capex_col].iloc[-1], errors='coerce') or 0)) if capex_col else 0
-                            fcf = cfo_val - capex_val
-                            if mc > 0 and fcf > 0:
-                                return sym, (fcf / mc) * 100
+        fcf_map: dict[str, float] = {}
+        _sym_mc = {r.symbol: r.market_cap for r in rows}
 
-                    # ② 兜底：已缓存的质量数据
-                    data = FS.get_quality_data(sym, include_shareholder=False)
-                    if isinstance(data, dict):
-                        summary = data.get('cashflow_summary') or {}
-                        yield_val = float(summary.get('latest_fcf_yield_pct', 0) or 0)
-                        if yield_val > 0:
-                            return sym, yield_val
-                except Exception as exc:
-                    logger.debug("FCF fetch failed for %s: %s", sym, exc)
-                return sym, 0.0
+        def _fetch_fcf(sym: str) -> tuple[str, float]:
+            mc = _sym_mc.get(sym, 0)
+            try:
+                df_cf = FS.get_yearly_cashflow(sym)
+                if isinstance(df_cf, pd.DataFrame) and not df_cf.empty:
+                    cfo_col = next((c for c in ['NETCASH_OPERATE', '经营活动产生的现金流量净额'] if c in df_cf.columns), None)
+                    capex_col = next((c for c in ['CONSTRUCT_LONG_ASSET', 'FIXED_ASSET_OTHER_LONG_ASSET_PAY', 'PURCHASE_FIX_INTAN_OTHER_LONG_ASSET', '购建固定资产、无形资产和其他长期资产支付的现金'] if c in df_cf.columns), None)
+                    if cfo_col:
+                        cfo_val = float(pd.to_numeric(df_cf[cfo_col].iloc[-1], errors='coerce') or 0)
+                        capex_val = abs(float(pd.to_numeric(df_cf[capex_col].iloc[-1], errors='coerce') or 0)) if capex_col else 0
+                        fcf = cfo_val - capex_val
+                        if mc > 0 and fcf > 0:
+                            return sym, (fcf / mc) * 100
 
-            with ThreadPoolExecutor(max_workers=8) as pool:
-                futures = {pool.submit(_fetch_fcf, sym): sym for sym in candidate_symbols}
-                for future in as_completed(futures):
-                    sym, val = future.result()
+                data = FS.get_quality_data(sym, include_shareholder=False)
+                if isinstance(data, dict):
+                    summary = data.get('cashflow_summary') or {}
+                    yield_val = float(summary.get('latest_fcf_yield_pct', 0) or 0)
+                    if yield_val > 0:
+                        return sym, yield_val
+            except Exception as exc:
+                logger.debug("FCF fetch failed for %s: %s", sym, exc)
+            return sym, 0.0
+
+        deadline = time.time() + 120
+        fs_map = {}
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for sym in candidate_symbols:
+                fs_map[pool.submit(_fetch_fcf, sym)] = sym
+
+            pending = set(fs_map.keys())
+            while pending and time.time() < deadline:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                completed, pending = cf_wait(
+                    pending, timeout=min(remaining, 10),
+                    return_when=FIRST_COMPLETED,
+                )
+                for f in completed:
+                    sym, val = f.result()
                     if val > 0:
                         fcf_map[sym] = round(val, 2)
 
-            if fcf_map:
-                symbol_to_row = {r.symbol: r for r in rows}
-                for sym, val in fcf_map.items():
-                    row = symbol_to_row.get(sym)
-                    if row is not None:
-                        row.fcf_yield = val
-                logger.info("FCF phase: enriched %d stocks with FCF yield", len(fcf_map))
-
-        return rows
+        if fcf_map:
+            symbol_to_row = {r.symbol: r for r in rows}
+            updates = []
+            for sym, val in fcf_map.items():
+                row = symbol_to_row.get(sym)
+                if row is not None:
+                    row.fcf_yield = val
+                    updates.append(row)
+            if updates:
+                StockScreenerSnapshot.objects.bulk_update(
+                    updates, ['fcf_yield'],
+                )
+            logger.info(
+                "FCF enrich: %d stocks enriched in %.1fs",
+                len(fcf_map), time.time() - deadline + 120,
+            )
+        else:
+            logger.info("FCF enrich: no FCF data obtained")
 
     @classmethod
     def _fetch_tencent_snapshot(cls) -> pd.DataFrame:
@@ -1020,23 +1043,16 @@ class ScreenerService:
                 logger.warning("Screener refresh produced no rows, retained previous database snapshot.")
             return retained
 
-        # 数据质量检查：如果 PE/PB 有效率低于 10%，说明上游数据缺失（如被代理拦截回退到新浪源）
+        # 数据质量检查（仅警告，不阻止保存）
         pe_valid = sum(1 for r in rows if r.pe > 0)
         pe_ratio = pe_valid / len(rows) if rows else 0
         if pe_ratio < 0.10:
-            retained = cls._build_retained_snapshot_response()
-            if retained['retained']:
-                logger.warning(
-                    f"Screener snapshot PE/PB valid ratio too low ({pe_valid}/{len(rows)}), "
-                    f"retained previous database snapshot. Check network/proxy settings."
-                )
-                retained['message'] = (
-                    f'快照 PE/PB 数据缺失（仅 {pe_valid}/{len(rows)} 有效），'
-                    f'已保留旧快照。请检查网络或代理设置，确保能访问东方财富接口。'
-                )
-                return retained
+            logger.warning(
+                f"Screener snapshot PE/PB valid ratio too low ({pe_valid}/{len(rows)}), "
+                f"snapshot was saved but PE/PB data may be incomplete."
+            )
 
-        # 最终去重：用 dict 保证 symbol 唯一（覆盖前面 set 去重的遗漏）
+        # 最终去重
         dedup: dict[str, StockScreenerSnapshot] = {}
         for r in rows:
             dedup.setdefault(r.symbol, r)
@@ -1063,6 +1079,12 @@ class ScreenerService:
         if stocks_to_update:
             Stock.objects.bulk_update(stocks_to_update, ['industry'])
             logger.info("Auto-filled industry for %d monitored stocks", len(stocks_to_update))
+
+        # 后台补充 FCF 收益率（超时 120s，能拿多少算多少）
+        try:
+            cls._enrich_fcf_yield(rows)
+        except Exception as fcf_err:
+            logger.warning("FCF enrichment failed (snapshot already saved): %s", fcf_err)
 
         message = f'已刷新 {len(rows)} 只 A 股的选股快照。'
         if source == 'cache':
