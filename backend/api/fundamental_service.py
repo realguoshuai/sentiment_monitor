@@ -431,7 +431,7 @@ class FundamentalService:
 
                 def _get(future, default, name):
                     try:
-                        return future.result(timeout=20)
+                        return future.result(timeout=16)
                     except concurrent.futures.TimeoutError:
                         logger.warning(f"[Quality] {name} timed out for {symbol}, using default")
                         return default

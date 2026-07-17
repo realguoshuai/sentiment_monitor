@@ -11,11 +11,18 @@ from contextlib import contextmanager
 logger = logging.getLogger(__name__)
 
 class FundamentalFetcher:
-    AKSHARE_TIMEOUT = (10, 25)
-    AKSHARE_EASTMONEY_TIMEOUT = (15, 35)
-    AKSHARE_RETRY_ATTEMPTS = 2
-    AKSHARE_RETRY_DELAY = 1.5
-    
+    AKSHARE_TIMEOUT = (6, 15)
+    AKSHARE_EASTMONEY_TIMEOUT = (6, 15)
+    AKSHARE_RETRY_ATTEMPTS = 1
+    AKSHARE_RETRY_DELAY = 1.0
+
+    # 东财熔断：连续 N 次超时后跳过 5 分钟
+    EASTMONEY_BREAKER_THRESHOLD = 3
+    EASTMONEY_BREAKER_DURATION = 300
+    _eastmoney_fail_count = 0
+    _eastmoney_blocked_until = 0.0
+    _breaker_lock = threading.RLock()
+
     _request_patch_lock = threading.RLock()
     _request_patch_refcount = 0
     _original_session_request = None
@@ -45,13 +52,25 @@ class FundamentalFetcher:
                 cls._original_session_request = requests.sessions.Session.request
 
                 def _request_with_timeout(session, method, url, **kwargs):
+                    # 东财熔断检测：在阻断期内直接抛超时，不发起请求
+                    if cls._is_eastmoney_finance_url(url) and time.time() < cls._eastmoney_blocked_until:
+                        raise requests.exceptions.ConnectTimeout(
+                            f"EastMoney circuit breaker active until {cls._eastmoney_blocked_until}"
+                        )
                     timeout = kwargs.get('timeout')
-                    # 东方财富财务接口优先使用更长超时（不管原 timeout 是多少）
                     if cls._is_eastmoney_finance_url(url):
                         kwargs['timeout'] = cls.AKSHARE_EASTMONEY_TIMEOUT
                     elif timeout in (None, 0):
                         kwargs['timeout'] = cls.AKSHARE_TIMEOUT
-                    return cls._original_session_request(session, method, url, **kwargs)
+                    try:
+                        return cls._original_session_request(session, method, url, **kwargs)
+                    except (requests.exceptions.ConnectTimeout,
+                            requests.exceptions.ReadTimeout,
+                            requests.exceptions.Timeout,
+                            requests.exceptions.ConnectionError) as exc:
+                        if cls._is_eastmoney_finance_url(url):
+                            cls._record_eastmoney_failure()
+                        raise
 
                 requests.sessions.Session.request = _request_with_timeout
             cls._request_patch_refcount += 1
@@ -116,6 +135,26 @@ class FundamentalFetcher:
             except (TypeError, ValueError):
                 return False
         return False
+
+    @classmethod
+    def _record_eastmoney_failure(cls):
+        """记录东财超时，达到阈值后触发熔断"""
+        with cls._breaker_lock:
+            cls._eastmoney_fail_count += 1
+            if cls._eastmoney_fail_count >= cls.EASTMONEY_BREAKER_THRESHOLD:
+                cls._eastmoney_blocked_until = time.time() + cls.EASTMONEY_BREAKER_DURATION
+                cls._eastmoney_fail_count = 0
+                logger.warning(
+                    "EastMoney circuit breaker tripped, blocked for %ss",
+                    cls.EASTMONEY_BREAKER_DURATION,
+                )
+
+    @classmethod
+    def reset_eastmoney_breaker(cls):
+        """东财恢复后手动重置熔断"""
+        with cls._breaker_lock:
+            cls._eastmoney_fail_count = 0
+            cls._eastmoney_blocked_until = 0.0
 
     _connection_warmed = False
 

@@ -170,8 +170,9 @@ class Command(BaseCommand):
                 except Exception as exc:
                     fail_count += 1
                     consecutive_fail += 1
-                    self.stderr.write(f'  [{i}/{len(monitored_symbols)}] [ERR] {symbol}: {exc}')
-                    if consecutive_fail >= 3:
+                    err_msg = str(exc)[:80]
+                    self.stderr.write(f'  [{i}/{len(monitored_symbols)}] [ERR] {symbol}: {err_msg}')
+                    if consecutive_fail >= 2:
                         self.stderr.write(
                             f'  连续失败 {consecutive_fail} 次，数据源可能不可用，跳过剩余标的'
                         )
