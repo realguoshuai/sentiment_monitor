@@ -706,7 +706,10 @@ class ScreenerService:
 
     @classmethod
     def _enrich_fcf_yield(cls, rows: List[StockScreenerSnapshot]) -> None:
-        """对快照行批量补充 FCF 收益率（数据库已写入后调用，超时 120s）"""
+        """对快照行批量补充 FCF 收益率（数据库已写入后调用，超时 120s）
+
+        优先级：监控股 > 其他候选。每只个股 HTTP 超时 4s，超时直接跳过。
+        """
         candidate_symbols = [r.symbol for r in rows if r.cfo_yield >= 15]
         if not candidate_symbols:
             return
@@ -717,14 +720,32 @@ class ScreenerService:
         )
         from .fundamental_service import FundamentalService as FS
         from concurrent.futures import wait as cf_wait, FIRST_COMPLETED
+        import requests as _req
 
         fcf_map: dict[str, float] = {}
         _sym_mc = {r.symbol: r.market_cap for r in rows}
+        _monitored = {format_symbol(s.symbol) for s in Stock.objects.all()}
+
+        # 监控股排前面
+        _candidates_sorted = sorted(
+            candidate_symbols,
+            key=lambda s: (0 if s in _monitored else 1, s),
+        )
 
         def _fetch_fcf(sym: str) -> tuple[str, float]:
             mc = _sym_mc.get(sym, 0)
             try:
-                df_cf = FS.get_yearly_cashflow(sym)
+                # 临时缩短全局 requests 超时，AkShare 调用不用傻等 15s
+                _orig_get = _req.Session.get
+                def _short_get(self, url, **kwargs):
+                    kwargs.setdefault('timeout', 4)
+                    return _orig_get(self, url, **kwargs)
+                _req.Session.get = _short_get
+                try:
+                    df_cf = FS.get_yearly_cashflow(sym)
+                finally:
+                    _req.Session.get = _orig_get
+
                 if isinstance(df_cf, pd.DataFrame) and not df_cf.empty:
                     cfo_col = next((c for c in ['NETCASH_OPERATE', '经营活动产生的现金流量净额'] if c in df_cf.columns), None)
                     capex_col = next((c for c in ['CONSTRUCT_LONG_ASSET', 'FIXED_ASSET_OTHER_LONG_ASSET_PAY', 'PURCHASE_FIX_INTAN_OTHER_LONG_ASSET', '购建固定资产、无形资产和其他长期资产支付的现金'] if c in df_cf.columns), None)
@@ -735,6 +756,7 @@ class ScreenerService:
                         if mc > 0 and fcf > 0:
                             return sym, (fcf / mc) * 100
 
+                # 兜底：已缓存的质量数据（不走 HTTP）
                 data = FS.get_quality_data(sym, include_shareholder=False)
                 if isinstance(data, dict):
                     summary = data.get('cashflow_summary') or {}
@@ -748,7 +770,7 @@ class ScreenerService:
         deadline = time.time() + 120
         fs_map = {}
         with ThreadPoolExecutor(max_workers=8) as pool:
-            for sym in candidate_symbols:
+            for sym in _candidates_sorted:
                 fs_map[pool.submit(_fetch_fcf, sym)] = sym
 
             pending = set(fs_map.keys())
@@ -757,7 +779,7 @@ class ScreenerService:
                 if remaining <= 0:
                     break
                 completed, pending = cf_wait(
-                    pending, timeout=min(remaining, 10),
+                    pending, timeout=min(remaining, 4),
                     return_when=FIRST_COMPLETED,
                 )
                 for f in completed:
