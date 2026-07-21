@@ -69,14 +69,13 @@ class PriceService:
 
     SNAPSHOT_CACHE_KEY = "a_share_spot_snapshot_for_valuation"
     SNAPSHOT_STALE_KEY = "a_share_spot_snapshot_stale"
-    _snapshot_circuit_until = 0  # 熔断截止时间戳
+    _snapshot_circuit_until = 0.0  # 熔断截止时间（monotonic）
     _snapshot_circuit_lock = threading.Lock()  # 保护电路断路器的 check-then-set
 
     @classmethod
     def refresh_snapshot_cache(cls):
         """后台异步抓取全量快照，不阻塞前台请求（带熔断）"""
-        import time
-        now = time.time()
+        now = time.monotonic()
         with cls._snapshot_circuit_lock:
             if now < cls._snapshot_circuit_until:
                 logger.debug("Snapshot circuit breaker active, skipping.")
@@ -95,7 +94,7 @@ class PriceService:
         except Exception as e:
             # 熔断 5 分钟，避免反复重试挂掉的接口
             with cls._snapshot_circuit_lock:
-                cls._snapshot_circuit_until = time.time() + 300
+                cls._snapshot_circuit_until = time.monotonic() + 300
             logger.warning(f"Background warming failed (circuit breaker 5min): {e}")
 
     @classmethod

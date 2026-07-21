@@ -1,7 +1,10 @@
 import time
+import logging
 from datetime import datetime
 
 from django.core.management.base import BaseCommand
+
+logger = logging.getLogger(__name__)
 
 from api.analysis_service import AnalysisService
 from api.fundamental_service import FundamentalService
@@ -170,8 +173,8 @@ class Command(BaseCommand):
                 except Exception as exc:
                     fail_count += 1
                     consecutive_fail += 1
-                    err_msg = str(exc)[:80]
-                    self.stderr.write(f'  [{i}/{len(monitored_symbols)}] [ERR] {symbol}: {err_msg}')
+                    logger.error(f"[{i}/{len(monitored_symbols)}] [ERR] {symbol}:", exc_info=True)
+                    self.stderr.write(f'  [{i}/{len(monitored_symbols)}] [ERR] {symbol}: {exc}')
                     if consecutive_fail >= 2:
                         self.stderr.write(
                             f'  连续失败 {consecutive_fail} 次，数据源可能不可用，跳过剩余标的'
