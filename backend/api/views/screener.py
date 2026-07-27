@@ -40,7 +40,8 @@ def refresh_screener_snapshot(request):
         return Response({'status': 'idle', 'message': '无刷新任务'})
 
     # POST 启动刷新：cache.add 原子加锁，防止并发重复刷新
-    if not cache.add(lock_key, True, 600):
+    # TTL=1800s：东财直连有 9 个子域名容错循环，极端超时可能卡 7-8 分钟
+    if not cache.add(lock_key, True, 1800):
         prev = cache.get(result_key) or {}
         return Response({
             'status': 'refreshing',

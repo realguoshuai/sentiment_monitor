@@ -164,6 +164,121 @@ class BaostockProvider:
             return None
 
     @classmethod
+    def fetch_balance_sheet(
+        cls,
+        symbol: str,
+        years: int = 5,
+    ) -> pd.DataFrame:
+        """
+        获取资产负债表数据（Baostock → DataFrame，列名对齐 AkShare 格式）
+
+        Args:
+            symbol: SH600519 格式
+            years: 回溯年数
+
+        Returns:
+            DataFrame with columns: REPORT_DATE, TOTAL_PARENT_EQUITY, TOTAL_ASSETS, MONETARYFUNDS
+            或空 DataFrame
+        """
+        if not cls._ensure_login():
+            return pd.DataFrame()
+
+        import baostock as bs
+        bs_symbol = cls._to_bs_symbol(symbol)
+        if not bs_symbol:
+            return pd.DataFrame()
+
+        rows = []
+        base_year = datetime.now().year
+        for year in range(base_year - years, base_year):  # 不包含当前年（Q4 尚未出）
+            for quarter in (4,):  # 只取年报（Q4）
+                try:
+                    result = bs.query_balance_data(
+                        code=bs_symbol,
+                        year=year,
+                        quarter=quarter,
+                    )
+                    if result.error_code != '0' or not result.next():
+                        continue
+                    row = result.get_row_data()
+                    # fields: code, pubDate, statDate, cash, totalAssets, totalLiab, totalEquity, ...
+                    stat_date = row[2] if len(row) > 2 else ''
+                    if not stat_date:
+                        continue
+                    rows.append({
+                        'REPORT_DATE': stat_date,
+                        'TOTAL_PARENT_EQUITY': safe_float(row[6]) if len(row) > 6 else 0,  # totalEquity
+                        'TOTAL_ASSETS': safe_float(row[4]) if len(row) > 4 else 0,  # totalAssets
+                        'MONETARYFUNDS': safe_float(row[3]) if len(row) > 3 else 0,  # cash
+                    })
+                except Exception as e:
+                    logger.debug("Baostock balance sheet error for %s (%dQ%d): %s", symbol, year, quarter, e)
+
+        df = pd.DataFrame(rows)
+        if df.empty:
+            return df
+        df['REPORT_DATE'] = pd.to_datetime(df['REPORT_DATE'], errors='coerce')
+        df = df.dropna(subset=['REPORT_DATE']).sort_values('REPORT_DATE').drop_duplicates('REPORT_DATE', keep='last')
+        return df
+
+    @classmethod
+    def fetch_cashflow(
+        cls,
+        symbol: str,
+        years: int = 5,
+    ) -> pd.DataFrame:
+        """
+        获取现金流量表数据（Baostock → DataFrame，列名对齐 AkShare 格式）
+
+        Args:
+            symbol: SH600519 格式
+            years: 回溯年数
+
+        Returns:
+            DataFrame with columns: REPORT_DATE, NETCASH_OPERATE, NETCASH_INVEST
+            或空 DataFrame
+        """
+        if not cls._ensure_login():
+            return pd.DataFrame()
+
+        import baostock as bs
+        bs_symbol = cls._to_bs_symbol(symbol)
+        if not bs_symbol:
+            return pd.DataFrame()
+
+        rows = []
+        base_year = datetime.now().year
+        for year in range(base_year - years, base_year):  # 不包含当前年（Q4 尚未出）
+            for quarter in (4,):
+                try:
+                    result = bs.query_cash_flow_data(
+                        code=bs_symbol,
+                        year=year,
+                        quarter=quarter,
+                    )
+                    if result.error_code != '0' or not result.next():
+                        continue
+                    row = result.get_row_data()
+                    # fields: code, pubDate, statDate, cfo, cashFlow1, cfi, cashFlow2, cff, cashFlow3, ...
+                    stat_date = row[2] if len(row) > 2 else ''
+                    if not stat_date:
+                        continue
+                    rows.append({
+                        'REPORT_DATE': stat_date,
+                        'NETCASH_OPERATE': safe_float(row[3]) if len(row) > 3 else 0,  # cfo
+                        'NETCASH_INVEST': safe_float(row[5]) if len(row) > 5 else 0,  # cfi
+                    })
+                except Exception as e:
+                    logger.debug("Baostock cashflow error for %s (%dQ%d): %s", symbol, year, quarter, e)
+
+        df = pd.DataFrame(rows)
+        if df.empty:
+            return df
+        df['REPORT_DATE'] = pd.to_datetime(df['REPORT_DATE'], errors='coerce')
+        df = df.dropna(subset=['REPORT_DATE']).sort_values('REPORT_DATE').drop_duplicates('REPORT_DATE', keep='last')
+        return df
+
+    @classmethod
     def fetch_growth(
         cls,
         symbol: str,

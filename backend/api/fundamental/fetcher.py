@@ -17,9 +17,11 @@ class FundamentalFetcher:
     AKSHARE_RETRY_DELAY = 1.0
 
     # 东财熔断：5 分钟内连续 N 次超时后跳过 EASTMONEY_BREAKER_DURATION 秒
+    # 阈值从 3→6：缓存预热时多只股票并发请求，少数超时不应全局熔断
+    # 时长从 300→60：短暂避让即可，5 分钟太激进
     EASTMONEY_BREAKER_WINDOW = 300      # 滑动窗口（秒）
-    EASTMONEY_BREAKER_THRESHOLD = 3     # 窗口内触发次数
-    EASTMONEY_BREAKER_DURATION = 300    # 触发后的阻断时长（秒）
+    EASTMONEY_BREAKER_THRESHOLD = 6     # 窗口内触发次数
+    EASTMONEY_BREAKER_DURATION = 60     # 触发后的阻断时长（秒）
     _eastmoney_fail_times = []          # [timestamp, ...] 失败时间戳列表用于滑动窗口
     _eastmoney_blocked_until = 0.0      # 阻断截止时间（monotonic）
     _breaker_lock = threading.RLock()

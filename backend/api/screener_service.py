@@ -25,8 +25,8 @@ logger = logging.getLogger(__name__)
 
 
 class ScreenerService:
-    # East Money CDN 子域名列表（个别子域名可能间歇性不可用）
-    EASTMONEY_SUBDOMAINS = [82, 83, 81, 90, 66, 55, 92, 91, 80]
+    # East Money CDN 子域名列表（缩短到 4 个高频可用，减少失败时的等待时间）
+    EASTMONEY_SUBDOMAINS = [82, 83, 81, 90]
     BATCH_SIZE = 160
     MAX_PAGE_SIZE = 200
     DEFAULT_PAGE_SIZE = 50
@@ -377,6 +377,12 @@ class ScreenerService:
             logger.error("East Money direct fetch exception: %s", direct_err)
             last_error = direct_err
 
+        # 如果东财直连全部超时/连接失败，大概率是网络问题，AkShare/Sina 同样会卡住
+        # 没必要再等它们，直接返回空，让上游走缓存或 retained 快照
+        if last_error and cls._is_network_error(last_error):
+            logger.warning("East Money all subdomains unreachable (%s), skipping retries", last_error)
+            return pd.DataFrame(), last_error
+
         # 2) AkShare 东财接口（带自动分页，固定子域名 82）
         with cls._proxy_lock:
             saved_proxy = cls._bypass_proxy()
@@ -421,6 +427,23 @@ class ScreenerService:
 
         return pd.DataFrame(), last_error
 
+    @staticmethod
+    def _is_network_error(exc: Exception) -> bool:
+        """判断异常是否为网络连通性问题（超时/DNS/连接被拒），而非业务错误"""
+        import requests as _req
+        exc_str = str(exc).lower()
+        if isinstance(exc, (_req.exceptions.ConnectTimeout,
+                            _req.exceptions.ReadTimeout,
+                            _req.exceptions.Timeout,
+                            _req.exceptions.ConnectionError)):
+            return True
+        # requests 超时/连接异常通常在嵌套异常中，字符串检测兜底
+        for keyword in ('timeout', 'connection', 'dns', 'name resolution',
+                        'no route', 'refused', 'eof', 'reset'):
+            if keyword in exc_str:
+                return True
+        return False
+
     @classmethod
     def _fetch_eastmoney_direct(cls) -> tuple[pd.DataFrame, Exception | None]:
         """直连东方财富 API，分页获取 + 多子域名容错 + 绕过 Windows 系统代理"""
@@ -454,7 +477,7 @@ class ScreenerService:
                 'fields': 'f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f21,f23,f24,f25,f22,f11,f62,f128,f136,f115,f152',
             }
             try:
-                r = session.get(url, params=params, headers=headers, timeout=(10, 20))
+                r = session.get(url, params=params, headers=headers, timeout=(5, 10))
                 if r.status_code != 200:
                     return [], 0, Exception(f'HTTP {r.status_code}')
                 data = r.json()
@@ -472,7 +495,7 @@ class ScreenerService:
                 for page in range(2, total_pages + 1):
                     try:
                         page_params = {**params, 'pn': str(page)}
-                        r2 = session.get(url, params=page_params, headers=headers, timeout=(8, 12))
+                        r2 = session.get(url, params=page_params, headers=headers, timeout=(3, 6))
                         if r2.status_code == 200:
                             page_data = r2.json()
                             page_rows = page_data.get('data', {}).get('diff', [])
@@ -708,23 +731,38 @@ class ScreenerService:
     def _enrich_fcf_yield(cls, rows: List[StockScreenerSnapshot]) -> None:
         """对快照行批量补充 FCF 收益率（数据库已写入后调用，超时 120s）
 
-        优先级：监控股 > 其他候选。每只个股 HTTP 超时 4s，超时直接跳过。
+        策略：
+        - 监控股：只要有市值，强制尝试（不依赖 cfo_yield 预筛）
+        - 其他候选股：cfo_yield >= 5 才尝试（过滤明显无效的标的）
         """
-        candidate_symbols = [r.symbol for r in rows if r.cfo_yield >= 15]
+        _monitored = {format_symbol(s.symbol) for s in Stock.objects.all()}
+        _sym_mc = {r.symbol: r.market_cap for r in rows}
+
+        # 监控股：无条件尝试
+        monitored_candidates = [s for s in _monitored if s in _sym_mc and _sym_mc[s] > 0]
+        # 非监控股：cfo_yield >= 5 才试（用 5% 替代旧的 15%，覆盖更多标的）
+        other_candidates = [
+            r.symbol for r in rows
+            if r.symbol not in _monitored and r.cfo_yield >= 5 and _sym_mc.get(r.symbol, 0) > 0
+        ]
+
+        candidate_symbols = monitored_candidates + other_candidates
         if not candidate_symbols:
+            logger.info(
+                "FCF enrich: no candidates (monitored=%d with mc>0, others with cfo_yield>=5: %d)",
+                len(monitored_candidates), len(other_candidates),
+            )
             return
 
         logger.info(
-            "FCF enrich: fetching FCF yield for %d candidates (cfo_yield>=15%%)...",
-            len(candidate_symbols),
+            "FCF enrich: fetching FCF yield for %d candidates (%d monitored, %d other)",
+            len(candidate_symbols), len(monitored_candidates), len(other_candidates),
         )
         from .fundamental_service import FundamentalService as FS
         from concurrent.futures import wait as cf_wait, FIRST_COMPLETED
         import requests as _req
 
         fcf_map: dict[str, float] = {}
-        _sym_mc = {r.symbol: r.market_cap for r in rows}
-        _monitored = {format_symbol(s.symbol) for s in Stock.objects.all()}
 
         # 监控股排前面
         _candidates_sorted = sorted(
@@ -788,20 +826,24 @@ class ScreenerService:
                         fcf_map[sym] = round(val, 2)
 
         if fcf_map:
-            symbol_to_row = {r.symbol: r for r in rows}
-            updates = []
-            for sym, val in fcf_map.items():
-                row = symbol_to_row.get(sym)
-                if row is not None:
-                    row.fcf_yield = val
-                    updates.append(row)
-            if updates:
-                StockScreenerSnapshot.objects.bulk_update(
-                    updates, ['fcf_yield'],
-                )
+            # 注意：rows 是通过 bulk_create(..., ignore_conflicts=True) 写入的，
+            # 写入后 rows 中的对象没有主键，不能直接用 bulk_update。
+            # 改用 snapshot_date + symbol__in 批量筛选后直接 update。
+            snapshot_date = rows[0].snapshot_date
+            from django.db.models import Case, Value, FloatField, When
+            cases = [
+                When(symbol=sym, then=Value(round(val, 2)))
+                for sym, val in fcf_map.items()
+            ]
+            updated = StockScreenerSnapshot.objects.filter(
+                snapshot_date=snapshot_date,
+                symbol__in=list(fcf_map.keys()),
+            ).update(
+                fcf_yield=Case(*cases, default=Value(0), output_field=FloatField()),
+            )
             logger.info(
-                "FCF enrich: %d stocks enriched in %.1fs",
-                len(fcf_map), time.time() - deadline + 120,
+                "FCF enrich: %d/%d stocks enriched in %.1fs",
+                updated, len(fcf_map), time.time() - deadline + 120,
             )
         else:
             logger.info("FCF enrich: no FCF data obtained")
@@ -813,45 +855,28 @@ class ScreenerService:
             import requests as req
 
             # 1. 获取全量 A 股代码列表
+            # 跳过 Baostock（经常封 IP/黑名单），直接从数据库已有快照取
             all_codes = []
-            try:
-                import baostock as bs
-                lr = bs.login()
-                if lr.error_code == '0':
-                    rs = bs.query_stock_basic()
-                    while rs.next():
-                        row = rs.get_row_data()
-                        if row[4] == '1' and row[5] == '1':
-                            all_codes.append(row[0])
-                    bs.logout()
-                else:
-                    logger.warning("Baostock login failed: %s", lr.error_msg)
-            except Exception as bs_err:
-                logger.warning("Baostock unavailable: %s", bs_err)
-
-            # Baostock 不可用时，从数据库已有快照或 AkShare 补代码列表
-            if not all_codes:
-                # 先试数据库已有快照（最快）
-                latest_snap_date = (
-                    StockScreenerSnapshot.objects.order_by('-snapshot_date')
-                    .values_list('snapshot_date', flat=True).first()
+            latest_snap_date = (
+                StockScreenerSnapshot.objects.order_by('-snapshot_date')
+                .values_list('snapshot_date', flat=True).first()
+            )
+            if latest_snap_date:
+                db_codes = list(
+                    StockScreenerSnapshot.objects.filter(
+                        snapshot_date=latest_snap_date
+                    ).values_list('symbol', flat=True)
                 )
-                if latest_snap_date:
-                    db_codes = list(
-                        StockScreenerSnapshot.objects.filter(
-                            snapshot_date=latest_snap_date
-                        ).values_list('symbol', flat=True)
-                    )
-                    all_codes = [
-                        f"{s[:2].lower()}.{s[2:]}" for s in db_codes
-                        if len(s) >= 8
-                    ]
-                    logger.info(
-                        "Tencent snapshot: using %d codes from database snapshot %s",
-                        len(all_codes), latest_snap_date,
-                    )
+                all_codes = [
+                    f"{s[:2].lower()}.{s[2:]}" for s in db_codes
+                    if len(s) >= 8
+                ]
+                logger.info(
+                    "Tencent snapshot: using %d codes from database snapshot %s",
+                    len(all_codes), latest_snap_date,
+                )
 
-            # 数据库也没有 → 从 AkShare 东财快照取代码列表
+            # 数据库也没有（首次运行）→ 从 AkShare 东财快照取代码列表
             if not all_codes:
                 try:
                     df_em = ak.stock_zh_a_spot_em()
@@ -1043,13 +1068,8 @@ class ScreenerService:
             df = cls._get_cached_snapshot_frame()
             source = 'cache'
 
-        # 4. Baostock 单独查询（慢，最后兜底）
-        if df is None or df.empty:
-            logger.info("All sources empty, trying Baostock...")
-            df = cls._fetch_baostock_snapshot()
-            if df is not None and not df.empty:
-                source = 'baostock'
-
+        # 4. 不再尝试 Baostock 逐只查询（单线程串行 3000+ 只股票，太慢）。
+        #    直接返回 retained 快照，让用户看到旧数据而不是一直转圈。
         if df is None or df.empty:
             retained = cls._build_retained_snapshot_response()
             if retained['retained']:
@@ -1113,8 +1133,7 @@ class ScreenerService:
             message = f'上游数据源暂不可用，已基于本地估值缓存重建 {len(rows)} 只 A 股快照。'
         elif source == 'tencent':
             message = f'已通过腾讯行情获取 {len(rows)} 只 A 股快照。'
-        elif source == 'baostock':
-            message = f'东财接口不可用，已通过 Baostock 备用源获取 {len(rows)} 只 A 股快照。'
+        # source='baostock' 路径已移除：慢且不值得等，直接走 retained 快照
 
         return {
             'snapshot_date': snapshot_date.isoformat(),

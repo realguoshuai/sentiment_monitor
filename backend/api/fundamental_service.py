@@ -15,6 +15,8 @@ from .utils import format_symbol, safe_float
 from .cache_manager import CacheManager
 from .fundamental.fetcher import FundamentalFetcher as Fetcher
 from .fundamental.calculator import FundamentalCalculator as Calc
+from .providers.baostock_provider import BaostockProvider as BS
+from .providers.tushare_provider import TushareProvider as TS
 
 logger = logging.getLogger(__name__)
 
@@ -709,7 +711,31 @@ class FundamentalService:
         target = getattr(ak, 'stock_profit_sheet_by_report_em', None)
         if target is not None and isinstance(target, unittest.mock.Mock):
             return target(symbol=symbol)
-        return Fetcher.fetch_profit_sheet_by_report(symbol)
+        # 1) AkShare 东财（主数据源）
+        df = Fetcher.fetch_profit_sheet_by_report(symbol)
+        if df is not None and not df.empty:
+            return df
+        # 2) Tushare 兜底（Baostock 利润表不含营业收入/成本等明细项）
+        try:
+            df_ts = TS.fetch_financial_report(symbol, 'income')
+            if df_ts is not None and not df_ts.empty:
+                ts_map = {
+                    'end_date': 'REPORT_DATE', 'ann_date': 'NOTICE_DATE',
+                    'total_revenue': 'TOTAL_OPERATE_INCOME',
+                    'n_income_attr_p': 'PARENT_NETPROFIT',
+                    'operate_cost': 'OPERATE_COST',
+                    'operate_profit': 'OPERATE_PROFIT',
+                    'total_profit': 'PROFIT_TOTAL',
+                    'basic_eps': 'BASIC_EPS',
+                }
+                df = df_ts.rename(columns={k: v for k, v in ts_map.items() if k in df_ts.columns})
+                required = {'REPORT_DATE', 'PARENT_NETPROFIT'}
+                if required.issubset(df.columns):
+                    logger.info("Tushare fallback succeeded for profit_sheet %s", symbol)
+                    return df
+        except Exception as ts_err:
+            logger.debug("Tushare profit_sheet fallback failed for %s: %s", symbol, ts_err)
+        return pd.DataFrame()
 
     @classmethod
     def _fetch_balance_sheet_by_report(cls, symbol):
@@ -717,7 +743,48 @@ class FundamentalService:
         target = getattr(ak, 'stock_balance_sheet_by_report_em', None)
         if target is not None and isinstance(target, unittest.mock.Mock):
             return target(symbol=symbol)
-        return Fetcher.fetch_balance_sheet_by_report(symbol)
+        # 1) AkShare 东财（主数据源）
+        df = Fetcher.fetch_balance_sheet_by_report(symbol)
+        if df is not None and not df.empty:
+            return df
+        # 2) Baostock 兜底（TCP 协议，不受 HTTP 网络影响）
+        try:
+            df_bs = BS.fetch_balance_sheet(symbol)
+            if df_bs is not None and not df_bs.empty:
+                logger.info("Baostock fallback succeeded for balance_sheet %s", symbol)
+                return df_bs
+        except Exception as bs_err:
+            logger.debug("Baostock balance_sheet fallback failed for %s: %s", symbol, bs_err)
+        # 3) Tushare 兜底（更全的子科目）
+        try:
+            df_ts = TS.fetch_financial_report(symbol, 'balancesheet')
+            if df_ts is not None and not df_ts.empty:
+                ts_map = {
+                    'end_date': 'REPORT_DATE', 'ann_date': 'NOTICE_DATE',
+                    'total_hldr_eqy_exc_min_int': 'TOTAL_PARENT_EQUITY',
+                    'total_assets': 'TOTAL_ASSETS',
+                    'monetry_cap': 'MONETARYFUNDS',
+                    'short_term_loan': 'SHORT_LOAN',
+                    'lt_loan': 'LONG_LOAN',
+                    'non_current_liab_due_1y': 'NONCURRENT_LIAB_DUE_WITHIN_1Y',
+                    'bonds_payable': 'BOND_PAYABLE',
+                    'long_term_payable': 'LONG_PAYABLE',
+                    'total_current_assets': 'TOTAL_CURRENT_ASSETS',
+                    'total_current_liab': 'TOTAL_CURRENT_LIAB',
+                    'accounts_receiv': 'ACCOUNTS_RECE',
+                    'notes_receiv': 'NOTES_RECE',
+                    'inventory': 'INVENTORY',
+                    'prepayments': 'PREPAYMENT',
+                    'goodwill': 'GOODWILL',
+                    'total_liab': 'TOTAL_LIABILITIES',
+                }
+                df = df_ts.rename(columns={k: v for k, v in ts_map.items() if k in df_ts.columns})
+                if 'REPORT_DATE' in df.columns and 'TOTAL_PARENT_EQUITY' in df.columns:
+                    logger.info("Tushare fallback succeeded for balance_sheet %s", symbol)
+                    return df
+        except Exception as ts_err:
+            logger.debug("Tushare balance_sheet fallback failed for %s: %s", symbol, ts_err)
+        return pd.DataFrame()
 
     @classmethod
     def _fetch_yearly_cashflow(cls, symbol):
@@ -725,7 +792,34 @@ class FundamentalService:
         target = getattr(ak, 'stock_cash_flow_sheet_by_yearly_em', None)
         if target is not None and isinstance(target, unittest.mock.Mock):
             return target(symbol=symbol)
-        return Fetcher.fetch_yearly_cashflow(symbol)
+        # 1) AkShare 东财（主数据源）
+        df = Fetcher.fetch_yearly_cashflow(symbol)
+        if df is not None and not df.empty:
+            return df
+        # 2) Baostock 兜底（CFO + CFI）
+        try:
+            df_bs = BS.fetch_cashflow(symbol)
+            if df_bs is not None and not df_bs.empty:
+                logger.info("Baostock fallback succeeded for cashflow %s (rows=%d)", symbol, len(df_bs))
+                return df_bs
+        except Exception as bs_err:
+            logger.debug("Baostock cashflow fallback failed for %s: %s", symbol, bs_err)
+        # 3) Tushare 兜底
+        try:
+            df_ts = TS.fetch_financial_report(symbol, 'cashflow')
+            if df_ts is not None and not df_ts.empty:
+                ts_map = {
+                    'end_date': 'REPORT_DATE', 'ann_date': 'NOTICE_DATE',
+                    'n_cashflow_act': 'NETCASH_OPERATE',
+                    'c_pay_acq_const_fix_inta': 'CONSTRUCT_LONG_ASSET',
+                }
+                df = df_ts.rename(columns={k: v for k, v in ts_map.items() if k in df_ts.columns})
+                if 'REPORT_DATE' in df.columns and 'NETCASH_OPERATE' in df.columns:
+                    logger.info("Tushare fallback succeeded for cashflow %s", symbol)
+                    return df
+        except Exception as ts_err:
+            logger.debug("Tushare cashflow fallback failed for %s: %s", symbol, ts_err)
+        return pd.DataFrame()
 
     @classmethod
     def get_next_dividend(cls, symbol: str) -> dict:

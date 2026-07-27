@@ -84,6 +84,7 @@ class TushareProvider:
         cls,
         symbol: str,
         report_type: str = 'income',
+        fields: str = None,
     ) -> pd.DataFrame:
         """
         获取财务报表数据（免费可用）
@@ -91,6 +92,7 @@ class TushareProvider:
         Args:
             symbol: SH600519 格式
             report_type: 'income' / 'balancesheet' / 'cashflow'
+            fields: 指定字段，None 则使用默认字段
 
         Returns:
             DataFrame 或空 DataFrame
@@ -112,12 +114,29 @@ class TushareProvider:
             if not fetcher:
                 return pd.DataFrame()
 
+            if fields is None:
+                # 按报告类型使用默认字段
+                defaults = {
+                    'income': 'ts_code,ann_date,end_date,basic_eps,diluted_eps,'
+                              'total_revenue,revenue,n_income,n_income_attr_p,'
+                              'total_profit,operate_profit,total_cogs,operate_cost',
+                    'balancesheet': 'ts_code,ann_date,end_date,total_assets,'
+                                    'total_hldr_eqy_exc_min_int,monetry_cap,'
+                                    'short_term_loan,lt_loan,non_current_liab_due_1y,'
+                                    'bonds_payable,long_term_payable,'
+                                    'total_current_assets,total_current_liab,'
+                                    'accounts_receiv,notes_receiv,inventory,'
+                                    'prepayments,goodwill,total_liab',
+                    'cashflow': 'ts_code,ann_date,end_date,n_cashflow_act,'
+                                'n_incr_cash_cashequival,'
+                                'c_pay_acq_const_fix_inta,'
+                                'c_less_sale_service',
+                }
+                fields = defaults.get(report_type, 'ts_code,ann_date,end_date')
+
             df = fetcher(
                 ts_code=ts_code,
-                fields='ts_code,ann_date,f_ann_date,end_date,report_type,'
-                       'basic_eps,diluted_eps,total_revenue,revenue,'
-                       'n_income,n_income_attr_p,total_profit,operate_profit,'
-                       'total_cogs,operate_cost',
+                fields=fields,
             )
             return df if df is not None and not df.empty else pd.DataFrame()
         except Exception as e:
