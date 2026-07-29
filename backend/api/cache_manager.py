@@ -255,6 +255,21 @@ class CacheManager:
         jitter = int(ttl * 0.1)
         return ttl + random.randint(-jitter, jitter)
 
+    @classmethod
+    def peek(cls, key: str) -> Any:
+        """只读缓存：不触发抓取、锁或后台刷新。
+
+        供批量补充流程使用（如 FCF 收益率补充），命中返回数据，
+        miss / 空结果标记 / 错误标记均返回 None。
+        """
+        main_key = f"{key}_{cls.CACHE_VERSION}"
+        data = cls._cache_get(main_key)
+        if data is None:
+            return None
+        if isinstance(data, str) and data in (cls.EMPTY_MARKER, cls.ERROR_MARKER):
+            return None
+        return data
+
     # DataFrame 序列化标记，避免 pickle 跨版本不兼容
     _DF_MARKER = "__df_cache__"
 

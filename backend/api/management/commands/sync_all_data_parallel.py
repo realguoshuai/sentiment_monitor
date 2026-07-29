@@ -57,7 +57,8 @@ class ScreenerAgent:
         self.stdout.write(f'[{self.name}] 开始刷新全市场快照...')
         t = time.time()
         try:
-            result = ScreenerService.refresh_snapshot()
+            # 同步等待 FCF 补充完成，保证命令退出时数据完整
+            result = ScreenerService.refresh_snapshot(enrich_fcf_async=False)
             elapsed = _fmt_duration(time.time() - t)
             self.stdout.write(
                 self.stdout.style.SUCCESS(

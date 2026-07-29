@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from datetime import date, timedelta
 import logging
 from math import ceil
@@ -460,6 +460,11 @@ class ScreenerService:
         session.trust_env = False  # 绕过 Windows 系统代理（PAC/注册表）
         session.proxies = {'http': None, 'https': None}  # 显式禁用代理
 
+        # 单源整体时间预算：东财直连只是第 2 级数据源，坏网络下
+        # 8 个子域名组合 × 55 页串行重试会卡 7-8 分钟，必须设上限
+        DIRECT_BUDGET = 90
+        t_start = _time.monotonic()
+
         # 打包环境下 SSL 证书可能缺失，关闭验证以保证连通性
         import sys
         if getattr(sys, 'frozen', False):
@@ -493,6 +498,9 @@ class ScreenerService:
 
                 # 后续分页：跳过失败页面，不重试（保证速度）
                 for page in range(2, total_pages + 1):
+                    if _time.monotonic() - t_start > DIRECT_BUDGET:
+                        logger.info("East Money direct: budget exceeded during paging, keeping %d rows", len(all_rows))
+                        break
                     try:
                         page_params = {**params, 'pn': str(page)}
                         r2 = session.get(url, params=page_params, headers=headers, timeout=(3, 6))
@@ -511,6 +519,9 @@ class ScreenerService:
         last_error = None
         for subdomain in cls.EASTMONEY_SUBDOMAINS:
             for proto in ('https', 'http'):
+                if _time.monotonic() - t_start > DIRECT_BUDGET:
+                    logger.warning("East Money direct: global budget (%ds) exceeded, falling through to next source", DIRECT_BUDGET)
+                    return pd.DataFrame(), last_error or Exception('eastmoney direct budget exceeded')
                 url = f'{proto}://{subdomain}.push2.eastmoney.com/api/qt/clist/get'
 
                 # 先用 pz=5000 尝试
@@ -727,24 +738,58 @@ class ScreenerService:
 
         return rows
 
+    # FCF 补充参数：候选硬上限 + 低并发，避免对东财 F10 发起请求风暴
+    FCF_ENRICH_MAX_EXTRA = 100    # 监控股之外最多补充的候选数
+    FCF_ENRICH_WORKERS = 4        # 并发线程数（东财熔断阈值为 6 次/300s，并发越高越容易触发）
+    FCF_ENRICH_TIMEOUT = 120      # 收集结果的总预算（秒）
+    FCF_ENRICH_LOCK_KEY = 'screener_fcf_enrich_lock'
+    FCF_ENRICH_LOCK_TTL = 3600
+
+    class _CircuitOpenError(Exception):
+        """东财熔断器处于阻断期，继续请求只会全部快速失败，应立即终止本轮补充"""
+
     @classmethod
-    def _enrich_fcf_yield(cls, rows: List[StockScreenerSnapshot]) -> None:
-        """对快照行批量补充 FCF 收益率（数据库已写入后调用，超时 120s）
+    def _eastmoney_circuit_open(cls) -> bool:
+        """东财熔断器是否处于阻断期"""
+        try:
+            from .fundamental.fetcher import FundamentalFetcher
+            return time.monotonic() < FundamentalFetcher._eastmoney_blocked_until
+        except Exception:
+            return False
+
+    @classmethod
+    def _enrich_fcf_yield(cls, rows: List[StockScreenerSnapshot], _lock_held: bool = False) -> None:
+        """对快照行批量补充 FCF 收益率（数据库已写入后调用，预算 120s）
 
         策略：
         - 监控股：只要有市值，强制尝试（不依赖 cfo_yield 预筛）
-        - 其他候选股：cfo_yield >= 5 才尝试（过滤明显无效的标的）
+        - 其他候选股：cfo_yield >= 5，且最多取前 FCF_ENRICH_MAX_EXTRA 只（硬上限）
+        - quality 兜底走 cache_only 只读缓存，绝不触发 HTTP
+        - 东财熔断触发时立即终止本轮，剩余标的下次刷新再补
         """
+        if not _lock_held and not cache.add(cls.FCF_ENRICH_LOCK_KEY, True, cls.FCF_ENRICH_LOCK_TTL):
+            logger.info("FCF enrich: another round is running, skipping")
+            return
+        try:
+            cls._enrich_fcf_yield_inner(rows)
+        finally:
+            if not _lock_held:
+                cache.delete(cls.FCF_ENRICH_LOCK_KEY)
+
+    @classmethod
+    def _enrich_fcf_yield_inner(cls, rows: List[StockScreenerSnapshot]) -> None:
+        from .fundamental_service import FundamentalService as FS
+
         _monitored = {format_symbol(s.symbol) for s in Stock.objects.all()}
         _sym_mc = {r.symbol: r.market_cap for r in rows}
 
         # 监控股：无条件尝试
         monitored_candidates = [s for s in _monitored if s in _sym_mc and _sym_mc[s] > 0]
-        # 非监控股：cfo_yield >= 5 才试（用 5% 替代旧的 15%，覆盖更多标的）
+        # 非监控股：cfo_yield >= 5 才试，且有硬上限，防止几百只候选打爆东财 F10
         other_candidates = [
             r.symbol for r in rows
             if r.symbol not in _monitored and r.cfo_yield >= 5 and _sym_mc.get(r.symbol, 0) > 0
-        ]
+        ][:cls.FCF_ENRICH_MAX_EXTRA]
 
         candidate_symbols = monitored_candidates + other_candidates
         if not candidate_symbols:
@@ -758,31 +803,18 @@ class ScreenerService:
             "FCF enrich: fetching FCF yield for %d candidates (%d monitored, %d other)",
             len(candidate_symbols), len(monitored_candidates), len(other_candidates),
         )
-        from .fundamental_service import FundamentalService as FS
-        from concurrent.futures import wait as cf_wait, FIRST_COMPLETED
-        import requests as _req
 
         fcf_map: dict[str, float] = {}
 
-        # 监控股排前面
-        _candidates_sorted = sorted(
-            candidate_symbols,
-            key=lambda s: (0 if s in _monitored else 1, s),
-        )
-
         def _fetch_fcf(sym: str) -> tuple[str, float]:
+            # 熔断阻断期内直接放弃：继续请求只会全部快速失败并浪费时间
+            if cls._eastmoney_circuit_open():
+                raise cls._CircuitOpenError()
             mc = _sym_mc.get(sym, 0)
             try:
-                # 临时缩短全局 requests 超时，AkShare 调用不用傻等 15s
-                _orig_get = _req.Session.get
-                def _short_get(self, url, **kwargs):
-                    kwargs.setdefault('timeout', 4)
-                    return _orig_get(self, url, **kwargs)
-                _req.Session.get = _short_get
-                try:
-                    df_cf = FS.get_yearly_cashflow(sym)
-                finally:
-                    _req.Session.get = _orig_get
+                # 东财超时与熔断由 fetcher 层统一处理（AKSHARE_EASTMONEY_TIMEOUT），
+                # 不要在这里对 requests.Session 做全局猴子补丁（多线程下会竞态）
+                df_cf = FS.get_yearly_cashflow(sym)
 
                 if isinstance(df_cf, pd.DataFrame) and not df_cf.empty:
                     cfo_col = next((c for c in ['NETCASH_OPERATE', '经营活动产生的现金流量净额'] if c in df_cf.columns), None)
@@ -794,36 +826,44 @@ class ScreenerService:
                         if mc > 0 and fcf > 0:
                             return sym, (fcf / mc) * 100
 
-                # 兜底：已缓存的质量数据（不走 HTTP）
-                data = FS.get_quality_data(sym, include_shareholder=False)
+                # 兜底：只读缓存的质量数据（cache_only=True，绝不走 HTTP）
+                data = FS.get_quality_data(sym, include_shareholder=False, cache_only=True)
                 if isinstance(data, dict):
                     summary = data.get('cashflow_summary') or {}
                     yield_val = float(summary.get('latest_fcf_yield_pct', 0) or 0)
                     if yield_val > 0:
                         return sym, yield_val
+            except cls._CircuitOpenError:
+                raise
             except Exception as exc:
                 logger.debug("FCF fetch failed for %s: %s", sym, exc)
             return sym, 0.0
 
-        deadline = time.time() + 120
-        fs_map = {}
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            for sym in _candidates_sorted:
-                fs_map[pool.submit(_fetch_fcf, sym)] = sym
-
-            pending = set(fs_map.keys())
-            while pending and time.time() < deadline:
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    break
-                completed, pending = cf_wait(
-                    pending, timeout=min(remaining, 4),
-                    return_when=FIRST_COMPLETED,
-                )
-                for f in completed:
-                    sym, val = f.result()
+        deadline = time.monotonic() + cls.FCF_ENRICH_TIMEOUT
+        aborted = False
+        pool = ThreadPoolExecutor(max_workers=cls.FCF_ENRICH_WORKERS)
+        try:
+            fs_map = {pool.submit(_fetch_fcf, sym): sym for sym in candidate_symbols}
+            try:
+                for fut in as_completed(fs_map, timeout=cls.FCF_ENRICH_TIMEOUT):
+                    if time.monotonic() > deadline:
+                        break
+                    try:
+                        sym, val = fut.result()
+                    except cls._CircuitOpenError:
+                        logger.warning("FCF enrich: EastMoney circuit breaker active, aborting this round early")
+                        aborted = True
+                        break
+                    except Exception as exc:
+                        logger.warning("FCF fetch failed for %s: %s", fs_map[fut], exc)
+                        continue
                     if val > 0:
                         fcf_map[sym] = round(val, 2)
+            except FuturesTimeoutError:
+                logger.warning("FCF enrich: timed out after %ds, cancelling pending tasks", cls.FCF_ENRICH_TIMEOUT)
+        finally:
+            # 取消尚未开始的任务并立即返回；已运行的任务有接口层超时兜底，会自行结束
+            pool.shutdown(wait=False, cancel_futures=True)
 
         if fcf_map:
             # 注意：rows 是通过 bulk_create(..., ignore_conflicts=True) 写入的，
@@ -842,11 +882,11 @@ class ScreenerService:
                 fcf_yield=Case(*cases, default=Value(0), output_field=FloatField()),
             )
             logger.info(
-                "FCF enrich: %d/%d stocks enriched in %.1fs",
-                updated, len(fcf_map), time.time() - deadline + 120,
+                "FCF enrich: %d/%d stocks enriched (aborted_early=%s)",
+                updated, len(fcf_map), aborted,
             )
         else:
-            logger.info("FCF enrich: no FCF data obtained")
+            logger.info("FCF enrich: no FCF data obtained (aborted_early=%s)", aborted)
 
     @classmethod
     def _fetch_tencent_snapshot(cls) -> pd.DataFrame:
@@ -1048,12 +1088,44 @@ class ScreenerService:
             logger.error("Baostock snapshot fallback failed: %s", e)
             return pd.DataFrame()
 
+    # 与 views/screener.py 的轮询接口共享的结果 key
+    REFRESH_RESULT_KEY = 'screener_refresh_result'
+
     @classmethod
-    def refresh_snapshot(cls) -> dict:
+    def _report_refresh_phase(cls, message: str) -> None:
+        """写入刷新阶段进度，供前端轮询展示（避免长时间只看到"刷新中"）"""
+        try:
+            cache.set(cls.REFRESH_RESULT_KEY, {
+                'status': 'refreshing',
+                'message': f'快照刷新中：{message}',
+            }, 900)
+        except Exception:
+            pass
+
+    @classmethod
+    def _start_fcf_enrich_background(cls, rows: List[StockScreenerSnapshot]) -> None:
+        """FCF 补充放后台线程执行，不阻塞刷新结果返回（带防重入锁）"""
+        if not cache.add(cls.FCF_ENRICH_LOCK_KEY, True, cls.FCF_ENRICH_LOCK_TTL):
+            logger.info("FCF enrich already running, skip scheduling another round")
+            return
+
+        def _run():
+            try:
+                cls._enrich_fcf_yield(rows, _lock_held=True)
+            except Exception as e:
+                logger.error("Background FCF enrich failed: %s", e)
+            finally:
+                cache.delete(cls.FCF_ENRICH_LOCK_KEY)
+
+        threading.Thread(target=_run, daemon=True, name='screener-fcf-enrich').start()
+
+    @classmethod
+    def refresh_snapshot(cls, enrich_fcf_async: bool = True) -> dict:
         # 不清除 ROE/分红缓存，利用 12h TTL + stale 兜底机制避免重复抓取。
         # 如需强制刷新数据，清除 ROE_CACHE_KEY / DIVIDEND_CACHE_KEY 即可。
 
         # 1. 腾讯 API 全量快照（Baostock 列表 + 腾讯批量查询，约 1-2 秒）
+        cls._report_refresh_phase('正在抓取全市场行情…')
         df = cls._fetch_tencent_snapshot()
         source = 'tencent'
 
@@ -1077,6 +1149,7 @@ class ScreenerService:
             return retained
 
         snapshot_date = timezone.localdate()
+        cls._report_refresh_phase('正在计算估值与现金流指标…')
         rows = cls._build_snapshot_rows(df, snapshot_date)
 
         if not rows:
@@ -1102,6 +1175,7 @@ class ScreenerService:
         logger.info("Snapshot rows after dedup: %d, snapshot_date=%s", len(rows), snapshot_date)
 
         # 保留最近 30 天历史快照，删除更早的数据；当天数据用 ignore_conflicts 去重
+        cls._report_refresh_phase('正在写入数据库…')
         with transaction.atomic():
             cutoff = snapshot_date - timedelta(days=30)
             deleted, _ = StockScreenerSnapshot.objects.filter(snapshot_date__lt=cutoff).delete()
@@ -1122,17 +1196,23 @@ class ScreenerService:
             Stock.objects.bulk_update(stocks_to_update, ['industry'])
             logger.info("Auto-filled industry for %d monitored stocks", len(stocks_to_update))
 
-        # 后台补充 FCF 收益率（超时 120s，能拿多少算多少）
-        try:
-            cls._enrich_fcf_yield(rows)
-        except Exception as fcf_err:
-            logger.warning("FCF enrichment failed (snapshot already saved): %s", fcf_err)
+        # 补充 FCF 收益率：默认放后台线程执行，刷新结果立即返回（不再阻塞 20+ 分钟）；
+        # 同步模式（sync_all_data 命令）等待补充完成，保证命令退出时数据完整。
+        if enrich_fcf_async:
+            cls._start_fcf_enrich_background(rows)
+        else:
+            try:
+                cls._enrich_fcf_yield(rows)
+            except Exception as fcf_err:
+                logger.warning("FCF enrichment failed (snapshot already saved): %s", fcf_err)
 
         message = f'已刷新 {len(rows)} 只 A 股的选股快照。'
         if source == 'cache':
             message = f'上游数据源暂不可用，已基于本地估值缓存重建 {len(rows)} 只 A 股快照。'
         elif source == 'tencent':
             message = f'已通过腾讯行情获取 {len(rows)} 只 A 股快照。'
+        if enrich_fcf_async:
+            message += ' FCF 收益率正在后台补充，稍后自动更新。'
         # source='baostock' 路径已移除：慢且不值得等，直接走 retained 快照
 
         return {
@@ -1141,6 +1221,7 @@ class ScreenerService:
             'updated': True,
             'retained': False,
             'source': source,
+            'fcf_enriching': enrich_fcf_async,
             'message': message,
         }
 

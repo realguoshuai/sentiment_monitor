@@ -82,7 +82,8 @@ class Command(BaseCommand):
             self.stdout.write('[2/3] 刷新全市场选股快照（从东方财富获取，约需 1-2 分钟）...')
             t = time.time()
             try:
-                screener_summary = ScreenerService.refresh_snapshot()
+                # 同步等待 FCF 补充完成，保证命令退出时数据完整
+                screener_summary = ScreenerService.refresh_snapshot(enrich_fcf_async=False)
                 elapsed = _fmt_duration(time.time() - t)
                 self.stdout.write(
                     self.style.SUCCESS(

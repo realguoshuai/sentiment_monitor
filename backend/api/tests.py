@@ -876,7 +876,8 @@ class SentimentApiTests(APITestCase):
             'SZ000001': {'cash_div_total': 0.576, 'basis_year': 2025},
         }
 
-        summary = ScreenerService.refresh_snapshot()
+        # 测试同步执行 FCF 补充，避免后台线程与 TestCase 事务争锁
+        summary = ScreenerService.refresh_snapshot(enrich_fcf_async=False)
 
         self.assertTrue(summary['updated'])
         self.assertEqual(summary['count'], 2)
@@ -910,7 +911,7 @@ class SentimentApiTests(APITestCase):
             'SZ300001': {'cash_div_total': 0.16, 'basis_year': 2025},
         }
 
-        ScreenerService.refresh_snapshot()
+        ScreenerService.refresh_snapshot(enrich_fcf_async=False)
 
         row = StockScreenerSnapshot.objects.get(symbol='SZ300001')
         self.assertAlmostEqual(row.roe_proxy_pct, -10.0, places=2)
@@ -1037,7 +1038,7 @@ class SentimentApiTests(APITestCase):
             'SZ000001': {'cash_div_total': 0.576, 'basis_year': 2025},
         }
 
-        summary = ScreenerService.refresh_snapshot()
+        summary = ScreenerService.refresh_snapshot(enrich_fcf_async=False)
 
         self.assertTrue(summary['updated'])
         self.assertEqual(summary['source'], 'cache')
@@ -1064,7 +1065,7 @@ class SentimentApiTests(APITestCase):
             roe_proxy_pct=10.0,
         )
 
-        summary = ScreenerService.refresh_snapshot()
+        summary = ScreenerService.refresh_snapshot(enrich_fcf_async=False)
 
         self.assertFalse(summary['updated'])
         self.assertTrue(summary['retained'])

@@ -105,7 +105,10 @@ class FundamentalService:
             return data
 
         # 兜底：尝试从快照加载
-        return cls._load_snapshot_as_df(symbol) or pd.DataFrame()
+        # 注意：不能用 `or` —— 非空 DataFrame 做真值判断会抛
+        # "The truth value of a DataFrame is ambiguous"
+        snapshot = cls._load_snapshot_as_df(symbol)
+        return snapshot if snapshot is not None else pd.DataFrame()
 
     @classmethod
     def _fetch_ttm_fundamentals(cls, symbol):
@@ -410,9 +413,19 @@ class FundamentalService:
         return data if data is not None else {'shareholder_history': [], 'shareholder_summary': {}}
 
     @classmethod
-    def get_quality_data(cls, symbol, include_shareholder=True, return_status=False):
+    def get_quality_data(cls, symbol, include_shareholder=True, return_status=False, cache_only=False):
         symbol = cls._fix_symbol(symbol)
         cache_key = f"quality_v12_{symbol}" if include_shareholder else f"quality_core_v2_{symbol}"
+
+        if cache_only:
+            # 只读缓存，绝不触发网络抓取。
+            # 供批量补充流程（如选股快照的 FCF 收益率补充）使用：
+            # 缓存 miss 直接返回空，避免对几百只股票发起风暴式 HTTP 请求。
+            data = CacheManager.peek(cache_key)
+            payload = data if isinstance(data, dict) else {}
+            if return_status:
+                return payload, ('fresh' if payload else 'empty')
+            return payload
 
         def _fetch():
             import concurrent.futures
