@@ -13,7 +13,7 @@
 """
 import logging
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import date, datetime, timedelta
 
 from collector.resolve import resolve_stock
@@ -39,15 +39,47 @@ def _safe_call(fn, *args, **kwargs):
 
 
 def _run_with_timeout(fn, timeout, default=None):
-    """在线程中运行 fn，超时返回 default。用于保护重量级源（如 Playwright）。"""
+    """在线程中运行 fn（支持同步或 async 协程），超时返回 default。
+
+    用于保护所有外部数据源：akshare / requests / Playwright 都可能因为网络或
+    反爬长时间挂起，必须有个硬上限，避免前端 60s 超时。
+    """
+    import asyncio
     from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=1) as ex:
-        fut = ex.submit(fn)
+
+    def _wrapper():
+        result = fn()
+        if asyncio.iscoroutine(result):
+            # 在独立线程里运行协程；当前线程通常没有事件循环
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(result)
+            finally:
+                loop.close()
+        return result
+
+    ex = ThreadPoolExecutor(max_workers=1)
+    try:
+        fut = ex.submit(_wrapper)
         try:
             return fut.result(timeout=timeout)
         except Exception as exc:
             logger.warning("带超时的调用失败/超时: %s", exc)
             return default
+    finally:
+        # 关键：超时时不能阻塞等待 worker 线程自然结束（akshare/Playwright
+        # 可能挂起几十秒），否则 _run_with_timeout 会等到底层 IO 完成才返回。
+        ex.shutdown(wait=False)
+
+
+def _run_source(name, fn, timeout):
+    """包装单个数据源：硬超时 + 日志，失败/超时返回空列表。"""
+    import time
+    start = time.monotonic()
+    result = _run_with_timeout(fn, timeout, default=[])
+    elapsed = time.monotonic() - start
+    logger.info("[%s] fetched %d items in %.1fs (timeout=%ds)", name, len(result), elapsed, timeout)
+    return name, result
 
 
 def _normalize_item(raw, category, source_default):
@@ -77,7 +109,7 @@ def _fetch_overview(code6):
         import akshare as ak
         df = _run_with_timeout(
             lambda: ak.stock_individual_info_em(symbol=code6),
-            timeout=15,
+            timeout=10,
             default=None,
         )
         if df is None or getattr(df, 'empty', True):
@@ -208,21 +240,49 @@ def build_stock_news_report(query, days=7, include_overview=True):
         eastmoney, cninfo, xueqiu, sina, news_crawler, fhyanbao,
     )
 
+    # ---- 并发拉取各源（复用项目已有采集能力）----
+    # 策略：每个源都有独立硬超时；整体 50s 预算内必须返回，避免前端 60s 超时。
+    # 并发 workers 从 5 降到 3，减少在慢网络/Clash TUN 下的同时连接数。
+    import time
+
+    sources = [
+        # 官方公告最慢，给 18s；其他源 12-15s
+        ('ann_cninfo', lambda: _safe_call(cninfo.get_announcements, code6), 18),
+        ('ann_em', lambda: _safe_call(eastmoney.fetch_notices_from_akshare, code6), 15),
+        ('news_em', lambda: _safe_call(eastmoney.get_news, code6), 15),
+        ('news_sina', lambda: _safe_call(sina.get_news, code6), 12),
+        ('news_crawler', lambda: _safe_call(news_crawler.get_news, code6), 15),
+        ('news_xq', lambda: _safe_call(xueqiu.get_news, symbol), 12),
+        ('rep_em', lambda: _safe_call(eastmoney.get_reports, code6), 15),
+        # 烽火研报用 Playwright，最重，单独 20s 预算；async 协程由 _run_with_timeout 处理
+        ('rep_fh', lambda: fhyanbao.get_reports(code6, 90), 20),
+    ]
+
     raw = {}
-    with ThreadPoolExecutor(max_workers=5) as ex:
+    total_budget = 50.0
+    deadline = time.monotonic() + total_budget
+
+    with ThreadPoolExecutor(max_workers=3) as ex:
         futures = {
-            ex.submit(_safe_call, cninfo.get_announcements, code6): 'ann_cninfo',
-            ex.submit(_safe_call, eastmoney.fetch_notices_from_akshare, code6): 'ann_em',
-            ex.submit(_safe_call, eastmoney.get_news, code6): 'news_em',
-            ex.submit(_safe_call, sina.get_news, code6): 'news_sina',
-            ex.submit(_safe_call, news_crawler.get_news, code6): 'news_crawler',
-            ex.submit(_safe_call, xueqiu.get_news, symbol): 'news_xq',
-            ex.submit(_safe_call, eastmoney.get_reports, code6): 'rep_em',
-            # 烽火研报用 Playwright，较重，单独加超时保护
-            ex.submit(_run_with_timeout, lambda: fhyanbao.get_reports(code6, 90), 30, []): 'rep_fh',
+            ex.submit(_run_source, src_name, fn, timeout): src_name
+            for src_name, fn, timeout in sources
         }
-        for f in as_completed(futures):
-            raw[futures[f]] = f.result()
+        pending = set(futures.keys())
+
+        while pending and time.monotonic() < deadline:
+            remaining = max(0.5, deadline - time.monotonic())
+            done, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
+            for f in done:
+                src_name, result = f.result()
+                raw[src_name] = result
+
+        if pending:
+            logger.warning(
+                "新闻报告总时间预算 %.0fs 耗尽，剩余 %d 个源被取消/丢弃",
+                total_budget, len(pending),
+            )
+            for f in pending:
+                f.cancel()
 
     # ---- 归一化 + 分类 ----
     classified = {'announcement': [], 'news': [], 'report': [], 'community': []}
