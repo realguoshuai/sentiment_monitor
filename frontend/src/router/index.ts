@@ -51,6 +51,11 @@ const router = createRouter({
       path: '/diary',
       name: 'market-diary',
       component: () => import('@/views/DiaryView.vue')
+    },
+    {
+      path: '/news-report',
+      name: 'news-report',
+      component: () => import('@/views/NewsReportView.vue')
     }
   ]
 })

@@ -325,4 +325,11 @@ export const portfolioApi = {
     api.post<any>('/portfolio/save/', data),
 }
 
+// 个股资讯报告 API
+export const newsReportApi = {
+  /** 生成个股多源资讯报告（公司名或代码） */
+  getReport: (q: string, days: number = 7) =>
+    api.get<any>('/news-report/', { params: { q, days }, timeout: 60000 }),
+}
+
 export default api

@@ -50,3 +50,6 @@ from .misc import search_stocks, trigger_collection, diagnose_connectivity  # no
 
 # 缓存监控
 from .misc import get_cache_stats, get_cache_health  # noqa: F401
+
+# 个股资讯报告
+from .news_report import news_report  # noqa: F401

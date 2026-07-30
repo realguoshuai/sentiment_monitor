@@ -1,0 +1,8 @@
+﻿Found 11 test(s).
+[Cache Warming] Stage 1: Lightweight pre-warming for 2 symbols...
+  realtime prices warmed (fast path)
+  connection pool warmed
+System check identified no issues (0 silenced).
+  spot snapshot OK
+  valuation thermometer warmed
+  TTM probe failed, skipping fundamentals warming
