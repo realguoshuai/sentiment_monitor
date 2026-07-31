@@ -108,6 +108,12 @@
         >
           回测复盘
         </router-link>
+        <router-link
+          :to="{ path: '/news-report', query: { name: data.stock_name, symbol: data.stock_symbol } }"
+          class="px-3 py-1 bg-transparent border border-slate-600 hover:border-cyan-400 hover:bg-cyan-500/10 text-[10px] text-slate-300 hover:text-cyan-400 rounded-full transition-all text-center min-w-[50px]"
+        >
+          资讯
+        </router-link>
         <a 
           v-for="link in allLinks"
           :key="link.name"
@@ -168,7 +174,6 @@ const allLinks = computed(() => {
     { name: '雪球', url: `https://xueqiu.com/S/${props.data.stock_symbol}` },
     { name: '股吧', url: `http://guba.eastmoney.com/list,${pureCode.value}.html` },
     { name: '融券', url: `https://data.eastmoney.com/rzrq/detail/${pureCode.value}.html` },
-    { name: '资讯', url: `https://so.eastmoney.com/news/s?keyword=${encodeURIComponent(props.data.stock_name)}` },
     { name: '公众号', url: `https://weixin.sogou.com/weixin?type=2&query=${encodeURIComponent(props.data.stock_name)}` }
   ]
   

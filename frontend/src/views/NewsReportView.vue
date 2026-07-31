@@ -152,8 +152,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { newsReportApi } from '@/api'
+
+const route = useRoute()
 
 const query = ref('东阿阿胶')
 const days = ref(7)
@@ -161,6 +164,16 @@ const loading = ref(false)
 const error = ref('')
 const result = ref<any>(null)
 const copied = ref(false)
+
+// 从卡片「资讯」按钮进入时自动带入股票并生成
+onMounted(() => {
+  const qName = route.query.name as string | undefined
+  const qSymbol = route.query.symbol as string | undefined
+  if (qName || qSymbol) {
+    query.value = qName || qSymbol
+    generate()
+  }
+})
 
 const overviewText = computed(() => {
   const o = result.value?.overview
