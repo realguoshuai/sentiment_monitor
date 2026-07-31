@@ -687,9 +687,13 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-/* Terminal Dense 浅色版: 紧凑布局 + 等宽字体 + 浅色系 */
+/* Terminal Dense 浅色版: 紧凑布局 + 等宽字体 + 浅色系（已统一为现代圆角浅色风） */
 .terminal-page {
-  background: #f8fafc;
+  background:
+    radial-gradient(ellipse at 15% 0%, rgba(99, 102, 241, 0.06), transparent 40%),
+    radial-gradient(ellipse at 85% 0%, rgba(14, 165, 233, 0.05), transparent 35%),
+    radial-gradient(ellipse at 50% 100%, rgba(16, 185, 129, 0.03), transparent 30%),
+    linear-gradient(180deg, #f8fafc 0%, #f0f4f8 100%);
   color: #0f172a;
   min-height: 100vh;
 }
@@ -715,16 +719,18 @@ onUnmounted(() => {
 }
 
 .light-btn-outline {
-  background: transparent;
+  background: rgba(255, 255, 255, 0.6);
   color: #475569;
   border: 1px solid #cbd5e1;
+  border-radius: 12px;
 }
 
 .light-btn-outline:hover {
-  background: #f1f5f9;
+  background: #f8fafc;
   border-color: #94a3b8;
-  box-shadow: none;
-  transform: none;
+  color: #0f172a;
+  box-shadow: 0 2px 8px -4px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
 }
 
 .hero-stats {
@@ -735,17 +741,27 @@ onUnmounted(() => {
 }
 
 .terminal-hero {
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  padding: 20px 24px;
-  margin-bottom: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 24px;
+  padding: 24px 28px;
+  margin-bottom: 20px;
+  box-shadow: 0 16px 40px -28px rgba(15, 23, 42, 0.12);
 }
 
 .terminal-stat {
-  background: #f1f5f9;
+  background: #f8fafc;
   border: 1px solid #e2e8f0;
-  padding: 12px 14px;
+  border-radius: 14px;
+  padding: 14px 16px;
   text-align: center;
+  box-shadow: 0 2px 8px -4px rgba(15, 23, 42, 0.04);
 }
 
 .terminal-stat-label {
@@ -798,15 +814,31 @@ onUnmounted(() => {
 }
 
 .terminal-card {
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 18px;
   padding: 18px 20px;
+  box-shadow: 0 6px 24px -8px rgba(15, 23, 42, 0.06), 0 2px 6px rgba(15, 23, 42, 0.03);
+  transition: box-shadow 0.25s ease, transform 0.25s ease;
+}
+
+.terminal-card:hover {
+  box-shadow: 0 10px 32px -8px rgba(15, 23, 42, 0.1), 0 3px 8px rgba(15, 23, 42, 0.05);
 }
 
 .terminal-inner {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
+  border-radius: 12px;
   padding: 12px 14px;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.terminal-inner:hover {
+  border-color: #cbd5e1;
+  background: #f1f5f9;
 }
 
 .inner-label {
@@ -821,7 +853,13 @@ onUnmounted(() => {
 .terminal-detail {
   border: 1px solid #e2e8f0;
   background: #f8fafc;
+  border-radius: 14px;
   padding: 14px 18px;
+  transition: border-color 0.2s ease;
+}
+
+.terminal-detail:hover {
+  border-color: #cbd5e1;
 }
 
 .detail-summary {
@@ -905,10 +943,14 @@ onUnmounted(() => {
 }
 
 .current-status-card {
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  border-left: 3px solid #94a3b8;
-  padding: 18px 22px;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-left: 4px solid #94a3b8;
+  border-radius: 18px;
+  padding: 20px 24px;
+  box-shadow: 0 6px 24px -8px rgba(15, 23, 42, 0.06), 0 2px 6px rgba(15, 23, 42, 0.03);
 }
 
 .current-status-card.zone-low {
@@ -1004,13 +1046,21 @@ onUnmounted(() => {
 .percentile-item {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
-  padding: 10px 12px;
+  border-radius: 12px;
+  padding: 12px 14px;
   text-align: center;
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.percentile-item:hover {
+  border-color: #cbd5e1;
+  background: #f1f5f9;
 }
 
 .percentile-item.signal-active {
   background: #f0fdf4;
   border-color: #16a34a;
+  box-shadow: 0 2px 8px -4px rgba(22, 163, 74, 0.15);
 }
 
 .percentile-label {
@@ -1058,12 +1108,13 @@ onUnmounted(() => {
 }
 
 .signal-tag {
-  padding: 3px 10px;
+  padding: 4px 12px;
   font-size: 0.7rem;
   font-weight: 700;
   background: #f1f5f9;
   color: #475569;
   border: 1px solid #e2e8f0;
+  border-radius: 999px;
 }
 
 :deep(table) {

@@ -163,48 +163,52 @@ onBeforeUnmount(() => {
 }
 
 .info-tooltip-body {
-  background: #1e293b;
-  color: #e2e8f0;
+  background: #ffffff;
+  color: #334155;
   padding: 10px 14px;
-  border-radius: 10px;
+  border-radius: 12px;
   font-size: 0.78rem;
   line-height: 1.6;
   font-weight: 500;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 10px 30px -10px rgba(15, 23, 42, 0.15), 0 4px 12px -6px rgba(15, 23, 42, 0.08);
   white-space: normal;
 }
 
 .info-tooltip-body :deep(.formula) {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 6px;
+  background: #f1f5f9;
+  border-radius: 8px;
   padding: 6px 10px;
   margin: 6px 0;
   font-family: 'Monaco', monospace;
   font-size: 0.72rem;
+  color: #334155;
 }
 
 .info-tooltip-body :deep(strong) {
-  color: #f1f5f9;
+  color: #0f172a;
   font-weight: 700;
 }
 
 .info-tooltip-body :deep(.threshold) {
   display: inline-block;
-  padding: 2px 6px;
-  border-radius: 4px;
+  padding: 2px 8px;
+  border-radius: 6px;
   font-size: 0.7rem;
   margin: 2px 4px 2px 0;
+  font-weight: 600;
 }
 
-.info-tooltip-body :deep(.threshold-green) { background: rgba(34, 197, 94, 0.2); color: #86efac; }
-.info-tooltip-body :deep(.threshold-yellow) { background: rgba(234, 179, 8, 0.2); color: #fde047; }
-.info-tooltip-body :deep(.threshold-red) { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
+.info-tooltip-body :deep(.threshold-green) { background: #dcfce7; color: #166534; }
+.info-tooltip-body :deep(.threshold-yellow) { background: #fef9c3; color: #854d0e; }
+.info-tooltip-body :deep(.threshold-red) { background: #fee2e2; color: #991b1b; }
 
 .info-tooltip-arrow {
   position: absolute;
   width: 8px;
   height: 8px;
-  background: #1e293b;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
   transform: rotate(45deg);
 }
 

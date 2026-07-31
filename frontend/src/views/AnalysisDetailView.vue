@@ -459,13 +459,17 @@ onUnmounted(() => {
   margin: 12px 0;
 }
 
-/* Editorial: 无阴影无圆角，用边框分隔 */
+/* Editorial: 统一为浅色圆角卡片 */
 .compare-selector {
-  background: #fff;
-  border: 1px solid #d1d5db;
-  padding: 16px;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 18px;
+  padding: 18px;
   width: 100%;
   max-width: 550px;
+  box-shadow: 0 6px 24px -8px rgba(15, 23, 42, 0.06), 0 2px 6px rgba(15, 23, 42, 0.03);
 }
 
 .glass-header {
@@ -506,6 +510,7 @@ onUnmounted(() => {
   padding: 6px 14px;
   background: #fff;
   border: 1px solid #d1d5db;
+  border-radius: 999px;
   color: #475569;
   cursor: pointer;
   transition: all 0.15s;
@@ -554,12 +559,16 @@ onUnmounted(() => {
 }
 
 .loading-box {
-  background: #fff;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   padding: 40px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 20px;
   width: 100%;
   max-width: 400px;
   text-align: center;
+  box-shadow: 0 10px 40px -12px rgba(15, 23, 42, 0.12);
 }
 
 .loader-circle {
@@ -604,12 +613,13 @@ onUnmounted(() => {
   width: 100%;
   border: 1px solid #d1d5db;
   background: #fff;
+  border-radius: 12px;
   color: #0f172a;
   padding: 12px 16px;
   font-size: 0.9rem;
   font-weight: 800;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: all 0.15s;
 }
 
 .loading-back-btn:hover {

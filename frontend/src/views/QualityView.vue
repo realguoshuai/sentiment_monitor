@@ -622,7 +622,8 @@ onMounted(async () => {
   margin-top: 14px;
   padding: 14px 16px;
   background: #f8fafc;
-  border: 2px solid #e2e8f0;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
   text-align: center;
 }
 
@@ -661,9 +662,18 @@ onMounted(async () => {
 }
 
 .card {
-  background: #ffffff;
-  border: 2px solid #e2e8f0;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 20px;
   padding: 24px;
+  box-shadow: 0 6px 24px -8px rgba(15, 23, 42, 0.06), 0 2px 6px rgba(15, 23, 42, 0.03);
+  transition: box-shadow 0.25s ease;
+}
+
+.card:hover {
+  box-shadow: 0 10px 32px -8px rgba(15, 23, 42, 0.1), 0 3px 8px rgba(15, 23, 42, 0.05);
 }
 
 .section-header {
@@ -708,9 +718,11 @@ onMounted(async () => {
   z-index: 1000;
   width: 280px;
   background: #fff;
-  border: 2px solid #0f172a;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
   padding: 16px;
   pointer-events: none;
+  box-shadow: 0 10px 30px -10px rgba(15, 23, 42, 0.15), 0 4px 12px -6px rgba(15, 23, 42, 0.08);
 }
 
 .tooltip-title {
@@ -720,7 +732,7 @@ onMounted(async () => {
   font-size: 0.95rem;
   margin-bottom: 12px;
   padding-bottom: 8px;
-  border-bottom: 2px solid #0f172a;
+  border-bottom: 2px solid #e2e8f0;
 }
 
 .tooltip-row {
@@ -777,10 +789,20 @@ onMounted(async () => {
 }
 
 .signal-group {
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(148, 163, 184, 0.14);
   border-top: 3px solid #cbd5e1;
-  padding: 14px 16px;
+  border-radius: 16px;
+  padding: 16px 18px;
+  box-shadow: 0 4px 16px -6px rgba(15, 23, 42, 0.05);
+  transition: box-shadow 0.25s ease, transform 0.25s ease;
+}
+
+.signal-group:hover {
+  box-shadow: 0 8px 24px -6px rgba(15, 23, 42, 0.1);
+  transform: translateY(-1px);
 }
 
 .signal-group:nth-child(1) { border-top-color: #6366f1; }
@@ -818,10 +840,17 @@ onMounted(async () => {
 }
 
 .signal-item {
-  padding: 8px 10px;
+  padding: 10px 12px;
   background: #f8fafc;
   border: 1px solid #f1f5f9;
+  border-radius: 10px;
   cursor: default;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.signal-item:hover {
+  border-color: #cbd5e1;
+  background: #f1f5f9;
 }
 
 .signal-item span {
@@ -843,22 +872,27 @@ onMounted(async () => {
 
 /* 图表区块 */
 .chart-section {
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  border-left: 3px solid #0f766e;
-  padding: 20px 24px;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-left: 4px solid #0f766e;
+  border-radius: 18px;
+  padding: 22px 26px;
   display: grid;
   gap: 16px;
+  box-shadow: 0 6px 24px -8px rgba(15, 23, 42, 0.06), 0 2px 6px rgba(15, 23, 42, 0.03);
 }
 
 .feature-pill {
-  padding: 4px 10px;
+  padding: 5px 12px;
   background: #ecfdf5;
   color: #047857;
   font-size: 0.72rem;
   font-weight: 800;
   white-space: nowrap;
   border: 1px solid #a7f3d0;
+  border-radius: 999px;
   flex-shrink: 0;
 }
 
@@ -881,10 +915,17 @@ onMounted(async () => {
 }
 
 .insight-chip {
-  padding: 10px 14px;
+  padding: 12px 16px;
   background: #f8fafc;
   border: 1px solid #e2e8f0;
-  border-left: 2px solid #cbd5e1;
+  border-left: 3px solid #cbd5e1;
+  border-radius: 12px;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.insight-chip:hover {
+  border-color: #cbd5e1;
+  background: #f1f5f9;
 }
 
 .insight-chip span {
@@ -913,6 +954,7 @@ onMounted(async () => {
   gap: 10px;
   background: #f8fafc;
   border: 1px dashed #cbd5e1;
+  border-radius: 16px;
   color: #475569;
   text-align: center;
 }
