@@ -108,3 +108,23 @@ class NewsReportVerifyTest(TestCase):
         self.assertEqual(data['counts']['news'], 1)
         # 必须远小于前端 60s 超时（18s 源超时 + 其他源快速完成）
         self.assertLess(elapsed, 30, f"整体耗时 {elapsed:.1f}s，未在 30s 内返回")
+
+    @patch('collector.sources.fhyanbao.get_reports', return_value=[])
+    @patch('collector.sources.eastmoney.get_reports', return_value=[])
+    @patch('collector.sources.xueqiu.get_news', return_value=[])
+    @patch('collector.sources.news_crawler.get_news', return_value=[])
+    @patch('collector.sources.sina.get_news', return_value=[])
+    @patch('collector.sources.eastmoney.get_news', return_value=[])
+    @patch('collector.sources.eastmoney.fetch_notices_from_akshare', return_value=[])
+    @patch('collector.sources.cninfo.get_announcements', side_effect=Exception("boom"))
+    @patch('collector.resolve.resolve_stock')
+    def test_news_report_source_raises_still_200(self, mock_resolve, *_):
+        """某源直接抛异常时，_safe_call 应吞掉异常，接口仍返回 200。"""
+        mock_resolve.return_value = {
+            'code': '000423', 'symbol': 'SZ000423', 'market': 'SZ',
+            'name': '东阿阿胶', 'resolved_by': 'test',
+        }
+        resp = self.client.get('/api/news-report/?q=000423&days=7')
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data['name'], '东阿阿胶')

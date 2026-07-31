@@ -304,7 +304,7 @@ const presetCards: Array<{
     title: '低估高股息',
     tagline: 'Preset 01',
     description: '先找估值有缓冲、现金回报也不差的成熟公司。',
-    metrics: ['PB ≤ 1.5', 'PE ≤ 15', '股息率 ≥ 4%'],
+    metrics: ['PB ≤ 1.5', 'PE ≤ 15', '股息率 ≥ 3%'],
     tone: 'income',
   },
   {
@@ -656,7 +656,7 @@ const applyPreset = (preset: ScreenerPreset) => {
   if (preset === 'dividend_value') {
     filters.pb_max = 1.5
     filters.pe_max = 15
-    filters.dividend_yield_min = 4
+    filters.dividend_yield_min = 3
   }
 
   if (preset === 'quality_value') {

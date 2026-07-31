@@ -75,6 +75,31 @@ class ApiConfig(AppConfig):
         except Exception:
             pass
 
+    def _probe_connectivity(self):
+        """轻量连通性探测：探东财 + 腾讯各一个稳定接口。
+
+        全部失败且疑似被代理 / Clash TUN 拦截时，早报告警，让用户一眼看出
+        '这是网络被拦，不是代码崩'。不阻塞正常启动。
+        """
+        import requests
+        from .utils import classify_network_error
+        endpoints = [
+            ("东方财富", "https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.600519&fields1=f1&fields2=f51&klt=101&fqt=0&end=20500101&lmt=1", 5),
+            ("腾讯", "http://qt.gtimg.cn/q=sh600519", 5),
+        ]
+        blocked = 0
+        tried = 0
+        for name, url, to in endpoints:
+            tried += 1
+            try:
+                requests.get(url, timeout=to)
+            except Exception as e:
+                if classify_network_error(e) == 'proxy_blocked':
+                    blocked += 1
+        if tried and blocked == tried:
+            print("[网络环境异常] 多个数据源连通性探测均疑似被 Clash TUN / 代理拦截。"
+                  "若首页或质量数据为空，请关闭 Clash「虚拟网卡(TUN)」或退出 Clash 后重试。")
+
     def warm_valuation_cache(self):
         """后台预热常用估值、深度分析与回测缓存，不阻塞服务启动
 
@@ -92,6 +117,12 @@ class ApiConfig(AppConfig):
 
         # 短暂延迟等 Django 服务就位（从 5s 降到 1s）
         time.sleep(1)
+
+        # 启动前轻量连通性探测：提前暴露"网络被代理/Clash TUN 拦截"问题
+        try:
+            self._probe_connectivity()
+        except Exception:
+            pass
 
         monitored_symbols = list(Stock.objects.order_by('symbol').values_list('symbol', flat=True))
         core_symbols = monitored_symbols or ['SZ000423', 'SZ002304']

@@ -50,9 +50,11 @@ def refresh_screener_snapshot(request):
             'previous': prev,
         })
 
+    # 先清掉上一轮结果，避免 poll 在子线程删除前读到旧的 'done'（误判秒完成）
+    cache.delete(result_key)
+
     def _do_refresh():
         try:
-            cache.delete(result_key)
             result = ScreenerService.refresh_snapshot()
             result['_diag'] = {
                 'frozen': getattr(sys, 'frozen', False),

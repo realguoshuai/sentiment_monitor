@@ -92,3 +92,60 @@ def get_valuation_config(symbol: str) -> dict:
     # 缓存 1 小时
     cache.set(cache_key, config, 3600)
     return config
+
+
+# 疑似被代理 / Clash TUN (fake-ip) 在网络层拦截的连接错误特征。
+# 这类错误重试通常无效（整个环境的请求都被路由进 TUN / 假 IP），
+# 应提示用户关闭 TUN，而非盲目重试。
+_PROXY_BLOCKED_HINTS = (
+    'remote disconnected',            # urllib3.RemoteDisconnected
+    'remote end closed connection',   # 同上，msg 变体
+    'connection aborted',             # ConnectionAbortedError（连到假 IP 被掐）
+    'connection reset',               # ConnectionResetError
+    'unexpected eof while reading',   # TLS 握手失败（fake-ip 证书还原失败）
+    'expecting value: line 1 column 1',  # 连到假 IP 拿到空响应体，JSON 解析失败
+    'empty response',
+    'connection refused',
+)
+
+_TIMEOUT_HINTS = ('timed out', 'timeout', 'read timeout', 'connect timeout')
+_NETWORK_HINTS = (
+    'connection', 'connecterror', 'name or service not known',
+    'getaddrinfo', 'failed to resolve', 'socket', 'network is unreachable',
+)
+
+
+def classify_network_error(exc) -> str:
+    """将网络异常归类为 'proxy_blocked' / 'timeout' / 'network' / 'other'。
+
+    Args:
+        exc: Exception 实例或字符串（部分调用点只拿到字符串）。
+
+    Returns:
+        'proxy_blocked' 极可能是被代理 / Clash TUN 在网络层拦截（连接被远端直接
+            关闭、TLS 握手失败、拿到空响应）。重试无效，应提示用户关 TUN。
+        'timeout'  请求超时。
+        'network'  其他网络连接类错误（DNS / 连接失败等）。
+        'other'    非网络类错误。
+    """
+    if isinstance(exc, str):
+        text = exc
+    else:
+        text = f'{type(exc).__name__} {getattr(exc, "args", "")} {exc}'
+    t = text.lower()
+
+    for hint in _PROXY_BLOCKED_HINTS:
+        if hint in t:
+            return 'proxy_blocked'
+    for hint in _TIMEOUT_HINTS:
+        if hint in t:
+            return 'timeout'
+    for hint in _NETWORK_HINTS:
+        if hint in t:
+            return 'network'
+    return 'other'
+
+
+def is_proxy_blocked(exc) -> bool:
+    """便捷判断：异常是否疑似被代理 / Clash TUN 拦截。"""
+    return classify_network_error(exc) == 'proxy_blocked'

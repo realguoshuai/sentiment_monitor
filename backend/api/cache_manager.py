@@ -134,9 +134,11 @@ class CacheManager:
                 time.sleep(1)
                 data = cls._cache_get(main_key)
                 if data is not None:
-                    if data == cls.EMPTY_MARKER:
+                    # 与主路径一致用 isinstance 守卫：缓存值可能是还原后的 DataFrame，
+                    # DataFrame == str 会返回 DataFrame，`if` 对其求布尔抛 ValueError
+                    if isinstance(data, str) and data == cls.EMPTY_MARKER:
                         return None, 'empty'
-                    if data == cls.ERROR_MARKER:
+                    if isinstance(data, str) and data == cls.ERROR_MARKER:
                         return None, 'error'
                     return data, 'fresh'
 
@@ -185,6 +187,8 @@ class CacheManager:
             elif isinstance(data, pd.DataFrame) and data.empty:
                 is_empty = True
             elif isinstance(data, dict) and not data:
+                is_empty = True
+            elif isinstance(data, (list, tuple)) and not data:
                 is_empty = True
 
             if is_empty:
@@ -265,6 +269,14 @@ class CacheManager:
         main_key = f"{key}_{cls.CACHE_VERSION}"
         data = cls._cache_get(main_key)
         if data is None:
+            # 主缓存 miss/过期：只读回退到 stale 副本（不触发后台刷新），
+            # 让 FCF 兜底等场景能用到 90 天 stale 数据，而非静默返回 0
+            stale_data = cls._cache_get(f"{main_key}_stale")
+            if stale_data is not None and not (
+                isinstance(stale_data, str)
+                and stale_data in (cls.EMPTY_MARKER, cls.ERROR_MARKER)
+            ):
+                return stale_data
             return None
         if isinstance(data, str) and data in (cls.EMPTY_MARKER, cls.ERROR_MARKER):
             return None

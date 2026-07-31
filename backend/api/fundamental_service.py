@@ -434,10 +434,17 @@ class FundamentalService:
                 try:
                     return fetcher(*args, **kwargs)
                 except Exception as e:
-                    logger.warning(f"[Quality] {name} fetch failed for {symbol}: {e}")
+                    from .utils import classify_network_error
+                    if classify_network_error(e) == 'proxy_blocked':
+                        logger.warning(
+                            f"[Quality] {name} fetch failed for {symbol}（疑似被 Clash TUN/代理拦截，请关闭 TUN 后重试）: {e}"
+                        )
+                    else:
+                        logger.warning(f"[Quality] {name} fetch failed for {symbol}: {e}")
                     return pd.DataFrame() if 'sheet' in name or 'cashflow' in name or 'dividend' in name else 0
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+            try:
                 future_p = executor.submit(_safe_fetch, cls._fetch_profit_sheet_by_report, 'profit_sheet', symbol)
                 future_b = executor.submit(_safe_fetch, cls._fetch_balance_sheet_by_report, 'balance_sheet', symbol)
                 future_c = executor.submit(_safe_fetch, cls.get_yearly_cashflow, 'cashflow', symbol)
@@ -460,29 +467,36 @@ class FundamentalService:
                 df_d = _get(future_d, pd.DataFrame(), 'dividends')
                 m_cap = _get(future_cap, 0, 'market_cap')
 
-            logger.info(f"[Quality] Data fetched for {symbol}, calculating metrics...")
+                logger.info(f"[Quality] Data fetched for {symbol}, calculating metrics...")
 
-            if isinstance(df_d, pd.DataFrame) and not df_d.empty and 'ann_date' in df_d.columns:
-                df_d['ann_date'] = pd.to_datetime(df_d['ann_date'], errors='coerce')
-                df_d = df_d.dropna(subset=['ann_date'])
+                if isinstance(df_d, pd.DataFrame) and not df_d.empty and 'ann_date' in df_d.columns:
+                    df_d['ann_date'] = pd.to_datetime(df_d['ann_date'], errors='coerce')
+                    df_d = df_d.dropna(subset=['ann_date'])
 
-            payload = Calc.calculate_quality_metrics(df_p, df_b, df_c, df_d, m_cap)
-            if not payload:
-                return None
+                payload = Calc.calculate_quality_metrics(df_p, df_b, df_c, df_d, m_cap)
+                if not payload:
+                    return None
 
-            if include_shareholder:
-                sh_data = cls.get_shareholder_structure_data(symbol)
-                payload.update(sh_data)
+                if include_shareholder:
+                    sh_data = cls.get_shareholder_structure_data(symbol)
+                    payload.update(sh_data)
 
-            # 预热 core key（不含股东结构），走版本化 key 与 CacheManager 一致
-            if include_shareholder and payload:
-                core_key_with_v = f"quality_core_v2_{symbol}_{CacheManager.CACHE_VERSION}"
-                core_payload = {k: v for k, v in payload.items() if k not in ('shareholder_history', 'shareholder_summary')}
-                CacheManager._cache_set(core_key_with_v, core_payload, cls.CACHE_TTL)
-                CacheManager._cache_set(f"{core_key_with_v}_stale", core_payload, cls.STALE_TTL)
+                # 预热 core key（不含股东结构），走版本化 key 与 CacheManager 一致
+                if include_shareholder and payload:
+                    core_key_with_v = f"quality_core_v2_{symbol}_{CacheManager.CACHE_VERSION}"
+                    core_payload = {k: v for k, v in payload.items() if k not in ('shareholder_history', 'shareholder_summary')}
+                    CacheManager._cache_set(core_key_with_v, core_payload, cls.CACHE_TTL)
+                    CacheManager._cache_set(f"{core_key_with_v}_stale", core_payload, cls.STALE_TTL)
 
-            logger.info(f"[Quality] Successfully completed quality calculation for {symbol}")
-            return payload
+                logger.info(f"[Quality] Successfully completed quality calculation for {symbol}")
+                return payload
+            finally:
+                # 16s 超时只让 _get 返回默认值，底层线程仍在跑；
+                # 用 wait=False + cancel_futures 立即返回，不让 shutdown 阻塞等慢线程
+                try:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                except TypeError:
+                    executor.shutdown(wait=False)
 
         try:
             data, status = CacheManager.get_or_fetch(

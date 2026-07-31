@@ -526,6 +526,7 @@ class ScreenerService:
 
                 # 先用 pz=5000 尝试
                 rows, total, err = _try_fetch(url, 5000)
+                err2 = None  # pz=100 降级路径的错误，循环内赋值
                 if rows and len(rows) >= total * 0.6:
                     df = pd.DataFrame(rows)
                     df = cls._rename_em_fields(df)
@@ -551,7 +552,7 @@ class ScreenerService:
                             logger.warning("East Money pz=100 partial: total=%d, fetched=%d rows", total2, len(rows2))
                             return df, None
 
-                last_error = err
+                last_error = err or err2
                 if rows and len(rows) >= 100:
                     # 即使不完整也返回，总比空好
                     df = pd.DataFrame(rows)
@@ -585,7 +586,9 @@ class ScreenerService:
     @classmethod
     def _get_cached_snapshot_frame(cls) -> pd.DataFrame:
         cached_snapshot = PriceService._cache_get(cls.VALUATION_CACHE_KEY)
-        if not cached_snapshot:
+        # 缓存值可能是 DataFrame（_cache_get 会还原），不能用 `not` 判断，
+        # 否则 pandas 对 DataFrame 求布尔会抛 "truth value ambiguous"
+        if cached_snapshot is None:
             return pd.DataFrame()
 
         if isinstance(cached_snapshot, pd.DataFrame):
@@ -604,6 +607,33 @@ class ScreenerService:
         if '代码' not in working.columns and 'index' in working.columns:
             working = working.rename(columns={'index': '代码'})
         return working
+
+    @classmethod
+    def _resolve_dividend_yield(cls, upstream_dy, realtime_dy, cash_div_total, price, payload_dy=0.0):
+        """计算股息率。
+
+        以"历史现金分红 / 现价"精确估算为基准，上游实时值（东财列 / 腾讯 field 49）
+        仅在不显著低于估算时才采用。原因：上游实时股息率对部分股票（如银行）给值
+        明显偏低（实测差 3 倍，把真实 5%+ 压到 1.5%），直接采用会导致"低估高股息"
+        筛选筛空。历史分红估算已正确合计中期+末期现金分红，更接近真实股息率。
+        """
+        estimated_dy = 0.0
+        if price > 0 and cash_div_total > 0:
+            estimated_dy = (cash_div_total / price) * 100
+
+        chosen_upstream = upstream_dy if upstream_dy > 0 else realtime_dy
+
+        DY_SANITY_LOW = 0.1       # 低于此视为无意义
+        DY_SANITY_HIGH = 15.0     # 高于此视为异常（如一次性特别分红噪声）
+        DY_FALLBACK_RATIO = 0.5   # 上游低于估算的该比例，判定为上游偏低，回退估算
+
+        if DY_SANITY_LOW <= estimated_dy <= DY_SANITY_HIGH:
+            if chosen_upstream <= 0 or chosen_upstream < estimated_dy * DY_FALLBACK_RATIO:
+                return estimated_dy
+            return chosen_upstream
+        if chosen_upstream > 0:
+            return chosen_upstream
+        return payload_dy
 
     @classmethod
     def _build_snapshot_rows(cls, frame: pd.DataFrame, snapshot_date) -> List[StockScreenerSnapshot]:
@@ -678,22 +708,16 @@ class ScreenerService:
             if pb == 0:
                 pb = safe_float(realtime.get('pb'))
 
-            # 股息率来源优先级：上游实时（腾讯 field 49）> 实时行情（雪球）> 历史分红估算
+            # 股息率：以历史分红精确估算为基准，上游实时值仅在不显著偏低时采用
+            # （修复银行等股票上游股息率被压到 1.5%、导致"低估高股息"筛选筛空的问题）
             upstream_dy = safe_float(row.get(dividend_yield_col)) if dividend_yield_col else 0.0
             realtime_dy = safe_float(realtime.get('dividend_yield'))
-            if upstream_dy > 0:
-                dividend_yield = upstream_dy
-            elif realtime_dy > 0:
-                dividend_yield = realtime_dy
-            else:
-                dividend_payload = dividend_map.get(symbol, {})
-                dividend_cash_total = safe_float(dividend_payload.get('cash_div_total'))
-                if price > 0 and dividend_cash_total > 0:
-                    dividend_yield = (dividend_cash_total / price) * 100
-                elif dividend_payload:
-                    dividend_yield = safe_float(dividend_payload.get('dividend_yield'))
-                else:
-                    dividend_yield = 0.0
+            dividend_payload = dividend_map.get(symbol, {})
+            dividend_cash_total = safe_float(dividend_payload.get('cash_div_total'))
+            dividend_yield = cls._resolve_dividend_yield(
+                upstream_dy, realtime_dy, dividend_cash_total, price,
+                safe_float(dividend_payload.get('dividend_yield')),
+            )
             industry = ''
             if industry_col:
                 industry = str(row.get(industry_col) or '').strip()
@@ -836,7 +860,19 @@ class ScreenerService:
             except cls._CircuitOpenError:
                 raise
             except Exception as exc:
-                logger.debug("FCF fetch failed for %s: %s", sym, exc)
+                from .utils import classify_network_error
+                if classify_network_error(exc) == 'proxy_blocked':
+                    # 批量抓取场景下只在首次明确提示一次，避免刷屏；后续降级为 debug
+                    if not getattr(cls, '_fcf_proxy_warned', False):
+                        logger.warning(
+                            "FCF fetch failed for %s（疑似被 Clash TUN/代理拦截，请关闭 TUN 后重试）: %s",
+                            sym, exc,
+                        )
+                        cls._fcf_proxy_warned = True
+                    else:
+                        logger.debug("FCF fetch failed for %s: %s", sym, exc)
+                else:
+                    logger.debug("FCF fetch failed for %s: %s", sym, exc)
             return sym, 0.0
 
         deadline = time.monotonic() + cls.FCF_ENRICH_TIMEOUT

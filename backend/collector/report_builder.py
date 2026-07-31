@@ -30,11 +30,18 @@ CATEGORY_RANK = {
 
 
 def _safe_call(fn, *args, **kwargs):
-    """调用数据源并吞掉异常，失败返回空列表。"""
+    """调用数据源并吞掉异常，失败返回空列表。识别代理/Clash TUN 拦截特征并告警。"""
     try:
         return fn(*args, **kwargs) or []
     except Exception as exc:
-        logger.warning("%s 调用失败: %s", getattr(fn, '__name__', fn), exc)
+        from api.utils import classify_network_error
+        if classify_network_error(exc) == 'proxy_blocked':
+            logger.warning(
+                "[%s] 调用失败（疑似被 Clash TUN/代理拦截，请关闭 TUN 后重试）: %s",
+                getattr(fn, '__name__', fn), exc,
+            )
+        else:
+            logger.warning("%s 调用失败: %s", getattr(fn, '__name__', fn), exc)
         return []
 
 
@@ -64,12 +71,22 @@ def _run_with_timeout(fn, timeout, default=None):
         try:
             return fut.result(timeout=timeout)
         except Exception as exc:
-            logger.warning("带超时的调用失败/超时: %s", exc)
+            from api.utils import classify_network_error
+            if classify_network_error(exc) == 'proxy_blocked':
+                logger.warning(
+                    "带超时的调用失败/超时（疑似被 Clash TUN/代理拦截，请关闭 TUN 后重试）: %s",
+                    exc,
+                )
+            else:
+                logger.warning("带超时的调用失败/超时: %s", exc)
             return default
     finally:
-        # 关键：超时时不能阻塞等待 worker 线程自然结束（akshare/Playwright
-        # 可能挂起几十秒），否则 _run_with_timeout 会等到底层 IO 完成才返回。
-        ex.shutdown(wait=False)
+        # 关键：超时不阻塞等待 worker 线程自然结束（akshare/Playwright 可能挂起几十秒）；
+        # cancel_futures=True 取消尚未开始的 future，wait=False 立即返回，减少线程泄漏。
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            ex.shutdown(wait=False)
 
 
 def _run_source(name, fn, timeout):
@@ -262,7 +279,8 @@ def build_stock_news_report(query, days=7, include_overview=True):
     total_budget = 50.0
     deadline = time.monotonic() + total_budget
 
-    with ThreadPoolExecutor(max_workers=3) as ex:
+    ex = ThreadPoolExecutor(max_workers=3)
+    try:
         futures = {
             ex.submit(_run_source, src_name, fn, timeout): src_name
             for src_name, fn, timeout in sources
@@ -283,6 +301,14 @@ def build_stock_news_report(query, days=7, include_overview=True):
             )
             for f in pending:
                 f.cancel()
+    finally:
+        # 关键：wait=False 立即返回，不再阻塞等慢源底层线程跑完；
+        # cancel_futures=True 尽量取消尚未开始的源（Python 3.9+）。
+        # 保证总耗时不超过 50s 预算，不突破前端 60s 超时。
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            ex.shutdown(wait=False)
 
     # ---- 归一化 + 分类 ----
     classified = {'announcement': [], 'news': [], 'report': [], 'community': []}
@@ -316,13 +342,7 @@ def build_stock_news_report(query, days=7, include_overview=True):
     classified['news'] = [i for i in classified['news'] if _in_window(i)]
     classified['community'] = [i for i in classified['community'] if _in_window(i)]
 
-    # ---- 排序：类别优先，同类按日期倒序 ----
-    all_items = []
-    for cat, items in classified.items():
-        for it in items:
-            all_items.append(it)
-    all_items.sort(key=lambda x: (CATEGORY_RANK[x['category']], x['pub_date'] or '0000-00-00'), reverse=False)
-    # 同类内部日期倒序
+    # ---- 排序：同类内部按日期倒序 ----
     for cat in classified:
         classified[cat].sort(key=lambda x: x['pub_date'] or '0000-00-00', reverse=True)
 

@@ -89,6 +89,6 @@ class FcfEnrichCapTests(TestCase):
             mock_cache.delete.return_value = None
             ScreenerService._enrich_fcf_yield(rows)
 
-        # 150 只候选若未限流会调用 150 次；限流后应 <= 100
+        # 150 只候选若未限流会调用 150 次；限流后应精确截断到 100
         self.assertGreater(counter['n'], 0)
-        self.assertLessEqual(counter['n'], 100)
+        self.assertEqual(counter['n'], 100)
