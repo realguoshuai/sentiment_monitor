@@ -392,6 +392,11 @@ class FundamentalCalculator:
                     ),
                 },
             }
+            # 连续分红年数（从最新年往前连续计数），供选股器深度筛选
+            if df_div is not None and not getattr(df_div, 'empty', True) and 'ann_date' in df_div.columns:
+                summary['dividend_years'] = cls._count_consecutive_dividend_years(df_div)
+            else:
+                summary['dividend_years'] = 0
             history_df = df.tail(10).copy()
             history_df['year'] = history_df['REPORT_DATE'].dt.year
             summary['quality_history'] = history_df.select_dtypes(include=[np.number]).round(4).combine_first(history_df).to_dict(orient='records')
@@ -399,6 +404,26 @@ class FundamentalCalculator:
         except Exception as e:
             logger.error(f"Calculator Quality Error: {e}")
             return {}
+
+    @classmethod
+    def _count_consecutive_dividend_years(cls, df_div):
+        """从历史分红公告(df_div 含 ann_date)计算从最新年往前的连续分红年数。"""
+        try:
+            if df_div is None or getattr(df_div, 'empty', True) or 'ann_date' not in df_div.columns:
+                return 0
+            years = pd.to_datetime(df_div['ann_date'], errors='coerce').dt.year.dropna()
+            years = sorted(int(y) for y in years if not pd.isna(y))
+            if not years:
+                return 0
+            cnt = 1
+            for i in range(len(years) - 1, 0, -1):
+                if years[i] - years[i - 1] == 1:
+                    cnt += 1
+                else:
+                    break
+            return cnt
+        except Exception:
+            return 0
 
     @classmethod
     def calculate_ttm_fundamentals(cls, df_profit, df_balance):

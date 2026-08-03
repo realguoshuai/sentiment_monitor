@@ -1619,6 +1619,12 @@ class ScreenerService:
         if not include_anomalies:
             queryset = queryset.filter(pe__gt=0, pb__gt=0)
 
+        # 深度质量筛选参数（不在快照表，需候选集懒算）
+        f_score_min = filters.get('f_score_min')
+        moat_filter = str(filters.get('moat', '') or '').strip()
+        debt_to_assets_max = filters.get('debt_to_assets_max')
+        dividend_years_min = filters.get('dividend_years_min')
+
         numeric_filters = [
             ('pb_min', 'pb__gte'),
             ('pb_max', 'pb__lte'),
@@ -1662,11 +1668,20 @@ class ScreenerService:
             'net_cash_ratio': 'net_cash_ratio',
             'cfo_yield': 'cfo_yield',
             'fcf_yield': 'fcf_yield',
+            'f_score': 'f_score',
+            'moat_label': 'moat_label',
+            'debt_to_assets_pct': 'debt_to_assets_pct',
+            'dividend_years': 'dividend_years',
         }
-        order_field = sort_mapping.get(sort_by, 'pb')
-        if sort_order == 'desc':
-            order_field = f'-{order_field}'
-        queryset = queryset.order_by(order_field, 'symbol')
+        deep_sort_fields = {'f_score', 'moat_label', 'debt_to_assets_pct', 'dividend_years'}
+        if sort_by in deep_sort_fields:
+            # 深度字段不在数据库，先用 symbol 占位，懒算后在内存中重排
+            queryset = queryset.order_by('symbol')
+        else:
+            order_field = sort_mapping.get(sort_by, 'pb')
+            if sort_order == 'desc':
+                order_field = f'-{order_field}'
+            queryset = queryset.order_by(order_field, 'symbol')
 
         page = max(cls._to_int(filters.get('page', 1), 1), 1)
         requested_page_size = cls._to_int(filters.get('page_size', cls.DEFAULT_PAGE_SIZE), cls.DEFAULT_PAGE_SIZE)
@@ -1678,6 +1693,51 @@ class ScreenerService:
 
         monitored_symbols = set(Stock.objects.values_list('symbol', flat=True))
         rows = list(queryset[offset:offset + page_size])
+
+        # 深度指标筛选（候选集懒算）：仅当用户设了深度阈值或按深度字段排序时触发，
+        # 避免无谓的个股财报拉取（照顾弱硬件）。每次只算当前页候选集。
+        deep_thresholds = {
+            'f_score_min': f_score_min,
+            'moat': moat_filter,
+            'debt_to_assets_max': debt_to_assets_max,
+            'dividend_years_min': dividend_years_min,
+        }
+        need_deep = any(v not in (None, '') for v in deep_thresholds.values())
+        sort_by_deep = sort_by in deep_sort_fields
+
+        row_flags = {}
+        if need_deep or sort_by_deep:
+            row_flags = cls._compute_quality_flags_for_rows(rows)
+            enriched = []
+            for row in rows:
+                fl = row_flags.get(
+                    row.symbol,
+                    {'f_score': 0, 'moat_label': '', 'debt_to_assets_pct': 0, 'dividend_years': 0},
+                )
+                if deep_thresholds['f_score_min'] not in (None, '') and fl['f_score'] < float(deep_thresholds['f_score_min']):
+                    continue
+                if deep_thresholds['moat'] and fl['moat_label'] != deep_thresholds['moat']:
+                    continue
+                if deep_thresholds['debt_to_assets_max'] not in (None, '') and fl['debt_to_assets_pct'] > float(deep_thresholds['debt_to_assets_max']):
+                    continue
+                if deep_thresholds['dividend_years_min'] not in (None, '') and fl['dividend_years'] < int(deep_thresholds['dividend_years_min']):
+                    continue
+                enriched.append((row, fl))
+            if sort_by_deep:
+                reverse = (sort_order == 'desc')
+                if sort_by == 'moat_label':
+                    _moat_order = {'wide': 3, 'medium': 2, 'none': 1, '': 0}
+                    enriched.sort(key=lambda rf: _moat_order.get(rf[1]['moat_label'], 0), reverse=reverse)
+                elif sort_by == 'f_score':
+                    enriched.sort(key=lambda rf: rf[1]['f_score'], reverse=reverse)
+                elif sort_by == 'debt_to_assets_pct':
+                    enriched.sort(key=lambda rf: rf[1]['debt_to_assets_pct'], reverse=reverse)
+                elif sort_by == 'dividend_years':
+                    enriched.sort(key=lambda rf: rf[1]['dividend_years'], reverse=reverse)
+            rows = [r for r, _ in enriched]
+            total = len(rows)
+            total_pages = ceil(total / page_size) if total else 0
+
         results = [
             {
                 'symbol': row.symbol,
@@ -1693,6 +1753,10 @@ class ScreenerService:
                 'net_cash_ratio': row.net_cash_ratio,
                 'cfo_yield': row.cfo_yield,
                 'fcf_yield': row.fcf_yield,
+                'f_score': row_flags.get(row.symbol, {}).get('f_score', 0),
+                'moat_label': row_flags.get(row.symbol, {}).get('moat_label', ''),
+                'debt_to_assets_pct': row_flags.get(row.symbol, {}).get('debt_to_assets_pct', 0),
+                'dividend_years': row_flags.get(row.symbol, {}).get('dividend_years', 0),
                 'is_monitored': row.symbol in monitored_symbols,
             }
             for row in rows
@@ -1707,6 +1771,10 @@ class ScreenerService:
                 'q': query,
                 'industry': industry,
                 'include_anomalies': include_anomalies,
+                'f_score_min': f_score_min,
+                'moat': moat_filter,
+                'debt_to_assets_max': debt_to_assets_max,
+                'dividend_years_min': dividend_years_min,
                 'sort_by': sort_by,
                 'sort_order': sort_order,
             },
@@ -1718,3 +1786,27 @@ class ScreenerService:
                 'total_pages': total_pages,
             },
         }
+
+    @classmethod
+    def _compute_quality_flags_for_rows(cls, rows):
+        """对当前页候选集低并发懒算深度质量指标（F-Score/护城河/负债率/分红年数）。
+
+        复用 FundamentalService.get_quality_flags（自带缓存与网络容错），
+        超时/失败返回默认值，不阻塞整体筛选。
+        """
+        from .fundamental_service import FundamentalService
+        import concurrent.futures
+        result = {}
+        symbols = [r.symbol for r in rows]
+        if not symbols:
+            return result
+        workers = min(4, max(1, len(symbols)))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+            future_map = {ex.submit(FundamentalService.get_quality_flags, s): s for s in symbols}
+            for fut in concurrent.futures.as_completed(future_map):
+                s = future_map[fut]
+                try:
+                    result[s] = fut.result(timeout=25)
+                except Exception:
+                    result[s] = {'f_score': 0, 'moat_label': '', 'debt_to_assets_pct': 0, 'dividend_years': 0}
+        return result

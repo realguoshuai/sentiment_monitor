@@ -578,6 +578,49 @@ class FundamentalService:
         return data if data is not None else {"score": 0, "details": []}
 
     @classmethod
+    def get_quality_flags(cls, symbol):
+        """封装选股器所需的深度质量指标：F-Score / 护城河 / 负债率 / 连续分红年数。
+
+        底层 get_f_score(f_score_v8) 与 get_quality_data(quality_core_v2) 各自带缓存，
+        此处再包一层合并缓存避免重复拉取。任一指标获取失败时不阻塞，返回 0 / ''。
+        返回：{f_score, moat_label, debt_to_assets_pct, dividend_years}
+        """
+        symbol = cls._fix_symbol(symbol)
+        cache_key = f"quality_flags_v1_{symbol}"
+
+        def _fetch():
+            try:
+                f_score = cls.get_f_score(symbol).get('score', 0)
+            except Exception:
+                f_score = 0
+            try:
+                qd = cls.get_quality_data(symbol, include_shareholder=False)
+            except Exception:
+                qd = {}
+            qd = qd if isinstance(qd, dict) else {}
+            stability = qd.get('stability_summary') or {}
+            balance = qd.get('balance_sheet_summary') or {}
+            moat_label = stability.get('moat_label', '')
+            debt_to_assets_pct = balance.get('latest_debt_to_assets_pct', 0) or 0
+            dividend_years = qd.get('dividend_years', 0) or 0
+            return {
+                'f_score': int(f_score),
+                'moat_label': moat_label,
+                'debt_to_assets_pct': round(float(debt_to_assets_pct), 2),
+                'dividend_years': int(dividend_years),
+            }
+
+        data, status = CacheManager.get_or_fetch(
+            key=cache_key,
+            fetcher=_fetch,
+            ttl=3 * 24 * 3600,
+            use_lock=False,
+        )
+        return data if data is not None else {
+            'f_score': 0, 'moat_label': '', 'debt_to_assets_pct': 0, 'dividend_years': 0
+        }
+
+    @classmethod
     def align_to_prices(cls, df_fund, df_prices, symbol):
         return Calc.align_to_prices(df_fund, df_prices)
 

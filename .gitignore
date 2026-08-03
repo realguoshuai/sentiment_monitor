@@ -47,3 +47,10 @@ backend/check_timing.py
 
 # 历史数据库备份含私人持仓，禁止提交到 GitHub
 backend/db_backups/
+
+# 工作记忆与技能（含隐私约定），不进仓库
+.workbuddy/
+
+# 前端构建备份 / 临时验证目录，不进仓库
+frontend/dist.bak-*/
+frontend/.build-verify/
