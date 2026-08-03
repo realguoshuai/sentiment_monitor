@@ -7,7 +7,7 @@ echo ======================================================
 
 :: 1. Start Backend (Uvicorn ASGI)
 echo [1/4] Starting Uvicorn Backend Engine...
-start "Sentiment-Backend" cmd /k "cd /d "%~dp0backend" && call .\venv\Scripts\activate.bat && set ENABLE_STARTUP_WARM=1 && uvicorn sentiment_monitor.asgi:application --host 127.0.0.1 --port 8000"
+start "Sentiment-Backend" cmd /k "cd /d "%~dp0backend" && call .\venv\Scripts\activate.bat && uvicorn sentiment_monitor.asgi:application --host 127.0.0.1 --port 8000"
 
 :: 2. Start Frontend (Vite/Vue3)
 echo [2/4] Starting Vue3 Frontend...
