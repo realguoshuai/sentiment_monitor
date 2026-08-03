@@ -22,8 +22,16 @@ def analysis(request):
     symbol = format_symbol(symbol)
 
     period = request.GET.get('period', '10y')
+    val_config_override = None
+    val_config_raw = request.GET.get('val_config')
+    if val_config_raw:
+        try:
+            import json
+            val_config_override = json.loads(val_config_raw)
+        except Exception:
+            val_config_override = None
     try:
-        return Response(AnalysisService.get_analysis_response(symbol, period))
+        return Response(AnalysisService.get_analysis_response(symbol, period, val_config_override=val_config_override))
     except Exception as e:
         logger.error(f"Analysis API error for {symbol}: {e}")
         return Response({'error': f'分析数据获取失败: {e}'}, status=500)

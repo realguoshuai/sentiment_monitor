@@ -226,6 +226,127 @@
       </div>
     </div>
 
+    <!-- 估值情景沙盘 (P0-3 DCF 情景化) -->
+    <div class="scenario-panel">
+      <div class="scenario-header">
+        <div>
+          <span class="valuation-card-title">估值情景沙盘</span>
+          <strong>调整折现率、永续增长与安全边际阈值，实时重算整套估值结论，并生成二维敏感性热力矩阵。</strong>
+        </div>
+        <span class="scenario-badge" :class="scenarioActive ? 'scenario-badge-on' : 'scenario-badge-off'">
+          {{ scenarioActive ? '情景运行中' : '默认情景' }}
+        </span>
+      </div>
+
+      <div class="scenario-controls">
+        <div class="scenario-toggle-row">
+          <label class="scenario-switch">
+            <input type="checkbox" v-model="autoRate" @change="onAutoRateChange" />
+            <span class="scenario-switch-track"><span class="scenario-switch-thumb"></span></span>
+            <span class="scenario-switch-label">自动折现率 = 无风险利率 + 溢价</span>
+          </label>
+          <span v-if="autoRate && riskFreeRate !== null" class="scenario-rate-readout">
+            无风险利率 {{ formatPct(riskFreeRate) }} + 溢价 {{ scenarioParams.riskPremium }}% = <strong>{{ formatPct(effectiveReturnBase) }}</strong>
+          </span>
+          <span v-else-if="autoRate && riskFreeLoading" class="scenario-rate-readout">无风险利率获取中…</span>
+          <span v-else-if="autoRate && riskFreeFailed" class="scenario-rate-readout scenario-rate-failed">无风险利率获取失败，已切回手动</span>
+        </div>
+
+        <div class="scenario-sliders">
+          <div class="ddm-slider-group" :class="{ 'slider-disabled': autoRate }">
+            <div class="slider-header">
+              <label>折现率 (基准) r (%)</label>
+              <span class="slider-value">{{ autoRate ? (riskFreeRate !== null ? formatPct(effectiveReturnBase) : '…') : scenarioParams.returnBase + '%' }}</span>
+            </div>
+            <input type="range" v-model.number="scenarioParams.returnBase" min="5" max="20" step="0.5" :disabled="autoRate" />
+          </div>
+
+          <div class="ddm-slider-group">
+            <div class="slider-header">
+              <label>永续增长 (基准) g (%)</label>
+              <span class="slider-value">{{ scenarioParams.growthBase }}%</span>
+            </div>
+            <input type="range" v-model.number="scenarioParams.growthBase" min="0" max="6" step="0.5" />
+          </div>
+
+          <div class="ddm-slider-group">
+            <div class="slider-header">
+              <label>安全边际阈值 MOS (%)</label>
+              <span class="slider-value">{{ scenarioParams.mosThreshold }}%</span>
+            </div>
+            <input type="range" v-model.number="scenarioParams.mosThreshold" min="5" max="40" step="5" />
+          </div>
+
+          <div class="ddm-slider-group" v-if="autoRate && riskFreeRate !== null">
+            <div class="slider-header">
+              <label>股权风险溢价 (%)</label>
+              <span class="slider-value">{{ scenarioParams.riskPremium }}%</span>
+            </div>
+            <input type="range" v-model.number="scenarioParams.riskPremium" min="0" max="10" step="0.5" />
+          </div>
+        </div>
+
+        <div class="scenario-actions">
+          <button class="scenario-btn scenario-btn-primary" @click="applyScenario" :disabled="applyingScenario">
+            {{ applyingScenario ? '重算中…' : '应用情景' }}
+          </button>
+          <button class="scenario-btn scenario-btn-ghost" @click="resetScenario" :disabled="!scenarioActive && !autoRate">
+            重置默认
+          </button>
+        </div>
+
+        <div class="scenario-mos-check" v-if="valuationConclusion?.margin_of_safety && assumptionsMosThreshold !== null && assumptionsMosThreshold !== undefined">
+          <span>安全边际阈值 {{ assumptionsMosThreshold }}%</span>
+          <span class="scenario-mos-sep">·</span>
+          <span>当前安全边际 <strong :class="mosMeets ? 'text-green' : 'text-red'">{{ formatPct(valuationConclusion.margin_of_safety.pct) }}</strong></span>
+          <span class="scenario-mos-tag" :class="mosMeets ? 'tag-green' : 'tag-red'">{{ mosMeets ? '达标' : '未达标' }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 二维敏感性热力矩阵 (P0-3) -->
+    <div class="sensitivity-panel" v-if="sensitivityMatrix">
+      <div class="sensitivity-header">
+        <div>
+          <span class="valuation-card-title">二维敏感性热力矩阵</span>
+          <strong>折现率 × 永续增长 扫描各组合的基准公允价（绿=更便宜 / 红=更贵，相对当前股价）。</strong>
+        </div>
+        <span class="sensitivity-current">当前价 {{ formatPrice(currentPriceForMatrix) }}</span>
+      </div>
+      <div class="sensitivity-grid-wrap">
+        <table class="sensitivity-table">
+          <thead>
+            <tr>
+              <th class="sensitivity-corner">r \ g</th>
+              <th v-for="g in sensitivityMatrix.growths" :key="'g' + g" :class="{ 'axis-active': isGrowthActive(g) }">g={{ g }}%</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(row, i) in sensitivityMatrix.grid" :key="'r' + sensitivityMatrix.return_bases[i]">
+              <th :class="{ 'axis-active': isReturnActive(sensitivityMatrix.return_bases[i]) }">r={{ sensitivityMatrix.return_bases[i] }}%</th>
+              <td
+                v-for="(price, j) in row"
+                :key="'c' + i + '-' + j"
+                :style="cellStyle(price)"
+                :class="{ 'cell-active': isCellActive(sensitivityMatrix.return_bases[i], sensitivityMatrix.growths[j]) }"
+              >{{ formatPrice(price) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="sensitivity-legend">
+        <span class="legend-swatch legend-green"></span> 合理价高于当前（低估区）
+        <span class="legend-swatch legend-red"></span> 合理价低于当前（高估区）
+        <span class="legend-note">高亮行/列 = 当前情景设定</span>
+      </div>
+    </div>
+    <div class="sensitivity-panel sensitivity-empty" v-else>
+      <div class="sensitivity-empty-inner">
+        <span class="valuation-card-title">二维敏感性热力矩阵</span>
+        <p>调整上方情景参数并点击「应用情景」，即可生成折现率 × 永续增长的二维敏感性热力矩阵。</p>
+      </div>
+    </div>
+
     <div class="normalized-panel" v-if="normalizedEarnings?.enabled">
       <div class="normalized-header">
         <div>
@@ -306,6 +427,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import InfoTooltip from '@/components/InfoTooltip.vue'
+import { stockApi } from '@/api'
 
 const props = defineProps<{
   valuationConclusion: any
@@ -316,7 +438,115 @@ const props = defineProps<{
   valuationBlend: any
   normalizedEarnings: any
   valuationSummaryClass: string
+  scenarioConfig?: any
+  applyingScenario?: boolean
 }>()
+
+const emit = defineEmits<{
+  (e: 'apply-scenario', cfg: Record<string, any>): void
+  (e: 'reset-scenario'): void
+}>()
+
+// --- 估值情景沙盘 (P0-3 DCF 情景化 + 敏感性测试) ---
+const scenarioParams = ref({
+  returnBase: 10,
+  growthBase: 2.5,
+  mosThreshold: 30,
+  riskPremium: 5,
+})
+const autoRate = ref(false)
+const riskFreeRate = ref<number | null>(null)
+const riskFreeLoading = ref(false)
+const riskFreeFailed = ref(false)
+
+const scenarioActive = computed(() => !!props.scenarioConfig)
+const effectiveReturnBase = computed(() => {
+  if (autoRate.value && riskFreeRate.value !== null) {
+    return Math.min(Math.max(riskFreeRate.value + scenarioParams.value.riskPremium, 5), 20)
+  }
+  return scenarioParams.value.returnBase
+})
+const assumptionsMosThreshold = computed(() => props.valuationConclusion?.assumptions?.mos_threshold)
+const currentMarginPct = computed(() => props.valuationConclusion?.margin_of_safety?.pct)
+const mosMeets = computed(() => {
+  const m = currentMarginPct.value
+  const t = assumptionsMosThreshold.value
+  if (m === undefined || m === null || t === undefined || t === null) return false
+  return m >= t
+})
+const sensitivityMatrix = computed(() => props.valuationConclusion?.sensitivity_matrix ?? null)
+const currentPriceForMatrix = computed(() => props.valuationConclusion?.current?.price || 0)
+const appliedReturnBase = computed(() => props.scenarioConfig?.return_base)
+const appliedGrowthBase = computed(() => props.scenarioConfig?.growth_base)
+
+const isReturnActive = (r: number) => {
+  const v = appliedReturnBase.value
+  return v !== undefined && v !== null && Math.abs(Number(r) - Number(v)) < 0.01
+}
+const isGrowthActive = (g: number) => {
+  const v = appliedGrowthBase.value
+  return v !== undefined && v !== null && Math.abs(Number(g) - Number(v)) < 0.01
+}
+const isCellActive = (r: number, g: number) => isReturnActive(r) && isGrowthActive(g)
+
+const onAutoRateChange = async () => {
+  if (autoRate.value) {
+    riskFreeLoading.value = true
+    riskFreeFailed.value = false
+    try {
+      const res = await stockApi.getRiskFreeRate()
+      const rate = res?.data?.risk_free_rate_pct
+      if (rate === null || rate === undefined) {
+        riskFreeFailed.value = true
+        autoRate.value = false
+      } else {
+        riskFreeRate.value = Number(rate)
+      }
+    } catch (e) {
+      riskFreeFailed.value = true
+      autoRate.value = false
+    } finally {
+      riskFreeLoading.value = false
+    }
+  } else {
+    riskFreeRate.value = null
+  }
+}
+
+const buildValConfig = (): Record<string, any> => {
+  const base = effectiveReturnBase.value
+  const round1 = (v: number) => Math.round(v * 10) / 10
+  return {
+    return_low: round1(base + 2),
+    return_base: round1(base),
+    return_high: Math.max(round1(base - 2), 5),
+    growth_base: scenarioParams.value.growthBase,
+    mos_threshold: scenarioParams.value.mosThreshold,
+    sensitivity: true,
+  }
+}
+
+const applyScenario = () => {
+  emit('apply-scenario', buildValConfig())
+}
+const resetScenario = () => {
+  scenarioParams.value = { returnBase: 10, growthBase: 2.5, mosThreshold: 30, riskPremium: 5 }
+  autoRate.value = false
+  riskFreeRate.value = null
+  riskFreeFailed.value = false
+  emit('reset-scenario')
+}
+
+const cellStyle = (price: number) => {
+  const cur = currentPriceForMatrix.value
+  if (!price || !cur) return { background: '#e2e8f0', color: '#475569' }
+  const diff = (price - cur) / cur
+  const intensity = Math.min(Math.abs(diff) / 0.25, 1)
+  if (diff >= 0) {
+    return { background: `hsl(152, ${50 + intensity * 45}%, ${88 - intensity * 33}%)`, color: intensity > 0.55 ? '#ffffff' : '#065f46' }
+  }
+  return { background: `hsl(351, ${50 + intensity * 45}%, ${88 - intensity * 33}%)`, color: intensity > 0.55 ? '#ffffff' : '#9f1239' }
+}
 
 const calcParams = ref({
   expectedRoe: props.valuationConclusion?.assumptions?.expected_roe ?? 15,
@@ -1016,6 +1246,190 @@ const marginTextClass = computed(() => {
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
+/* 估值情景沙盘 (P0-3) */
+.scenario-panel {
+  margin-top: 18px;
+  padding: 24px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.75) 0%, rgba(248, 250, 252, 0.75) 100%);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  border-radius: 24px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.03);
+}
+.scenario-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+  border-bottom: 1px dashed rgba(226, 232, 240, 0.8);
+  padding-bottom: 16px;
+}
+.scenario-header strong {
+  display: block;
+  font-size: 0.9rem;
+  color: #64748b;
+  font-weight: 500;
+  margin-top: 4px;
+}
+.scenario-badge {
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 0.84rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.scenario-badge-on { background: #dbeafe; color: #1d4ed8; }
+.scenario-badge-off { background: #e2e8f0; color: #475569; }
+.scenario-controls { display: grid; gap: 20px; }
+.scenario-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.scenario-switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+.scenario-switch input { display: none; }
+.scenario-switch-track {
+  width: 42px; height: 24px; border-radius: 999px; background: #cbd5e1;
+  position: relative; transition: background 0.2s ease;
+}
+.scenario-switch-thumb {
+  position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2); transition: transform 0.2s ease;
+}
+.scenario-switch input:checked + .scenario-switch-track { background: #3b82f6; }
+.scenario-switch input:checked + .scenario-switch-track .scenario-switch-thumb { transform: translateX(18px); }
+.scenario-switch-label { font-size: 0.9rem; font-weight: 700; color: #334155; }
+.scenario-rate-readout { font-size: 0.85rem; color: #475569; font-weight: 600; }
+.scenario-rate-readout strong { color: #1d4ed8; font-size: 1rem; }
+.scenario-rate-failed { color: #b45309; }
+.scenario-sliders {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px 32px;
+}
+.slider-disabled { opacity: 0.6; }
+.scenario-sliders input[type="range"] {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 99px;
+  background: #e2e8f0;
+  outline: none;
+}
+.scenario-sliders input[type="range"]:disabled { background: #eef2f7; }
+.scenario-sliders input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #0f172a;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  transition: all 0.1s ease;
+}
+.scenario-sliders input[type="range"]:disabled::-webkit-slider-thumb { background: #94a3b8; cursor: not-allowed; }
+.scenario-sliders input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); background: #3b82f6; }
+.scenario-actions { display: flex; gap: 12px; }
+.scenario-btn {
+  padding: 12px 24px;
+  border-radius: 12px;
+  font-size: 0.92rem;
+  font-weight: 800;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+}
+.scenario-btn-primary { background: #0f172a; color: #fff; }
+.scenario-btn-primary:hover:not(:disabled) { background: #1d4ed8; }
+.scenario-btn-primary:disabled { background: #94a3b8; cursor: not-allowed; }
+.scenario-btn-ghost { background: #fff; color: #475569; border-color: #d1d5db; }
+.scenario-btn-ghost:hover:not(:disabled) { border-color: #0f172a; color: #0f172a; }
+.scenario-btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
+.scenario-mos-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  font-size: 0.9rem;
+  color: #475569;
+  font-weight: 600;
+}
+.scenario-mos-sep { color: #cbd5e1; }
+.scenario-mos-tag { padding: 4px 12px; border-radius: 999px; font-size: 0.78rem; font-weight: 800; }
+.tag-green { background: #dcfce7; color: #166534; }
+.tag-red { background: #ffe4e6; color: #9f1239; }
+
+/* 二维敏感性热力矩阵 */
+.sensitivity-panel {
+  margin-top: 16px;
+  padding: 20px;
+  border-radius: 20px;
+  border: 1px solid #dbe4f0;
+  background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%);
+}
+.sensitivity-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.sensitivity-header strong {
+  display: block;
+  margin-top: 6px;
+  color: #0f172a;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.sensitivity-current {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #0f172a;
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.sensitivity-grid-wrap { overflow-x: auto; }
+.sensitivity-table { border-collapse: collapse; width: 100%; min-width: 520px; }
+.sensitivity-table th, .sensitivity-table td {
+  border: 1px solid #e2e8f0;
+  padding: 10px 8px;
+  text-align: center;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.sensitivity-table thead th { background: #f1f5f9; color: #475569; }
+.sensitivity-table tbody th { background: #f1f5f9; color: #475569; white-space: nowrap; }
+.sensitivity-corner { background: #e2e8f0 !important; }
+.axis-active { box-shadow: inset 0 0 0 2px #3b82f6; }
+.sensitivity-table td { font-family: 'Monaco', monospace; }
+.cell-active { outline: 3px solid #1d4ed8; outline-offset: -3px; }
+.sensitivity-legend {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  font-size: 0.78rem;
+  color: #64748b;
+  font-weight: 600;
+}
+.legend-swatch { width: 16px; height: 16px; border-radius: 4px; display: inline-block; vertical-align: middle; }
+.legend-green { background: hsl(152, 70%, 60%); }
+.legend-red { background: hsl(351, 70%, 60%); }
+.legend-note { margin-left: auto; color: #94a3b8; font-style: italic; }
+.sensitivity-empty-inner { display: grid; gap: 8px; }
+.sensitivity-empty-inner p { margin: 0; color: #64748b; font-size: 0.85rem; line-height: 1.6; }
+
 @media (max-width: 1180px) {
   .valuation-grid,
   .valuation-grid-secondary,

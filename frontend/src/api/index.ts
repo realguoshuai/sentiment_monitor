@@ -254,7 +254,12 @@ export const stockApi = {
       { timeout: 60000 },
     ),
   searchStocks: (q: string) => api.get<any[]>('/sentiment/search/', { params: { q } }),
-  getAnalysis: (symbol: string) => api.get<any>('/sentiment/analysis/', { params: { symbol }, timeout: 60000 }),
+  getAnalysis: (symbol: string, valConfig?: Record<string, any>) =>
+    api.get<any>('/sentiment/analysis/', {
+      params: { symbol, ...(valConfig ? { val_config: JSON.stringify(valConfig) } : {}) },
+      timeout: 60000,
+    }),
+  getRiskFreeRate: () => api.get<any>('/sentiment/macro/risk-free/', { timeout: 20000 }),
   getHistoryBacktest: (symbol: string) => api.get<any>(`/sentiment/history-backtest/?symbol=${symbol}`),
   getQualityAnalysis: (symbol: string, includeShareholder: boolean = true) =>
     api.get<QualityAnalysis>(

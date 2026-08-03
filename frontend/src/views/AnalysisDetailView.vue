@@ -180,6 +180,10 @@
           :valuationBlend="valuationBlend"
           :normalizedEarnings="normalizedEarnings"
           :valuationSummaryClass="valuationSummaryClass"
+          :scenarioConfig="scenarioConfig"
+          :applyingScenario="applyingScenario"
+          @apply-scenario="onApplyScenario"
+          @reset-scenario="onResetScenario"
         />
       </div>
 
@@ -221,6 +225,10 @@ const loadingCompare = ref(false);
 const historicalCache = ref<Record<string, AnalysisPayload>>({});
 let analysisRetryTimer: number | null = null;
 let analysisRetryCount = 0;
+
+// 估值情景沙盘 (P0-3 DCF 情景化) — 透传情景参数到后端重算
+const scenarioConfig = ref<Record<string, any> | null>(null);
+const applyingScenario = ref(false);
 
 const { loadingQuote } = useInvestorLoadingQuotes(loading);
 
@@ -402,6 +410,39 @@ const applyAnalysisPayload = (payload: AnalysisPayload) => {
   analysisData.value = payload;
   stockData.value = { symbol: payload.symbol };
   historicalCache.value[payload.symbol] = payload;
+};
+
+// 估值情景沙盘：应用情景 → 携带 val_config 重算整套估值结论
+const onApplyScenario = async (cfg: Record<string, any>) => {
+  applyingScenario.value = true;
+  try {
+    const data = await sentimentStore.getAnalysis(symbol, false, cfg);
+    applyAnalysisPayload(data);
+    scenarioConfig.value = {
+      return_base: cfg.return_base ?? cfg.returnBase,
+      growth_base: cfg.growth_base ?? cfg.growthBase,
+      mos_threshold: cfg.mos_threshold ?? cfg.mosThreshold,
+    };
+  } catch (error: any) {
+    console.error('Failed to apply scenario:', error);
+    fetchError.value = error?.message || '情景重算失败';
+  } finally {
+    applyingScenario.value = false;
+  }
+};
+
+// 重置情景 → 回到默认估值（不带 val_config）
+const onResetScenario = async () => {
+  scenarioConfig.value = null;
+  applyingScenario.value = true;
+  try {
+    const data = await sentimentStore.getAnalysis(symbol, false);
+    applyAnalysisPayload(data);
+  } catch (error: any) {
+    console.error('Failed to reset scenario:', error);
+  } finally {
+    applyingScenario.value = false;
+  }
 };
 
 const MAX_ANALYSIS_REFRESH_RETRIES = 3;

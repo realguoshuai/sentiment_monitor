@@ -246,14 +246,15 @@ export const useSentimentStore = defineStore('sentiment', () => {
   }
 
   // --- 新增：带缓存的获取方法 ---
-  async function getAnalysis(symbol: string, force = false) {
-    if (!force) {
+  async function getAnalysis(symbol: string, force = false, valConfig?: Record<string, any>) {
+    // 带情景参数时不走默认缓存，避免不同折现率/增长串台
+    if (!force && !valConfig) {
       const cached = getCached(analysisCache.value, symbol)
       if (cached) return cached
     }
     try {
-      const res = await stockApi.getAnalysis(symbol)
-      setCached(analysisCache.value, symbol, res.data)
+      const res = await stockApi.getAnalysis(symbol, valConfig)
+      if (!valConfig) setCached(analysisCache.value, symbol, res.data)
       return res.data
     } catch (e) {
       console.error(`Failed to fetch analysis for ${symbol}:`, e)

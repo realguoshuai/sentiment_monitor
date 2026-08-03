@@ -34,7 +34,7 @@ class AnalysisService:
         return f'analysis_{cls.CACHE_VERSION}_{fixed_symbol}_{period}'
 
     @classmethod
-    def build_analysis_payload(cls, symbol: str, period: str = '10y') -> dict:
+    def build_analysis_payload(cls, symbol: str, period: str = '10y', val_config_override: Optional[dict] = None) -> dict:
         fixed_symbol = PriceService._fix_symbol(symbol)
         history_period = 'month' if period == '10y' else period
         history_limit = 120 if history_period == 'month' else 30
@@ -89,7 +89,8 @@ class AnalysisService:
         }
 
         from .utils import get_valuation_config
-        val_config = get_valuation_config(fixed_symbol)
+        base_cfg = get_valuation_config(fixed_symbol) or {}
+        val_config = {**base_cfg, **(val_config_override or {})}
         try:
             valuation_conclusion = cls.build_valuation_conclusion(
                 stock_hist,
@@ -140,6 +141,19 @@ class AnalysisService:
                 'review_triggers': [],
             }
 
+        # 估值情景敏感性矩阵（仅当用户请求时计算，纯内存重算，不联网）
+        if val_config_override and val_config_override.get('sensitivity'):
+            try:
+                valuation_conclusion['sensitivity_matrix'] = cls._build_sensitivity_matrix(
+                    stock_hist, percentiles, forward, quality_data, val_config
+                )
+            except Exception as e:
+                logger.warning(f"敏感性矩阵计算失败: {e}")
+
+        # 透传用户设定的安全边际阈值，供前端判定达标
+        if isinstance(valuation_conclusion.get('assumptions'), dict):
+            valuation_conclusion['assumptions']['mos_threshold'] = val_config.get('mos_threshold')
+
         return {
             'symbol': fixed_symbol,
             'percentiles': percentiles,
@@ -150,6 +164,28 @@ class AnalysisService:
             'investment_thesis': investment_thesis,
             'history': stock_hist,
         }
+
+    @classmethod
+    def _build_sensitivity_matrix(cls, history, percentiles, forward, quality_data, base_val_config):
+        """折现率 × 永续增长 网格扫描，返回各组合的 blended 合理价(price_base)。纯计算，不联网。"""
+        return_bases = [8, 9, 10, 11, 12]
+        growths = [1.5, 2.5, 3.5, 4.5]
+        grid = []
+        for r in return_bases:
+            row = []
+            for g in growths:
+                sub = dict(base_val_config)
+                sub['return_low'] = r + 2
+                sub['return_base'] = r
+                sub['return_high'] = max(r - 2, 5)
+                sub['growth_base'] = g
+                try:
+                    vc = cls.build_valuation_conclusion(history, percentiles, forward, quality_data, val_config=sub)
+                    row.append(vc.get('fair_value_range', {}).get('price_base'))
+                except Exception:
+                    row.append(None)
+            grid.append(row)
+        return {'return_bases': return_bases, 'growths': growths, 'grid': grid}
 
     @classmethod
     def build_peer_comparison(
@@ -310,6 +346,7 @@ class AnalysisService:
             'owner_growth_low': cls._round(owner_assumptions.get('growth_low_pct')),
             'owner_growth_base': cls._round(owner_assumptions.get('growth_base_pct')),
             'owner_growth_high': cls._round(owner_assumptions.get('growth_high_pct')),
+            'mos_threshold': val_config.get('mos_threshold'),
         }
         signals = {
             'pb_percentile_zone': cls._classify_percentile_zone(percentiles.get('pb', {}), reverse=False),
@@ -790,7 +827,7 @@ class AnalysisService:
         models = [
             cls._build_roe_anchor_model(current_price, current_pb, expected_roe, val_config),
             cls._build_earnings_power_model(current_price, current_pe, normalized_earnings or {}),
-            cls._build_owner_earnings_model(current_price, expected_roe, quality_data),
+            cls._build_owner_earnings_model(current_price, expected_roe, quality_data, val_config),
         ]
         available_models = [model for model in models if model['status'] == 'available']
         if not available_models:
@@ -1083,6 +1120,7 @@ class AnalysisService:
         current_price: float,
         expected_roe: float,
         quality_data: dict,
+        val_config: Optional[dict] = None,
     ) -> dict:
         history = (quality_data or {}).get('history') or []
         if current_price <= 0 or not history:
@@ -1111,6 +1149,8 @@ class AnalysisService:
         retention_ratio_pct = safe_float(latest.get('retention_ratio_pct'))
         sustainable_growth_pct = max(expected_roe * max(retention_ratio_pct, 0) / 100, 0)
         growth_base_pct = min(max(sustainable_growth_pct * 0.6, 1.5), 6.0)
+        if val_config and val_config.get('growth_base') is not None:
+            growth_base_pct = float(val_config['growth_base'])
         growth_low_pct = max(min(growth_base_pct - 1.5, growth_base_pct), 0.5)
         growth_high_pct = min(max(growth_base_pct + 1.5, growth_base_pct), 7.0)
         price_low = cls._owner_earnings_value(
@@ -1565,13 +1605,20 @@ class AnalysisService:
         return data if data is not None else {}
 
     @classmethod
-    def get_analysis_response(cls, symbol: str, period: str = '10y') -> dict:
+    def get_analysis_response(cls, symbol: str, period: str = '10y', val_config_override: Optional[dict] = None) -> dict:
         """获取深度分析数据（含缓存状态标记）"""
         fixed = PriceService._fix_symbol(symbol)
-        cache_key = f"analysis_{cls.CACHE_VERSION}_{fixed}_{period}"
+        cfg_tag = ''
+        if val_config_override:
+            try:
+                import hashlib, json
+                cfg_tag = '_' + hashlib.md5(json.dumps(val_config_override, sort_keys=True, default=str).encode()).hexdigest()[:8]
+            except Exception:
+                cfg_tag = ''
+        cache_key = f"analysis_{cls.CACHE_VERSION}_{fixed}_{period}{cfg_tag}"
 
         def _fetch():
-            return cls.build_analysis_payload(symbol, period)
+            return cls.build_analysis_payload(symbol, period, val_config_override=val_config_override)
 
 
         data, status = CacheManager.get_or_fetch(
