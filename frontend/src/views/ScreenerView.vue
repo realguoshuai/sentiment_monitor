@@ -170,6 +170,23 @@
             </label>
           </div>
         </div>
+
+        <!-- 指标配色图例 -->
+        <div class="filter-legend">
+          <span class="legend-title">指标配色</span>
+          <span class="legend-item"><span class="metric-pill tone-cheap">绿</span> 越好（低估 · 高股息 · 强盈利 · 强现金）</span>
+          <span class="legend-item"><span class="metric-pill tone-neutral">蓝</span> 中性区间</span>
+          <span class="legend-item"><span class="metric-pill tone-warm">橙</span> 偏贵 / 偏弱</span>
+          <span class="legend-item"><span class="metric-pill tone-muted">灰</span> 平淡 / 缺数据</span>
+          <span class="legend-item"><span class="metric-pill bad">红</span> 风险（负债率&gt;60%）</span>
+          <span class="legend-item"><span class="metric-pill fscore-pill">F</span> F-Score：≥8 优秀 · 7 良好</span>
+          <span class="legend-item moat-legend">
+            <span class="moat-pill moat-wide">宽</span>
+            <span class="moat-pill moat-medium">中</span>
+            <span class="moat-pill moat-none">无</span>
+            护城河
+          </span>
+        </div>
       </div>
 
       <!-- 已生效筛选标签 -->
@@ -416,7 +433,7 @@ const loading = ref(false)
 const refreshing = ref(false)
 const addLoadingSymbol = ref('')
 const errorMessage = ref('')
-const filtersExpanded = ref(false)
+const filtersExpanded = ref(true)
 
 const pagination = reactive({
   page: 1,
@@ -1853,6 +1870,71 @@ onUnmounted(() => {
   background: #fef2f2;
   border-color: #fecaca;
   color: #dc2626;
+}
+
+.fscore-pill {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+  color: #4338ca;
+}
+
+.moat-pill {
+  display: inline-flex;
+  min-width: 30px;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.74rem;
+  border: 1px solid transparent;
+}
+
+.moat-wide {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #047857;
+}
+
+.moat-medium {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.moat-none {
+  background: #f8fafc;
+  border-color: var(--line);
+  color: var(--faint);
+}
+
+.filter-legend {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 12px 14px;
+  background: #f8fafc;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+}
+
+.legend-title {
+  font-weight: 800;
+  font-size: 0.8rem;
+  color: var(--ink);
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.moat-legend {
+  gap: 4px;
 }
 
 /* 分页 */
