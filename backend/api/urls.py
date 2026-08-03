@@ -11,6 +11,7 @@ from .views import (
     diagnose_connectivity,
     get_portfolio,
     save_portfolio,
+    portfolio_summary,
     get_alert_rules,
     create_alert_rule,
     delete_alert_rule,
@@ -48,6 +49,7 @@ urlpatterns = [
     # 组合持仓
     path('portfolio/', get_portfolio, name='get-portfolio'),
     path('portfolio/save/', save_portfolio, name='save-portfolio'),
+    path('portfolio/summary/', portfolio_summary, name='portfolio-summary'),
     # 告警系统
     path('alerts/rules/', get_alert_rules, name='get-alert-rules'),
     path('alerts/rules/create/', create_alert_rule, name='create-alert-rule'),

@@ -30,7 +30,7 @@ from .market import (  # noqa: F401
 )
 
 # 组合持仓
-from .portfolio import get_portfolio, save_portfolio  # noqa: F401
+from .portfolio import get_portfolio, save_portfolio, portfolio_summary  # noqa: F401
 
 # 告警系统
 from .alert import (  # noqa: F401

@@ -23,6 +23,7 @@ backend/scratch/verify_*.py
 backend/scratch/final_*.py
 *.djcache
 *.sqlite3
+backend/db.sqlite3  # 私人持仓数据，禁止提交 GitHub
 *.sqlite3-journal
 *.sqlite3-wal
 *.sqlite3-shm
@@ -43,3 +44,6 @@ check_undefined.py
 clear_cache.py
 backend/check_cache.py
 backend/check_timing.py
+
+# 历史数据库备份含私人持仓，禁止提交到 GitHub
+backend/db_backups/

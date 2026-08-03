@@ -323,6 +323,10 @@ export const portfolioApi = {
   /** 保存组合 */
   savePortfolio: (data: { total_capital: number; holdings: any[] }) =>
     api.post<any>('/portfolio/save/', data),
+
+  /** 获取组合汇总（实时市值/盈亏/权重/再平衡） */
+  getPortfolioSummary: (portfolioId?: number) =>
+    api.get<any>('/portfolio/summary/', { params: portfolioId ? { portfolio_id: portfolioId } : {} }),
 }
 
 // 个股资讯报告 API

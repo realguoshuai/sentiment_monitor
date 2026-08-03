@@ -7,6 +7,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from ..models import Stock, Portfolio, PortfolioHolding
+from ..portfolio_service import build_portfolio_summary
 
 logger = logging.getLogger(__name__)
 
@@ -86,4 +87,16 @@ def save_portfolio(request):
 
     except Exception as e:
         logger.error(f"保存组合失败: {e}")
+        return Response({'error': str(e)}, status=500)
+
+
+@api_view(['GET'])
+def portfolio_summary(request):
+    """组合汇总：实时市值 / 持仓盈亏 / 权重漂移 / 再平衡建议"""
+    try:
+        portfolio_id = request.GET.get('portfolio_id')
+        data = build_portfolio_summary(int(portfolio_id) if portfolio_id else None)
+        return Response(data)
+    except Exception as e:
+        logger.error(f"组合汇总失败: {e}")
         return Response({'error': str(e)}, status=500)
