@@ -969,6 +969,14 @@ class FundamentalService:
                     if last_paid_ann is None or r['ann_date'] > last_paid_ann:
                         last_paid_ann = r['ann_date']
 
+            # 最近一次已实施分红的除权日，用于排除“把已分红利再往后推一年”的当期预估
+            last_paid_ex = None
+            for _, r in df_p.iterrows():
+                prog = str(r['progress'])
+                if '实施' in prog and pd.notna(r['ex_date']) and r['ex_date'] < today:
+                    if last_paid_ex is None or r['ex_date'] > last_paid_ex:
+                        last_paid_ex = r['ex_date']
+
             # B. 预案（仅当预案公告日晚于最近一次已实施分红，避免陈旧预案被误判为"下一次"）
             for _, r in df_p.iterrows():
                 prog = r['progress']
@@ -1001,10 +1009,14 @@ class FundamentalService:
                 r for _, r in df_p.iterrows()
                 if pd.notna(r['ex_date']) and r['ex_date'] < today
             ]
+            # 只取近 3 年除权日投影（排除多年前的偶发噪声，如 2005/2001 的孤立除权日）
+            recent_rows = [r for r in past_rows if r['ex_date'].year >= today.year - 3]
+            if not recent_rows:
+                recent_rows = past_rows
             if past_rows:
                 this_year = today.year
                 last_year = this_year - 1
-                last_year_ex = [r['ex_date'] for r in past_rows if r['ex_date'].year == last_year]
+                last_year_ex = [r['ex_date'] for r in recent_rows if r['ex_date'].year == last_year]
 
                 def _project(d):
                     # 把历史除权日投影到今年；若已过期则顺延到明年（兼容 2/29）
@@ -1019,7 +1031,17 @@ class FundamentalService:
                             cand = d.replace(year=this_year + 1, month=2, day=28)
                     return cand
 
-                candidates = [(_project(r['ex_date']), r) for r in past_rows]
+                candidates = []
+                for r in recent_rows:
+                    # 跳过最近一次已实施分红的投影：避免把刚分过的红利再往后推一年，
+                    # 误当成“当期下一次分红”显示（一年多次分红的另一笔仍保留）
+                    if last_paid_ex is not None and r['ex_date'] == last_paid_ex:
+                        continue
+                    candidates.append((_project(r['ex_date']), r))
+                if not candidates:
+                    # 最近已分红，且没有其他可预估的分红事件 → 跳过该股票
+                    return None
+
                 candidates.sort(key=lambda x: x[0])
                 est, ref_row = candidates[0]
                 freq_label = f'{len(last_year_ex)}次/年' if last_year_ex else '年度'
