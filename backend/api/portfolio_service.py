@@ -115,14 +115,19 @@ def build_portfolio_summary(portfolio_id=None):
             'dividend_yield': _safe(price_map[sym].get('dividend_yield')),
         })
 
-    # 计算当前权重与漂移
+    # 现金余额 + 总资产（持仓市值 + 现金）
+    cash_balance = float(portfolio.cash_balance)
+    total_assets = total_market_value + cash_balance
+
+    # 计算当前权重与漂移（相对总资产，现金占剩余权重）
     for r in rows:
-        cw = (r['market_value'] / total_market_value * 100.0) if total_market_value > 0 else 0.0
+        cw = (r['market_value'] / total_assets * 100.0) if total_assets > 0 else 0.0
         r['current_weight'] = round(cw, 2)
         r['drift'] = round(cw - r['target_weight'], 2)
 
     total_pnl = total_market_value - total_cost
     total_pnl_pct = (total_pnl / total_cost * 100.0) if total_cost > 0 else 0.0
+    cash_ratio = (cash_balance / total_assets * 100.0) if total_assets > 0 else 0.0
 
     wdy = _weighted_avg(rows, 'dividend_yield', 'market_value')
     wpe = _weighted_avg(rows, 'pe', 'market_value')
@@ -131,10 +136,10 @@ def build_portfolio_summary(portfolio_id=None):
     hhi = sum((r['current_weight'] / 100.0) ** 2 for r in rows) * 10000.0 if rows else 0.0
     top1 = max((r['current_weight'] for r in rows), default=0.0)
 
-    # 再平衡建议：目标市值 = 总市值 × 目标权重；差额转买卖股数
+    # 再平衡建议：目标市值 = 总资产 × 目标权重；差额转买卖股数
     rebalance = []
     for r in rows:
-        target_mv = total_market_value * r['target_weight'] / 100.0
+        target_mv = total_assets * r['target_weight'] / 100.0
         diff = target_mv - r['market_value']
         shares_to_trade = (diff / r['current_price']) if r['current_price'] > 0 else 0.0
         # 0.5 元阈值忽略噪声
@@ -155,7 +160,10 @@ def build_portfolio_summary(portfolio_id=None):
         'id': portfolio.id,
         'name': portfolio.name,
         'total_capital': float(portfolio.total_capital),
+        'cash_balance': round(cash_balance, 2),
+        'total_assets': round(total_assets, 2),
         'total_market_value': round(total_market_value, 2),
+        'cash_ratio': round(cash_ratio, 2),
         'total_cost': round(total_cost, 2),
         'total_pnl': round(total_pnl, 2),
         'total_pnl_pct': round(total_pnl_pct, 2),
@@ -176,7 +184,10 @@ def _empty_summary(portfolio):
         'id': portfolio.id,
         'name': portfolio.name,
         'total_capital': float(portfolio.total_capital),
+        'cash_balance': 0.0,
+        'total_assets': 0.0,
         'total_market_value': 0.0,
+        'cash_ratio': 0.0,
         'total_cost': 0.0,
         'total_pnl': 0.0,
         'total_pnl_pct': 0.0,

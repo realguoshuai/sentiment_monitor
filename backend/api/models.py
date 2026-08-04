@@ -217,6 +217,7 @@ class Portfolio(models.Model):
     """投资组合"""
     name = models.CharField(max_length=100, default='默认组合', verbose_name='组合名称')
     total_capital = models.DecimalField(max_digits=15, decimal_places=2, default=0, verbose_name='总资金')
+    cash_balance = models.DecimalField(max_digits=15, decimal_places=2, default=0, verbose_name='现金余额')
     is_default = models.BooleanField(default=False, verbose_name='是否默认组合')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

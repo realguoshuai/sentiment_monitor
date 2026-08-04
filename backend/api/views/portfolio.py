@@ -37,6 +37,7 @@ def get_portfolio(request):
             'id': portfolio.id,
             'name': portfolio.name,
             'total_capital': float(portfolio.total_capital),
+            'cash_balance': float(portfolio.cash_balance),
             'holdings': holdings_data,
         })
 
@@ -51,6 +52,7 @@ def save_portfolio(request):
     try:
         data = request.data
         total_capital = data.get('total_capital', 0)
+        cash_balance = data.get('cash_balance', 0)
         holdings = data.get('holdings', [])
 
         with transaction.atomic():
@@ -58,6 +60,7 @@ def save_portfolio(request):
             if not portfolio:
                 portfolio = Portfolio.objects.create(name='默认组合', is_default=True)
             portfolio.total_capital = total_capital
+            portfolio.cash_balance = cash_balance
             portfolio.save()
 
             PortfolioHolding.objects.filter(portfolio=portfolio).delete()

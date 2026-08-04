@@ -326,7 +326,7 @@ export const portfolioApi = {
   getPortfolio: () => api.get<any>('/portfolio/'),
 
   /** 保存组合 */
-  savePortfolio: (data: { total_capital: number; holdings: any[] }) =>
+  savePortfolio: (data: { total_capital: number; cash_balance: number; holdings: any[] }) =>
     api.post<any>('/portfolio/save/', data),
 
   /** 获取组合汇总（实时市值/盈亏/权重/再平衡） */

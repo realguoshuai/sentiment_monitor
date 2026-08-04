@@ -30,10 +30,34 @@
       {{ saveMessage }}
     </div>
 
+    <!-- 从自选添加 -->
+    <div>
+      <button
+        class="text-[10px] text-cyan-600 hover:text-cyan-700"
+        @click="pickerOpen = !pickerOpen"
+      >
+        {{ pickerOpen ? '收起自选列表' : '+ 从自选添加持仓' }}
+      </button>
+      <div v-if="pickerOpen" class="mt-1 max-h-[160px] overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-1">
+        <div v-if="!availableWatchlist.length" class="px-2 py-1.5 text-[10px] text-slate-400">
+          自选股已全部在持仓中
+        </div>
+        <button
+          v-for="s in availableWatchlist"
+          :key="s.stock_symbol"
+          class="flex w-full items-center justify-between rounded px-2 py-1 text-left text-[10px] hover:bg-white"
+          @click="addHolding(s)"
+        >
+          <span class="truncate text-slate-700">{{ s.stock_name }}</span>
+          <span class="font-mono text-slate-400">{{ s.stock_symbol }}</span>
+        </button>
+      </div>
+    </div>
+
     <!-- Mode A: Percentage -->
     <template v-if="mode === 'pct'">
       <div>
-        <label class="mb-1 block text-[10px] font-bold text-slate-500 uppercase">总资金（元）</label>
+        <label class="mb-1 block text-[10px] font-bold text-slate-500 uppercase">总资金（参考，元）</label>
         <input
           v-model.number="totalCapital"
           type="number"
@@ -42,68 +66,85 @@
         />
       </div>
       <div>
+        <label class="mb-1 block text-[10px] font-bold text-slate-500 uppercase">现金余额（元）</label>
+        <input
+          v-model.number="cashBalance"
+          type="number"
+          class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono text-slate-800 outline-none focus:border-emerald-500"
+          placeholder="0"
+        />
+      </div>
+      <div>
         <div class="mb-2 flex items-center justify-between">
           <span class="text-[10px] font-bold text-slate-500 uppercase">持仓分配</span>
           <button class="text-[10px] text-cyan-600 hover:text-cyan-700" @click="equalWeight">等权分配</button>
         </div>
-        <div class="space-y-1 max-h-[200px] overflow-y-auto">
+        <div v-if="!holdingsList.length" class="rounded-lg bg-slate-50 px-2.5 py-3 text-center text-[10px] text-slate-400">
+          暂无持仓，点上方「从自选添加持仓」
+        </div>
+        <div v-else class="space-y-1 max-h-[200px] overflow-y-auto">
           <div
-            v-for="s in store.dashboardStocks"
-            :key="s.stock_symbol"
+            v-for="h in holdingsList"
+            :key="h.symbol"
             class="flex items-center gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5"
           >
-            <span class="w-14 truncate text-[10px] text-slate-700">{{ s.stock_name }}</span>
+            <span class="w-14 truncate text-[10px] text-slate-700">{{ h.name }}</span>
             <input
-              v-model.number="pctAlloc[s.stock_symbol]"
+              v-model.number="h.allocation_pct"
               type="number" min="0" max="100"
               class="w-14 rounded border border-slate-300 bg-white px-2 py-0.5 text-right text-xs font-mono text-slate-800 outline-none focus:border-cyan-500"
               placeholder="0"
             />
             <span class="text-[10px] text-slate-400">%</span>
             <span class="flex-1 text-right text-[10px] font-mono text-slate-500">
-              {{ fmtMoney(totalCapital * (pctAlloc[s.stock_symbol] || 0) / 100) }}
+              {{ fmtMoney(totalCapital * (h.allocation_pct || 0) / 100) }}
             </span>
+            <button class="text-[10px] text-rose-500 hover:text-rose-600" @click="removeHolding(h.symbol)">移除</button>
           </div>
         </div>
         <div v-if="pctTotal !== 100" class="mt-1 text-[10px]" :class="pctTotal > 100 ? 'text-rose-600' : 'text-amber-600'">
-          合计 {{ pctTotal }}%{{ pctTotal > 100 ? '（超额）' : '（未满仓）' }}
+          持仓合计 {{ pctTotal }}%（剩余 {{ (100 - pctTotal).toFixed(1) }}% 为现金）
         </div>
+        <div v-else class="mt-1 text-[10px] text-emerald-600">持仓 100%，已满仓</div>
       </div>
     </template>
 
     <!-- Mode B: Share Count -->
     <template v-else>
-      <div class="space-y-1 max-h-[260px] overflow-y-auto">
+      <div v-if="!holdingsList.length" class="rounded-lg bg-slate-50 px-2.5 py-3 text-center text-[10px] text-slate-400">
+        暂无持仓，点上方「从自选添加持仓」
+      </div>
+      <div v-else class="space-y-1 max-h-[260px] overflow-y-auto">
         <div
-          v-for="s in store.dashboardStocks"
-          :key="s.stock_symbol"
+          v-for="h in holdingsList"
+          :key="h.symbol"
           class="rounded-lg bg-slate-50 px-2.5 py-2"
         >
           <div class="mb-1 flex items-center justify-between">
-            <span class="text-[10px] font-bold text-slate-700">{{ s.stock_name }}</span>
-            <span class="text-[10px] font-mono text-slate-500">现价 ¥{{ getPrice(s.stock_symbol) }}</span>
+            <span class="text-[10px] font-bold text-slate-700">{{ h.name }}</span>
+            <button class="text-[10px] text-rose-500 hover:text-rose-600" @click="removeHolding(h.symbol)">移除</button>
           </div>
           <div class="flex items-center gap-2">
             <input
-              v-model.number="shareCounts[s.stock_symbol]"
+              v-model.number="h.share_count"
               type="number" min="0" step="100"
               class="w-20 rounded border border-slate-300 bg-white px-2 py-0.5 text-right text-xs font-mono text-slate-800 outline-none focus:border-emerald-500"
               placeholder="0"
             />
             <span class="text-[10px] text-slate-400">股</span>
             <input
-              v-model.number="buyPrices[s.stock_symbol]"
+              v-model.number="h.buy_price"
               type="number" min="0" step="0.01"
               class="w-20 rounded border border-slate-300 bg-white px-2 py-0.5 text-right text-xs font-mono text-slate-800 outline-none focus:border-emerald-500"
               placeholder="买入价"
             />
             <span class="flex-1 text-right text-[10px] font-mono text-emerald-600">
-              {{ fmtMoney(getMarketValue(s.stock_symbol)) }}
+              {{ fmtMoney(hMarketValue(h)) }}
             </span>
           </div>
         </div>
       </div>
-      <div class="flex items-center justify-between text-[10px] text-slate-500">
+      <div v-if="holdingsList.length" class="flex items-center justify-between text-[10px] text-slate-500">
         <span>总成本(买入): <span class="font-mono font-bold text-slate-800">{{ fmtMoney(sharesTotalCost) }}</span></span>
         <span>总市值: <span class="font-mono font-bold text-slate-800">{{ fmtMoney(sharesTotalMV) }}</span></span>
       </div>
@@ -124,8 +165,9 @@
 
       <div class="flex items-end justify-between">
         <div>
-          <div class="text-[10px] text-slate-500">总市值</div>
-          <div class="text-base font-mono font-bold text-slate-900">{{ fmtMoney(summary.total_market_value) }}</div>
+          <div class="text-[10px] text-slate-500">总资产（持仓市值+现金）</div>
+          <div class="text-base font-mono font-bold text-slate-900">{{ fmtMoney(summary.total_assets) }}</div>
+          <div class="text-[9px] text-slate-400">持仓市值 {{ fmtMoney(summary.total_market_value) }} · 现金 {{ fmtMoney(summary.cash_balance) }}</div>
         </div>
         <div class="text-right">
           <div class="text-[10px] text-slate-500">总浮盈亏</div>
@@ -161,6 +203,14 @@
           <div class="text-[9px] text-slate-400">加权PB</div>
           <div class="text-xs font-mono font-bold text-slate-800">{{ summary.weighted_pb }}</div>
         </div>
+        <div class="rounded border border-slate-200 bg-white px-2 py-1">
+          <div class="text-[9px] text-slate-400">现金余额</div>
+          <div class="text-xs font-mono font-bold text-emerald-600">{{ fmtMoney(summary.cash_balance) }}</div>
+        </div>
+        <div class="rounded border border-slate-200 bg-white px-2 py-1">
+          <div class="text-[9px] text-slate-400">现金占比</div>
+          <div class="text-xs font-mono font-bold text-emerald-600">{{ summary.cash_ratio }}%</div>
+        </div>
       </div>
 
       <div v-if="!summary.price_available" class="text-[10px] text-amber-600">
@@ -193,6 +243,20 @@
             <span class="w-8 text-right text-[9px]" :class="driftInfo(h.drift).c">{{ driftInfo(h.drift).t }}</span>
           </div>
         </div>
+        <!-- 现金伪持仓：展示其权重，使权重条凑满 100% -->
+        <div class="rounded border border-dashed border-slate-300 bg-white px-2 py-1.5">
+          <div class="flex items-center justify-between text-[10px]">
+            <span class="font-bold text-emerald-700">现金</span>
+            <span class="font-mono text-slate-400">idle cash</span>
+          </div>
+          <div class="mt-1 flex items-center gap-2">
+            <div class="relative h-1.5 flex-1 rounded bg-slate-200">
+              <div class="absolute left-0 top-0 h-1.5 rounded bg-emerald-500" :style="{ width: Math.min(summary.cash_ratio, 100) + '%' }"></div>
+            </div>
+            <span class="w-10 text-right text-[9px] font-mono text-emerald-600">{{ summary.cash_ratio }}%</span>
+            <span class="w-8 text-right text-[9px] text-slate-400">—</span>
+          </div>
+        </div>
       </div>
 
       <!-- 再平衡建议 -->
@@ -220,9 +284,9 @@ const store = useSentimentStore()
 
 const mode = ref<'pct' | 'shares'>('pct')
 const totalCapital = ref(1000000)
-const pctAlloc = reactive<Record<string, number>>({})
-const shareCounts = reactive<Record<string, number>>({})
-const buyPrices = reactive<Record<string, number>>({})
+const cashBalance = ref(0)
+const holdingsList = reactive<any[]>([])
+const pickerOpen = ref(false)
 const isSaving = ref(false)
 const saveMessage = ref('')
 const saveSuccess = ref(false)
@@ -234,7 +298,11 @@ const loadingSummary = ref(false)
 function emptySummary() {
   return {
     name: '默认组合',
+    total_capital: 0,
+    cash_balance: 0,
+    total_assets: 0,
     total_market_value: 0,
+    cash_ratio: 0,
     total_cost: 0,
     total_pnl: 0,
     total_pnl_pct: 0,
@@ -255,11 +323,15 @@ onMounted(async () => {
     const { data } = await portfolioApi.getPortfolio()
     if (data) {
       totalCapital.value = data.total_capital || 1000000
-      for (const h of data.holdings || []) {
-        pctAlloc[h.symbol] = h.allocation_pct || 0
-        shareCounts[h.symbol] = h.share_count || 0
-        buyPrices[h.symbol] = h.buy_price || 0
-      }
+      cashBalance.value = data.cash_balance || 0
+      holdingsList.splice(0, holdingsList.length, ...(data.holdings || []).map((h: any) => ({
+        symbol: h.symbol,
+        name: h.name,
+        industry: h.industry || '',
+        allocation_pct: h.allocation_pct || 0,
+        share_count: h.share_count || 0,
+        buy_price: h.buy_price || 0,
+      })))
     }
   } catch (e) {
     console.warn('加载组合失败，使用默认值', e)
@@ -283,17 +355,19 @@ async function savePortfolio() {
   isSaving.value = true
   saveMessage.value = ''
   try {
-    const holdings = store.dashboardStocks
-      .filter(s => (pctAlloc[s.stock_symbol] || 0) > 0 || (shareCounts[s.stock_symbol] || 0) > 0)
-      .map(s => ({
-        symbol: s.stock_symbol,
-        allocation_pct: pctAlloc[s.stock_symbol] || 0,
-        share_count: shareCounts[s.stock_symbol] || 0,
-        buy_price: buyPrices[s.stock_symbol] || 0,
+    // 仅保存有配置（分配>0 或 股数>0）的持仓
+    const holdings = holdingsList
+      .filter(h => (h.allocation_pct || 0) > 0 || (h.share_count || 0) > 0)
+      .map(h => ({
+        symbol: h.symbol,
+        allocation_pct: h.allocation_pct || 0,
+        share_count: h.share_count || 0,
+        buy_price: h.buy_price || 0,
       }))
 
     await portfolioApi.savePortfolio({
       total_capital: totalCapital.value,
+      cash_balance: cashBalance.value,
       holdings,
     })
 
@@ -320,35 +394,52 @@ async function refresh() {
   await fetchSummary()
 }
 
-const stocks = computed(() => store.dashboardStocks)
+// 自选（dashboardStocks）中尚未加入持仓的股票
+const availableWatchlist = computed(() => {
+  const held = new Set(holdingsList.map(h => h.symbol))
+  return store.dashboardStocks.filter(s => !held.has(s.stock_symbol) && !s.is_pending)
+})
 
-function getPrice(symbol: string): string {
-  return (store.realtimePrices?.[symbol]?.price ?? 0).toFixed(2)
+function addHolding(s: any) {
+  if (holdingsList.some(h => h.symbol === s.stock_symbol)) return
+  holdingsList.push({
+    symbol: s.stock_symbol,
+    name: s.stock_name,
+    industry: s.industry || '',
+    allocation_pct: 0,
+    share_count: 0,
+    buy_price: 0,
+  })
 }
+
+function removeHolding(symbol: string) {
+  const i = holdingsList.findIndex(h => h.symbol === symbol)
+  if (i >= 0) holdingsList.splice(i, 1)
+}
+
+const pctTotal = computed(() => holdingsList.reduce((s, h) => s + (h.allocation_pct || 0), 0))
 
 function equalWeight() {
-  const n = stocks.value.length
+  const n = holdingsList.length
   if (n === 0) return
   const pct = Math.floor(100 / n)
-  for (const s of stocks.value) pctAlloc[s.stock_symbol] = pct
+  for (const h of holdingsList) h.allocation_pct = pct
   const remainder = 100 - pct * n
-  if (remainder > 0) pctAlloc[stocks.value[0].stock_symbol] += remainder
+  if (remainder > 0 && holdingsList[0]) holdingsList[0].allocation_pct += remainder
 }
-
-const pctTotal = computed(() => Object.values(pctAlloc).reduce((s, v) => s + (v || 0), 0))
 
 // Mode B 实时市值 / 买入成本
-function getMarketValue(symbol: string): number {
-  return (shareCounts[symbol] || 0) * (store.realtimePrices?.[symbol]?.price ?? 0)
+function hMarketValue(h: any): number {
+  return (h.share_count || 0) * (store.realtimePrices?.[h.symbol]?.price ?? 0)
 }
-function getBookCost(symbol: string): number {
-  return (shareCounts[symbol] || 0) * (buyPrices[symbol] || 0)
+function hBookCost(h: any): number {
+  return (h.share_count || 0) * (h.buy_price || 0)
 }
 const sharesTotalCost = computed(() =>
-  stocks.value.reduce((sum, s) => sum + getBookCost(s.stock_symbol), 0)
+  holdingsList.reduce((sum, h) => sum + hBookCost(h), 0)
 )
 const sharesTotalMV = computed(() =>
-  stocks.value.reduce((sum, s) => sum + getMarketValue(s.stock_symbol), 0)
+  holdingsList.reduce((sum, h) => sum + hMarketValue(h), 0)
 )
 
 // 年分红（按后端概览的市值×股息率估算）
