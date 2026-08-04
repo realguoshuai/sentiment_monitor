@@ -207,7 +207,22 @@
     <!-- 组合概览（实时市值/盈亏/权重/再平衡，来自后端） -->
     <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2">
       <div class="flex items-center justify-between">
-        <span class="text-[10px] font-bold text-slate-500 uppercase">组合概览</span>
+        <span class="flex items-center gap-1">
+          <span class="text-[10px] font-bold text-slate-500 uppercase">组合概览</span>
+          <span class="relative inline-flex cursor-help group" tabindex="0" aria-label="功能说明">
+            <svg class="h-3.5 w-3.5 text-slate-400 transition-colors hover:text-cyan-600" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+            </svg>
+            <span class="pointer-events-none absolute left-0 top-full z-30 mt-1 w-64 rounded-lg border border-slate-300 bg-white p-2 text-left text-[10px] leading-relaxed text-slate-600 opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100">
+              <div class="mb-1 font-bold text-slate-700">组合 + 分红 工具说明</div>
+              <div>· <b>百分比分配</b>：按目标权重(%)分资金，未分配部分自动作为现金。</div>
+              <div>· <b>指定股数</b>：直接填持股数与买入价，用于计算真实盈亏与收益率。</div>
+              <div>· <b>现金余额</b>：未投入资金，计入总资产并参与权重计算。</div>
+              <div>· <b>组合概览</b>：实时市值、浮盈亏、集中度(HHI)、加权 PE/PB 与股息率。</div>
+              <div>· <b>再平衡</b>：对比当前权重与目标权重给出买/卖建议；A股每笔至少 1 手(100 股)，已自动按 100 股取整。</div>
+            </span>
+          </span>
+        </span>
         <button
           @click="refresh"
           :disabled="loadingSummary"
@@ -319,7 +334,7 @@
 
       <!-- 再平衡建议 -->
       <div v-if="rebalanceList.length" class="border-t border-slate-200 pt-1.5">
-        <div class="mb-1 text-[10px] text-slate-500">再平衡：<span class="text-rose-600">{{ rebalanceList.length }} 项偏离</span></div>
+        <div class="mb-1 text-[10px] text-slate-500">再平衡：<span class="text-rose-600">{{ rebalanceList.length }} 项偏离</span> <span class="text-slate-400">（每笔按 100 股取整）</span></div>
         <div class="space-y-0.5">
           <div v-for="r in rebalanceList" :key="r.symbol" class="flex items-center justify-between text-[10px] font-mono">
             <span class="text-slate-700">{{ r.name }}</span>

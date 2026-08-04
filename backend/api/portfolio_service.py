@@ -7,11 +7,27 @@
 """
 
 import logging
+import math
 
 from .models import Portfolio, PortfolioHolding
 from .price_service import PriceService
 
 logger = logging.getLogger(__name__)
+
+# A 股交易单位：1 手 = 100 股（买入/卖出均须为 100 的整数倍）
+LOT_SIZE = 100
+
+
+def _lot_round(shares: float) -> int:
+    """按 A 股 1 手 = 100 股取整：买卖数量均为 100 的整数倍且至少 1 手。
+
+    取偏离方向上「不小于所需股数的最小整手」（即向上取整到整手），
+    保证实际下单时每笔至少 100 股、且能覆盖目标偏差。
+    """
+    if shares == 0:
+        return 0
+    sign = 1 if shares > 0 else -1
+    return sign * math.ceil(abs(shares) / LOT_SIZE) * LOT_SIZE
 
 
 def _safe(v, default=0.0):
@@ -136,14 +152,19 @@ def build_portfolio_summary(portfolio_id=None):
     hhi = sum((r['current_weight'] / 100.0) ** 2 for r in rows) * 10000.0 if rows else 0.0
     top1 = max((r['current_weight'] for r in rows), default=0.0)
 
-    # 再平衡建议：目标市值 = 总资产 × 目标权重；差额转买卖股数
+    # 再平衡建议：目标市值 = 总资产 × 目标权重；差额转买卖股数（按 100 股取整）
     rebalance = []
     for r in rows:
         target_mv = total_assets * r['target_weight'] / 100.0
         diff = target_mv - r['market_value']
-        shares_to_trade = (diff / r['current_price']) if r['current_price'] > 0 else 0.0
-        # 0.5 元阈值忽略噪声
-        action = 'buy' if diff > 0.5 else ('sell' if diff < -0.5 else 'hold')
+        raw_shares = (diff / r['current_price']) if r['current_price'] > 0 else 0.0
+        # A 股每笔至少 1 手(100 股)：金额噪声(<0.5 元)忽略；否则按整手向上取整
+        if abs(diff) < 0.5:
+            shares_to_trade = 0
+            action = 'hold'
+        else:
+            shares_to_trade = _lot_round(raw_shares)
+            action = 'buy' if shares_to_trade > 0 else 'sell'
         rebalance.append({
             'symbol': r['symbol'],
             'name': r['name'],
@@ -152,7 +173,7 @@ def build_portfolio_summary(portfolio_id=None):
             'current_market_value': r['market_value'],
             'target_market_value': round(target_mv, 2),
             'diff': round(diff, 2),
-            'shares_to_trade': int(round(shares_to_trade)),
+            'shares_to_trade': shares_to_trade,
             'action': action,
         })
 
