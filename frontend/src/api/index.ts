@@ -284,6 +284,8 @@ export const stockApi = {
     api.get<any[]>('/sentiment/dividend-calendar/', { timeout: 30000 }),
   getValuationThermometer: () =>
     api.get<any>('/sentiment/valuation-thermometer/', { timeout: 60000 }),
+  getEarningsCalendar: (days: number = 120, recent: number = 7) =>
+    api.get<any>('/sentiment/earnings-calendar/', { params: { days, recent }, timeout: 60000 }),
 }
 
 // 告警系统 API

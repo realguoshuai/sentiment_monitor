@@ -56,6 +56,11 @@ const router = createRouter({
       path: '/news-report',
       name: 'news-report',
       component: () => import('@/views/NewsReportView.vue')
+    },
+    {
+      path: '/earnings-calendar',
+      name: 'earnings-calendar',
+      component: () => import('@/views/EarningsCalendarView.vue')
     }
   ]
 })

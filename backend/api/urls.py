@@ -26,6 +26,7 @@ from .views import (
     news_report,
 )
 from .views.macro import get_risk_free_rate
+from .views.earnings_calendar import get_earnings_calendar
 
 router = DefaultRouter()
 router.register(r'stocks', views.StockViewSet)
@@ -46,6 +47,7 @@ urlpatterns = [
     path('sentiment/comparison_historical/', comparison_historical, name='comparison-historical'),
     path('sentiment/analysis/', analysis, name='analysis'),
     path('sentiment/macro/risk-free/', get_risk_free_rate, name='risk-free'),
+    path('sentiment/earnings-calendar/', get_earnings_calendar, name='earnings-calendar'),
     path('collect/', trigger_collection, name='trigger-collection'),
     path('diagnose/', diagnose_connectivity, name='diagnose-connectivity'),
     # 组合持仓
