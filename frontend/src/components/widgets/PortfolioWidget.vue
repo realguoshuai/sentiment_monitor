@@ -30,15 +30,25 @@
       {{ saveMessage }}
     </div>
 
-    <!-- 从自选添加 -->
-    <div>
-      <button
-        class="text-[10px] text-cyan-600 hover:text-cyan-700"
-        @click="pickerOpen = !pickerOpen"
-      >
-        {{ pickerOpen ? '收起自选列表' : '+ 从自选添加持仓' }}
-      </button>
-      <div v-if="pickerOpen" class="mt-1 max-h-[160px] overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-1">
+    <!-- 添加持仓：直接输入 + 从自选添加 -->
+    <div class="space-y-1.5">
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          class="text-[10px] text-cyan-600 hover:text-cyan-700"
+          @click="pickerOpen = !pickerOpen"
+        >
+          {{ pickerOpen ? '收起自选列表' : '+ 从自选添加持仓' }}
+        </button>
+        <button
+          class="text-[10px] text-emerald-600 hover:text-emerald-700"
+          @click="customOpen = !customOpen"
+        >
+          {{ customOpen ? '收起手动添加' : '+ 添加持仓' }}
+        </button>
+      </div>
+
+      <!-- 自选列表 -->
+      <div v-if="pickerOpen" class="max-h-[160px] overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-1">
         <div v-if="!availableWatchlist.length" class="px-2 py-1.5 text-[10px] text-slate-400">
           自选股已全部在持仓中
         </div>
@@ -50,6 +60,29 @@
         >
           <span class="truncate text-slate-700">{{ s.stock_name }}</span>
           <span class="font-mono text-slate-400">{{ s.stock_symbol }}</span>
+        </button>
+      </div>
+
+      <!-- 手动添加 -->
+      <div v-if="customOpen" class="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 p-1.5">
+        <input
+          v-model="newSymbol"
+          type="text"
+          class="w-20 rounded border border-slate-300 bg-white px-2 py-1 text-xs font-mono text-slate-800 outline-none focus:border-emerald-500"
+          placeholder="代码"
+        />
+        <input
+          v-model="newName"
+          type="text"
+          class="w-20 rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800 outline-none focus:border-emerald-500"
+          placeholder="名称"
+        />
+        <button
+          class="rounded bg-emerald-600 px-2 py-1 text-[10px] font-bold text-white hover:bg-emerald-500 disabled:bg-slate-400"
+          :disabled="!newSymbol.trim()"
+          @click="addCustomHolding"
+        >
+          添加
         </button>
       </div>
     </div>
@@ -144,6 +177,22 @@
           </div>
         </div>
       </div>
+      <!-- 指定股数模式：现金余额输入（红框位置） -->
+      <div class="flex items-center justify-between rounded-lg border border-dashed border-slate-300 bg-slate-50 px-2.5 py-1.5">
+        <span class="text-[10px] font-bold text-emerald-700">现金余额</span>
+        <div class="flex items-center gap-1.5">
+          <input
+            v-model.number="cashBalance"
+            type="number"
+            min="0"
+            step="100"
+            class="w-24 rounded border border-slate-300 bg-white px-2 py-0.5 text-right text-xs font-mono text-slate-800 outline-none focus:border-emerald-500"
+            placeholder="0"
+          />
+          <span class="text-[10px] text-slate-400">元</span>
+        </div>
+      </div>
+
       <div v-if="holdingsList.length" class="flex items-center justify-between text-[10px] text-slate-500">
         <span>总成本(买入): <span class="font-mono font-bold text-slate-800">{{ fmtMoney(sharesTotalCost) }}</span></span>
         <span>总市值: <span class="font-mono font-bold text-slate-800">{{ fmtMoney(sharesTotalMV) }}</span></span>
@@ -287,6 +336,9 @@ const totalCapital = ref(1000000)
 const cashBalance = ref(0)
 const holdingsList = reactive<any[]>([])
 const pickerOpen = ref(false)
+const customOpen = ref(false)
+const newSymbol = ref('')
+const newName = ref('')
 const isSaving = ref(false)
 const saveMessage = ref('')
 const saveSuccess = ref(false)
@@ -410,6 +462,23 @@ function addHolding(s: any) {
     share_count: 0,
     buy_price: 0,
   })
+}
+
+function addCustomHolding() {
+  const symbol = newSymbol.value.trim().toUpperCase()
+  const name = newName.value.trim() || symbol
+  if (!symbol || holdingsList.some(h => h.symbol === symbol)) return
+  holdingsList.push({
+    symbol,
+    name,
+    industry: '',
+    allocation_pct: 0,
+    share_count: 0,
+    buy_price: 0,
+  })
+  newSymbol.value = ''
+  newName.value = ''
+  customOpen.value = false
 }
 
 function removeHolding(symbol: string) {
