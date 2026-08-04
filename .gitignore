@@ -23,7 +23,8 @@ backend/scratch/verify_*.py
 backend/scratch/final_*.py
 *.djcache
 *.sqlite3
-backend/db.sqlite3  # 私人持仓数据，禁止提交 GitHub
+# 私人持仓数据，禁止提交 GitHub（gitignore 不支持行尾注释，注释必须独占一行）
+backend/db.sqlite3
 *.sqlite3-journal
 *.sqlite3-wal
 *.sqlite3-shm

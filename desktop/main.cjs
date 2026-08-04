@@ -233,9 +233,8 @@ function ensureRuntimePaths() {
   fs.mkdirSync(runtimeDir, { recursive: true });
   fs.mkdirSync(cacheDir, { recursive: true });
 
-  if (isPackaged && fs.existsSync(packagedSeedDb) && !fs.existsSync(dbPath)) {
-    fs.copyFileSync(packagedSeedDb, dbPath);
-  }
+  // 隐私保护：安装包不再携带任何 db.sqlite3 种子库（本机持仓等私人数据禁止随包分发）。
+  // 首次启动时由 desktop_backend.py 的 `migrate --run-syncdb` 在用户数据目录自动建空库。
 
   return {
     userDataDir,

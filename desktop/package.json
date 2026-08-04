@@ -40,11 +40,17 @@
       },
       {
         "from": "../backend/dist/SentimentMonitor-runtime",
-        "to": "backend"
-      },
-      {
-        "from": "../backend/db.sqlite3",
-        "to": "backend/db.sqlite3"
+        "to": "backend",
+        "filter": [
+          "**/*",
+          "!**/*.sqlite3",
+          "!**/*.sqlite3-journal",
+          "!**/*.sqlite3-wal",
+          "!**/*.sqlite3-shm",
+          "!**/*.db",
+          "!**/cache_data/**",
+          "!**/.env"
+        ]
       },
       {
         "from": "assets/icon.png",

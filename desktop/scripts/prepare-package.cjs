@@ -64,6 +64,48 @@ function ensureFile(filePath, hint) {
   }
 }
 
+// 隐私保护：打包产物中绝不允许出现本机数据库 / 缓存 / 环境变量文件。
+// 这些文件可能包含真实持仓、自选股等私人数据，禁止随 exe 分发。
+const PRIVATE_FILE_PATTERN = /(\.sqlite3(-journal|-wal|-shm)?|\.db|\.env)$/i;
+const PRIVATE_DIR_NAMES = new Set(['cache_data', 'logs']);
+
+function stripPrivateData(dir, removed) {
+  if (!fs.existsSync(dir)) return removed;
+
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const target = path.join(dir, entry.name);
+
+    if (entry.isDirectory()) {
+      if (PRIVATE_DIR_NAMES.has(entry.name.toLowerCase())) {
+        fs.rmSync(target, { recursive: true, force: true });
+        removed.push(target);
+        continue;
+      }
+      stripPrivateData(target, removed);
+      continue;
+    }
+
+    if (PRIVATE_FILE_PATTERN.test(entry.name)) {
+      fs.rmSync(target, { force: true });
+      removed.push(target);
+    }
+  }
+
+  return removed;
+}
+
+function scrubBackendRuntime() {
+  const runtimeDir = path.join(repoRoot, 'backend', 'dist', 'SentimentMonitor-runtime');
+  const removed = stripPrivateData(runtimeDir, []);
+
+  if (removed.length > 0) {
+    console.log('[desktop-package] Removed private files from packaging payload:');
+    removed.forEach((item) => console.log(`  - ${path.relative(repoRoot, item)}`));
+  } else {
+    console.log('[desktop-package] Packaging payload contains no private database/cache files.');
+  }
+}
+
 function copyDirectory(sourceDir, targetDir) {
   const resolvedTarget = path.resolve(targetDir);
   const resolvedDesktopDir = path.resolve(desktopDir);
@@ -89,5 +131,6 @@ ensureFile(
   backendExe,
   'Backend exe build failed, then rerun desktop packaging.',
 );
+scrubBackendRuntime();
 
 console.log('[desktop-package] Frontend dist and backend executable are ready.');
