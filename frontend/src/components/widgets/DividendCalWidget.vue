@@ -66,23 +66,30 @@ interface DividendEntry {
   month: number
 }
 
+// 解析 'YYYY-MM-DD' 为本地日期（避免被当成 UTC 零点导致跨时区跨天/跨月）
+function parseYMD(s: string): { year: number; month: number; day: number } | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s)
+  if (!m) return null
+  return { year: +m[1], month: +m[2], day: +m[3] }
+}
+
 const allDividends = computed<DividendEntry[]>(() => {
   const cal = store.dividendCalendar || []
   return cal
     .filter((d: any) => d.date)
     .map((d: any) => {
-      const dt = new Date(d.date)
+      const p = parseYMD(d.date)
       return {
         symbol: d.symbol,
         name: d.name,
         date: d.date,
         days_left: d.days_left,
-        month: dt.getMonth() + 1,
+        month: p ? p.month : 0,
       }
     })
     .filter((d: DividendEntry) => {
-      const dt = new Date(d.date!)
-      return dt.getFullYear() === currentYear.value
+      const p = d.date ? parseYMD(d.date) : null
+      return p ? p.year === currentYear.value : false
     })
 })
 

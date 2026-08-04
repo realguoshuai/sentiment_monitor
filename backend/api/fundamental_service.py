@@ -961,11 +961,19 @@ class FundamentalService:
                     'progress': confirmed_row['progress'] or '实施'
                 }
 
-            # B. 预案
+            # 最近一次"已实施"分红的公告日，用于排除陈旧预案
+            last_paid_ann = None
+            for _, r in df_p.iterrows():
+                prog = str(r['progress'])
+                if '实施' in prog and pd.notna(r['ann_date']):
+                    if last_paid_ann is None or r['ann_date'] > last_paid_ann:
+                        last_paid_ann = r['ann_date']
+
+            # B. 预案（仅当预案公告日晚于最近一次已实施分红，避免陈旧预案被误判为"下一次"）
             for _, r in df_p.iterrows():
                 prog = r['progress']
                 is_proposal = ('预案' in prog or '大会' in prog or '通过' in prog or '董事会' in prog) and ('实施' not in prog)
-                if is_proposal and (pd.isna(r['ex_date']) or r['ex_date'] >= today):
+                if is_proposal and (pd.isna(r['ex_date']) or r['ex_date'] >= today) and (last_paid_ann is None or r['ann_date'] > last_paid_ann):
                     interval_days = 60
                     for _, r2 in df_p.iterrows():
                         if pd.notna(r2['ex_date']) and r2['ex_date'] < today and pd.notna(r2['ann_date']):
@@ -988,40 +996,32 @@ class FundamentalService:
                         'progress': r['progress'] or '董事会预案'
                     }
 
-            # C. 历史估算（按去年分红次序预估，已发的跳过）
-            past_ex_dates = sorted(
-                [r['ex_date'] for _, r in df_p.iterrows()
-                 if pd.notna(r['ex_date']) and r['ex_date'] < today],
-                reverse=True
-            )
-
-            if past_ex_dates:
+            # C. 历史估算：把每条历史除权日投影到今年/明年，取最早未到期者
+            past_rows = [
+                r for _, r in df_p.iterrows()
+                if pd.notna(r['ex_date']) and r['ex_date'] < today
+            ]
+            if past_rows:
                 this_year = today.year
                 last_year = this_year - 1
-                last_year_ex = sorted([d for d in past_ex_dates if d.year == last_year])
-                this_year_count = len([d for d in past_ex_dates if d.year == this_year])
+                last_year_ex = [r['ex_date'] for r in past_rows if r['ex_date'].year == last_year]
 
-                candidates = []
-                if last_year_ex:
-                    remaining = last_year_ex[this_year_count:]
-                    for d in remaining:
-                        est = d.replace(year=this_year)
-                        if est >= today:
-                            candidates.append(est)
-                        else:
-                            candidates.append(d.replace(year=this_year + 1))
-                else:
-                    candidates.append(past_ex_dates[0] + pd.Timedelta(days=365))
+                def _project(d):
+                    # 把历史除权日投影到今年；若已过期则顺延到明年（兼容 2/29）
+                    try:
+                        cand = d.replace(year=this_year)
+                    except ValueError:
+                        cand = d.replace(year=this_year, month=2, day=28)
+                    if cand < today:
+                        try:
+                            cand = d.replace(year=this_year + 1)
+                        except ValueError:
+                            cand = d.replace(year=this_year + 1, month=2, day=28)
+                    return cand
 
-                if candidates:
-                    candidates.sort()
-                    est = candidates[0]
-                    ref_idx = min(this_year_count, len(last_year_ex) - 1) if last_year_ex else 0
-                    ref_row = df_p[df_p['ex_date'] == last_year_ex[ref_idx]].iloc[0] if last_year_ex else df_p[df_p['ex_date'] == past_ex_dates[0]].iloc[0]
-                else:
-                    est = last_year_ex[0].replace(year=this_year + 1) if last_year_ex else past_ex_dates[0] + pd.Timedelta(days=365)
-                    ref_row = df_p[df_p['ex_date'] == last_year_ex[0]].iloc[0] if last_year_ex else df_p[df_p['ex_date'] == past_ex_dates[0]].iloc[0]
-
+                candidates = [(_project(r['ex_date']), r) for r in past_rows]
+                candidates.sort(key=lambda x: x[0])
+                est, ref_row = candidates[0]
                 freq_label = f'{len(last_year_ex)}次/年' if last_year_ex else '年度'
                 return {
                     'symbol': symbol,
@@ -1033,7 +1033,6 @@ class FundamentalService:
                     'progress': '历史估算'
                 }
 
-            return None
 
         data, _status = CacheManager.get_or_fetch(
             key=cache_key,
