@@ -157,7 +157,12 @@
             <span class="text-[10px] font-bold text-slate-700">{{ h.name }}</span>
             <button class="text-[10px] text-rose-500 hover:text-rose-600" @click="removeHolding(h.symbol)">移除</button>
           </div>
-          <div class="flex items-center gap-2">
+          <div class="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-x-2 gap-y-0.5">
+            <div class="text-[9px] text-slate-400">股数</div>
+            <div></div>
+            <div class="text-[9px] text-slate-400">买入价（元）</div>
+            <div class="text-right text-[9px] text-slate-400">市值</div>
+
             <input
               v-model.number="h.share_count"
               type="number" min="0" step="100"
@@ -169,9 +174,9 @@
               v-model.number="h.buy_price"
               type="number" min="0" step="0.01"
               class="w-20 rounded border border-slate-300 bg-white px-2 py-0.5 text-right text-xs font-mono text-slate-800 outline-none focus:border-emerald-500"
-              placeholder="买入价"
+              placeholder="0.00"
             />
-            <span class="flex-1 text-right text-[10px] font-mono text-emerald-600">
+            <span class="w-16 text-right text-[10px] font-mono text-emerald-600">
               {{ fmtMoney(hMarketValue(h)) }}
             </span>
           </div>
@@ -220,9 +225,12 @@
         </div>
         <div class="text-right">
           <div class="text-[10px] text-slate-500">总浮盈亏</div>
-          <div class="text-sm font-mono font-bold" :class="pnlClass(summary.total_pnl)">
+          <div v-if="summary.total_cost > 0" class="text-sm font-mono font-bold" :class="pnlClass(summary.total_pnl)">
             {{ summary.total_pnl >= 0 ? '+' : '' }}{{ fmtMoney(summary.total_pnl) }}
             ({{ summary.total_pnl_pct >= 0 ? '+' : '' }}{{ summary.total_pnl_pct }}%)
+          </div>
+          <div v-else class="text-sm font-mono font-bold text-slate-400">
+            —（需填买入价）
           </div>
         </div>
       </div>
@@ -230,7 +238,8 @@
       <div class="grid grid-cols-3 gap-1.5">
         <div class="rounded border border-slate-200 bg-white px-2 py-1">
           <div class="text-[9px] text-slate-400">收益率</div>
-          <div class="text-xs font-mono font-bold" :class="pnlClass(summary.total_pnl_pct)">{{ summary.total_pnl_pct }}%</div>
+          <div v-if="summary.total_cost > 0" class="text-xs font-mono font-bold" :class="pnlClass(summary.total_pnl_pct)">{{ summary.total_pnl_pct }}%</div>
+          <div v-else class="text-[10px] font-mono font-bold text-slate-400" title="填写买入价后可计算真实收益率">待填买入价</div>
         </div>
         <div class="rounded border border-slate-200 bg-white px-2 py-1">
           <div class="text-[9px] text-slate-400">年分红</div>
