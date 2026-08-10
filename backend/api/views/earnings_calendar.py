@@ -26,5 +26,15 @@ def get_earnings_calendar(request):
     except (TypeError, ValueError):
         recent = 7
 
+    if request.GET.get('force') in ('1', 'true', 'True'):
+        # 动态键：按实际参数组合精确失效（CacheManager.invalidate 双约定已生效，
+        # 删裸键 earnings_calendar_v1_{days}_{recent}，对默认/非默认组合都成立）
+        cache_key = f"{EarningsCalendarService.CACHE_KEY}_{days}_{recent}"
+        try:
+            from ..cache_manager import CacheManager
+            CacheManager.invalidate(cache_key)
+        except Exception:
+            pass
+
     data = EarningsCalendarService.get_calendar(lookahead_days=days, recent_days=recent)
     return Response(data)

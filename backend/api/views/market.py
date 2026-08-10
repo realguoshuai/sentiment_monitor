@@ -39,7 +39,10 @@ def get_market_diary(request):
     if force_deep:
         try:
             from ..cache_manager import CacheManager
-            CacheManager.invalidate_by_symbol(fixed_symbol, domains=['fundamental', 'price'])
+            # 同时清 fundamental / price / market_diary 域：
+            # 价格裸键(price_history_raw_qfq_*)、盯盘日记裸键、以及 diary 里重复的 dividend 裸键
+            # 都依赖 CacheManager.invalidate 现已兼容「裸键 + _v2 版本键」两套约定才能真正命中
+            CacheManager.invalidate_by_symbol(fixed_symbol, domains=['fundamental', 'price', 'market_diary'])
         except Exception:
             pass
 
@@ -298,7 +301,18 @@ def _build_dividend_calendar():
 
 @api_view(['GET'])
 def get_dividend_calendar(request):
-    """分红日历接口：返回所有监控股票的下一次分红信息"""
+    """分红日历接口：返回所有监控股票的下一次分红信息
+
+    支持 ?force=1 强制刷新：清除 calendar 全局裸键（main/stale/building），
+    让 _build_dividend_calendar 重新拉取。
+    """
+    force = request.GET.get('force', '').lower() in ('true', '1', 'yes')
+    if force:
+        try:
+            from ..cache_manager import CacheManager
+            CacheManager.invalidate('dividend_calendar_v1')
+        except Exception:
+            pass
     try:
         return Response(_build_dividend_calendar())
     except Exception as e:

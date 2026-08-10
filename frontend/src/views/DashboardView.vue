@@ -20,12 +20,7 @@
         </div>
       </div>
 
-      <div class="flex items-center gap-4">
-        <div class="flex items-center gap-1.5 text-xs text-slate-400">
-          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-          上次更新: {{ lastUpdate }}
-        </div>
-        <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2">
           <button @click="showManageModal = true" class="flex items-center gap-1.5 px-3 py-1.5 bg-[#1e293b] hover:bg-slate-700 text-slate-300 rounded border border-slate-700 transition-colors tooltip group relative text-[11px]">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
             监控配置
@@ -52,7 +47,6 @@
             立即刷新
           </button>
         </div>
-      </div>
     </header>
 
     <main class="w-full flex-1 flex flex-col min-h-0">
@@ -196,14 +190,6 @@ const isRefreshing = ref(false)
 const releaseVersion = '0.1.4'
 const releaseNotesStorageKey = `sentiment-monitor-release-notes-${releaseVersion}`
 
-const lastUpdate = computed(() => {
-  const d = store.lastUpdated || new Date()
-  const month = d.getMonth() + 1
-  const day = d.getDate()
-  const hours = d.getHours().toString().padStart(2, '0')
-  const mins = d.getMinutes().toString().padStart(2, '0')
-  return `${month}月${day}日 ${hours}:${mins}`
-})
 
 const refreshData = async () => {
   if (isRefreshing.value) return

@@ -112,7 +112,7 @@
       </div>
     </AlgorithmExplainer>
 
-    <div class="main-content" v-if="fetchError && !analysisData">
+    <div class="main-content" v-if="fetchError">
       <div class="loading-overlay">
         <div class="loading-box" style="text-align:center;">
           <div style="font-size:2rem;margin-bottom:12px;">⚠️</div>
@@ -298,6 +298,8 @@ const fetchMainData = async () => {
          applyAnalysisPayload(data);
          syncAnalysisRefreshState(data);
        });
+    } else if (cachedData.cache_status === 'error') {
+       fetchError.value = '数据获取失败，请稍后重试（或点击刷新）。';
     }
     return;
   }
@@ -311,6 +313,7 @@ const fetchMainData = async () => {
     const data = await sentimentStore.getAnalysis(symbol);
     applyAnalysisPayload(data);
     syncAnalysisRefreshState(data);
+    fetchError.value = data.cache_status === 'error' ? '数据获取失败，请稍后重试（或点击刷新）。' : null;
 
     currentStep.value = 4;
   } catch (error: any) {

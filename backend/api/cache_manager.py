@@ -366,12 +366,11 @@ class CacheManager:
         },
         'price': {
             'per_symbol': [
-                'price_history_raw_{symbol}_day',
-                'price_history_raw_{symbol}_week',
-                'price_history_raw_{symbol}_month',
-                'price_history_raw_{symbol}_day_raw',
-                'price_history_raw_{symbol}_week_raw',
-                'price_history_raw_{symbol}_month_raw',
+                # 注意：price_service 真实裸键为 price_history_raw_qfq_{symbol}_{period}
+                # （period ∈ day/week/month），无 _raw 后缀，见 price_service.get_historical_data
+                'price_history_raw_qfq_{symbol}_day',
+                'price_history_raw_qfq_{symbol}_week',
+                'price_history_raw_qfq_{symbol}_month',
             ],
             'global': [
                 'realtime_prices_last_success_v1',
@@ -396,6 +395,21 @@ class CacheManager:
                 'screener_latest_roe_map_v2_stale',
                 'screener_latest_dividend_yield_map_v3',
                 'screener_latest_dividend_yield_map_v3_stale',
+            ],
+        },
+        'macro': {
+            'per_symbol': [],
+            'global': [
+                'macro:risk_free_rate_10y',
+            ],
+        },
+        'earnings': {
+            'per_symbol': [],
+            'global': [
+                # 默认参数组合键（接口默认 days=120, recent=7）。
+                # 非默认组合为动态键 earnings_calendar_v1_{days}_{recent}，
+                # 由接口层 ?force 精确删除，见 views/earnings_calendar.py
+                'earnings_calendar_v1_120_7',
             ],
         },
         'other': {
@@ -432,12 +446,20 @@ class CacheManager:
 
     @classmethod
     def invalidate(cls, key: str):
-        """使单条缓存失效"""
-        main_key = f"{key}_{cls.CACHE_VERSION}"
-        cache.delete(main_key)
-        cache.delete(f"{main_key}_stale")
-        cache.delete(f"{main_key}_lock")
-        cache.delete(f"{main_key}_refreshing")
+        """使单条缓存失效。
+
+        兼容项目里并存的两套键约定：
+        - A 类（经 get_or_fetch 写入）：真实键为 key + '_v2'，并带 _stale/_lock/_refreshing 后缀
+        - B 类（裸键 cache.set 写入，如 market.py / price_service / screener）：真实键就是
+          key 本身，并带 _stale/_lock/_refreshing/_building 后缀
+
+        两种形式都尝试删除，缺哪一个都是 no-op，无副作用。这样无论某条键走哪种约定，
+        invalidate / invalidate_by_symbol / invalidate_domain 都能真正命中。
+        """
+        suffixes = ('', '_stale', '_lock', '_refreshing', '_building')
+        for base in (key, f"{key}_{cls.CACHE_VERSION}"):
+            for suffix in suffixes:
+                cache.delete(f"{base}{suffix}")
 
     @classmethod
     def invalidate_by_symbol(cls, symbol: str, domains: list = None):

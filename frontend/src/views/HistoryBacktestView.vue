@@ -664,12 +664,15 @@ onMounted(async () => {
             data.value = res
             renderBucketChart()
          })
+      } else if (data.value!.cache_status === 'error') {
+         error.value = '数据获取失败，请稍后重试。'
       }
       window.addEventListener('resize', handleResize)
       return
     }
     const res = await store.getBacktest(symbol)
     data.value = res
+    if (res.cache_status === 'error') error.value = '数据获取失败，请稍后重试。'
     await nextTick()
     renderBucketChart()
     window.addEventListener('resize', handleResize)

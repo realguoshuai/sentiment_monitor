@@ -60,6 +60,8 @@
       </div>
     </header>
 
+    <div v-if="cacheError" class="cache-error-banner">⚠️ {{ cacheError }}</div>
+
     <AlgorithmExplainer title="财务溯源算法说明" :defaultOpen="false">
       <h4>现金流质量标签</h4>
       <p>基于利润含金量和自由现金流判断：</p>
@@ -440,6 +442,7 @@ const symbol = route.params.symbol as string
 const loading = ref(true)
 const shareholderLoading = ref(true)
 const qualityData = ref<any[]>([])
+const cacheError = ref('')
 const cashflowSummary = ref<any | null>(null)
 const capitalAllocationSummary = ref<any | null>(null)
 const stabilitySummary = ref<any | null>(null)
@@ -520,6 +523,7 @@ const fetchData = async () => {
   try {
     const data = await sentimentStore.getQuality(symbol)
     applyQualityPayload(data)
+    cacheError.value = data.cache_status === 'error' ? '数据获取失败，请稍后重试（或点击刷新）。' : ''
     if (data.cache_status === 'stale') {
       void sentimentStore.getQuality(symbol, true).then(res => applyQualityPayload(res))
     }
@@ -906,6 +910,16 @@ onMounted(async () => {
   background: #fff7ed;
   color: #c2410c;
   border-color: #fed7aa;
+}
+
+.cache-error-banner {
+  margin: 12px 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+  font-size: 13px;
 }
 
 .insight-strip {
