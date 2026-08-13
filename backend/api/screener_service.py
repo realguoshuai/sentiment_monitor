@@ -1687,15 +1687,11 @@ class ScreenerService:
         requested_page_size = cls._to_int(filters.get('page_size', cls.DEFAULT_PAGE_SIZE), cls.DEFAULT_PAGE_SIZE)
         page_size = max(1, min(requested_page_size, cls.MAX_PAGE_SIZE))
 
-        total = queryset.count()
-        total_pages = ceil(total / page_size) if total else 0
         offset = (page - 1) * page_size
 
         monitored_symbols = set(Stock.objects.values_list('symbol', flat=True))
-        rows = list(queryset[offset:offset + page_size])
 
-        # 深度指标筛选（候选集懒算）：仅当用户设了深度阈值或按深度字段排序时触发，
-        # 避免无谓的个股财报拉取（照顾弱硬件）。每次只算当前页候选集。
+        # 深度指标筛选（候选集懒算）：仅当用户设了深度阈值或按深度字段排序时触发。
         deep_thresholds = {
             'f_score_min': f_score_min,
             'moat': moat_filter,
@@ -1707,9 +1703,12 @@ class ScreenerService:
 
         row_flags = {}
         if need_deep or sort_by_deep:
-            row_flags = cls._compute_quality_flags_for_rows(rows)
+            # 深度字段不在数据库，须对「全量 SQL 候选集」算质量标志后再过滤/排序/分页，
+            # 否则 total 与全局排序会错。get_quality_flags 自带缓存 + 4 并发，首次慢但后续命中缓存。
+            all_rows = list(queryset)
+            row_flags = cls._compute_quality_flags_for_rows(all_rows)
             enriched = []
-            for row in rows:
+            for row in all_rows:
                 fl = row_flags.get(
                     row.symbol,
                     {'f_score': 0, 'moat_label': '', 'debt_to_assets_pct': 0, 'dividend_years': 0},
@@ -1734,9 +1733,13 @@ class ScreenerService:
                     enriched.sort(key=lambda rf: rf[1]['debt_to_assets_pct'], reverse=reverse)
                 elif sort_by == 'dividend_years':
                     enriched.sort(key=lambda rf: rf[1]['dividend_years'], reverse=reverse)
-            rows = [r for r, _ in enriched]
-            total = len(rows)
+            total = len(enriched)
             total_pages = ceil(total / page_size) if total else 0
+            rows = [r for r, _ in enriched[offset:offset + page_size]]
+        else:
+            total = queryset.count()
+            total_pages = ceil(total / page_size) if total else 0
+            rows = list(queryset[offset:offset + page_size])
 
         results = [
             {

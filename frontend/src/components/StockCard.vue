@@ -197,7 +197,7 @@ const priceColorClass = computed(() => {
 const roiValue = computed(() => {
   if (!rtPrice.value || rtPrice.value.pe <= 0 || rtPrice.value.pb <= 0) return null
   const store = useSentimentStore()
-  return store.calculateROI(props.data.stock_symbol, rtPrice.value.pe, rtPrice.value.pb)
+  return store.calculateROI(props.data.stock_symbol, rtPrice.value.pe, rtPrice.value.pb, rtPrice.value.dividend_yield)
 })
 
 const roeValue = computed(() => {

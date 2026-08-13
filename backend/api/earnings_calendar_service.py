@@ -47,7 +47,7 @@ class EarningsCalendarService:
                 w_start_m, w_start_d = DISCLOSURE_WINDOW[(m, d)][0]
                 w_end_m, w_end_d = DISCLOSURE_WINDOW[(m, d)][1]
                 w_end_year = year + 1 if (m, d) == (12, 31) else year
-                w_start = timezone.datetime(year, w_start_m, w_start_d).date()
+                w_start = timezone.datetime(w_end_year, w_start_m, w_start_d).date()
                 w_end = timezone.datetime(w_end_year, w_end_m, w_end_d).date()
                 if w_start <= end and w_end >= today:
                     periods.append(timezone.datetime(year, m, d).date().strftime('%Y%m%d'))

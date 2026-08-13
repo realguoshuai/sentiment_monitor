@@ -456,6 +456,25 @@ class PriceService:
         return f"{cls._intraday_single_cache_key(symbol)}_stale"
 
     @classmethod
+    def invalidate_history_cache(cls, symbol):
+        """清除单标的的历史 K 线对齐缓存（hist_single / intraday），供深度刷新调用。
+
+        这些键含动态 period/limit 后缀，无法用 CacheManager 注册表的静态模板命中，
+        故在此枚举常见组合精确删除（FileBasedCache 只支持精确键删除，不能前缀扫描）。
+        """
+        fixed_symbol = cls._fix_symbol(symbol)
+        periods = ('day', 'week', 'month', 'year')
+        limits = (30, 120, 250, 365)
+        for rp in ('day', 'week', 'month'):
+            for p in periods:
+                for lim in limits:
+                    key = f"hist_single_v10_qfq_{fixed_symbol}_{rp}_{p}_{lim}"
+                    cache.delete(key)
+                    cache.delete(f"{key}_stale")
+        cache.delete(cls._intraday_single_cache_key(symbol))
+        cache.delete(cls._intraday_single_stale_cache_key(symbol))
+
+    @classmethod
     def _normalize_intraday_cache_value(cls, cached):
         if isinstance(cached, dict) and isinstance(cached.get('points'), list):
             return cached['points']
@@ -843,11 +862,10 @@ class PriceService:
         else:
             df['dividend_yield'] = 0
 
-        # 股息率兜底：优先使用雪球实时值，按价格比例推算历史
+        # 股息率兜底：仅当真实分红明细缺失时，才用雪球实时值按价格比例推算历史。
+        # 有真实分红明细时，上方已按逐年分红精确计算，不应被实时值整体覆盖。
         rt_dy = rt.get('dividend_yield', 0)
-        if rt_dy > 0 and curr_price > 0:
-            # 雪球值覆盖计算值（近1年），历史数据按价格比例推算
-            # 公式: xq_dy * (curr_price / hist_price) → 分红金额不变，价格变化导致收益率变化
+        if rt_dy > 0 and curr_price > 0 and df_divs.empty:
             df['dividend_yield'] = np.where(
                 df['price'] > 0,
                 rt_dy * (curr_price / df['price']),

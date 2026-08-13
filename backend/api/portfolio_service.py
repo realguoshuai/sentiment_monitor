@@ -98,6 +98,7 @@ def build_portfolio_summary(portfolio_id=None):
     rows = []
     total_market_value = 0.0
     total_cost = 0.0
+    total_pnl = 0.0
     for h in holdings:
         sym = h.stock.symbol
         price = _safe(price_map[sym].get('price'))
@@ -110,7 +111,9 @@ def build_portfolio_summary(portfolio_id=None):
         target_w = _safe(h.allocation_pct)
 
         total_market_value += mv
-        total_cost += cost
+        if buy > 0:
+            total_cost += cost
+            total_pnl += pnl
 
         rows.append({
             'symbol': sym,
@@ -141,7 +144,6 @@ def build_portfolio_summary(portfolio_id=None):
         r['current_weight'] = round(cw, 2)
         r['drift'] = round(cw - r['target_weight'], 2)
 
-    total_pnl = total_market_value - total_cost
     total_pnl_pct = (total_pnl / total_cost * 100.0) if total_cost > 0 else 0.0
     cash_ratio = (cash_balance / total_assets * 100.0) if total_assets > 0 else 0.0
 

@@ -43,6 +43,9 @@ def get_market_diary(request):
             # 价格裸键(price_history_raw_qfq_*)、盯盘日记裸键、以及 diary 里重复的 dividend 裸键
             # 都依赖 CacheManager.invalidate 现已兼容「裸键 + _v2 版本键」两套约定才能真正命中
             CacheManager.invalidate_by_symbol(fixed_symbol, domains=['fundamental', 'price', 'market_diary'])
+            # 历史 K 线对齐键(hist_single_v10 / intraday)含动态后缀，注册表覆盖不到，
+            # 需由 PriceService 枚举精确删除，否则深度刷新后仍返回 7 天陈旧历史数据
+            PriceService.invalidate_history_cache(fixed_symbol)
         except Exception:
             pass
 
